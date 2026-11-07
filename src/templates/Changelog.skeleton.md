@@ -1,0 +1,10 @@
+# Global Handover Changelog（全局交接变更日志）
+
+> 追加式历史日志。每次改动 _Control_Center 的全局规则、结构或 Global_Handover.md 本身时，追加一行。
+> 由插件 ho_changelog 按格式追加（新行插在最新一行之前）。
+
+## 变更记录
+
+| 日期 | 变更 | 执行者 |
+|---|---|---|
+| 2026-10-24 | 由 dsh-handover 首次安装向导生成工作区骨架 | setup |

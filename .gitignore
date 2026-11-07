@@ -1,0 +1,15 @@
+dist/
+out/
+node_modules/
+*.log
+*.tmp
+*.tgz
+*.bak
+*.orig
+*.rej
+.env*
+coverage/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,16 @@
+# dsh-handover 默认装配（作为 bundle 安装时生效；手写 profile patch 时把下面 insert 行抄过去）
+#
+# 刻意不写死 workspaceRoot 与 libraries：空白 DSH 里装上就能跑。
+# 工作区由插件自己找：config.workspaceRoot → 标题含「全局」且带 _Control_Center 的工作区
+#   → 任一带 _Control_Center 的工作区 → 会话 cwd 向上找 _Control_Center。
+# 本机若要固定路径/库名，在 profile 自己的 insert 里写 config 覆盖（会与这里合并）。
+- insert:
+    - id: dsh-handover
+      name: '@mingmaple/dsh-handover'
+      config:
+        warnRatio: 0.32
+        handoverRatio: 0.35
+        hardRatio: 0.85
+        maxCompactions: 3
+        autoResume: true
+        sessionScanHours: 12

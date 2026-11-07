@@ -1,0 +1,58 @@
+{
+  "name": "@mingmaple/dsh-handover",
+  "version": "0.9.6",
+  "type": "module",
+  "description": "DeepSeek Harness 插件：把「全局」的交接、闸门、会话清点与上下文压缩续跑流程做成工具（dsh-handover）",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MingMaple/dsh-handover.git"
+  },
+  "homepage": "https://github.com/MingMaple/dsh-handover#readme",
+  "bugs": {
+    "url": "https://github.com/MingMaple/dsh-handover/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "handover",
+    "context-compaction"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./src/client.js"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node src/selftest.mjs --tool all",
+    "test:blank": "node scripts/blank-dsh.mjs",
+    "test:smoke": "node scripts/blank-smoke.mjs",
+    "test:migrate": "node scripts/e2e-migration.mjs",
+    "test:docs": "node scripts/check-docs.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./src/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}

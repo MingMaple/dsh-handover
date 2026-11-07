@@ -1,0 +1,46 @@
+// dsh-handover 登记改址助手（由插件生成，勿手改）
+// 只改 DSH 的登记文件（workspace.json、聊天集成的归属表），不动任何数据文件。
+import fs from 'node:fs';
+
+const LOG = %%LOG%%;
+const WAIT_PID = Number(process.argv[2] || 0) || 0;
+const FROM = %%FROM%%;
+const TO = %%TO%%;
+const FILES = %%FILES%%;
+
+function log(m) {
+  try { fs.appendFileSync(LOG, new Date().toISOString() + '  ' + m + '\n', 'utf8'); } catch { /* ignore */ }
+  try { console.log(m); } catch { /* ignore */ }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function alive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+}
+const esc = (p) => JSON.stringify(String(p)).slice(1, -1);
+
+(async () => {
+  log('== 登记改址助手 ==  pid=' + process.pid);
+  if (WAIT_PID) {
+    log('等待 DSH 退出（最多 30 分钟）…');
+    for (let i = 0; i < 900; i++) { if (!alive(WAIT_PID)) break; await sleep(2000); }
+    if (alive(WAIT_PID)) { log('[中止] 等 DSH 退出超时，未做任何改动'); process.exit(1); }
+    await sleep(1500);
+    log('DSH 已退出，开始改址');
+  }
+  const from = esc(FROM);
+  const to = esc(TO);
+  let changed = 0;
+  for (const p of FILES) {
+    let text = '';
+    try { text = fs.readFileSync(p, 'utf8'); } catch { log('跳过（读不到）：' + p); continue; }
+    const n = text.split(from).length - 1;
+    if (!n) { log('无需改：' + p); continue; }
+    const bak = p + '.bak-' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    try { fs.copyFileSync(p, bak); } catch { log('跳过（备份失败）：' + p); continue; }
+    try { fs.writeFileSync(p, text.split(from).join(to), 'utf8'); } catch (e) { log('跳过（写入失败）：' + p + ' :: ' + e.message); continue; }
+    changed += n;
+    log('已改 ' + n + ' 处：' + p + '   备份 ' + bak);
+  }
+  log(changed ? ('完成：共改 ' + changed + ' 处登记，重启 DSH 后工作区即在新位置。') : '无需改动。');
+})();
