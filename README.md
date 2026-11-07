@@ -30,6 +30,14 @@ Web 或 CLI：
 dsh plugin --profile web add github:MingMaple/dsh-handover
 ```
 
+### 从 npm 安装
+
+包名为 `@mingmaple/dsh-handover`，版本与仓库同步：
+
+```bash
+dsh plugin --profile web add @mingmaple/dsh-handover
+```
+
 ### 从本地源码安装
 
 1. 构建：`node scripts/build.mjs`，产物在 `dist/`。
