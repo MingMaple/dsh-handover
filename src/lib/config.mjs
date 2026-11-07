@@ -7,7 +7,6 @@ export const DEFAULTS = {
   maxCompactions: 3,
   autoResume: true,
   sessionScanHours: 12,
-  libraries: [],
   handoverPath: '',        // 留空 = 按会话角色解析（全局 records/Global_Handover.md；项目 _Project_Meta/<项目>/Handover.md；杂项 _Misc/tasks/<任务>/Handover.md）。非空则强制该路径（演练用）
   rolesPath: '',           // 留空 = ~/.dsh/storages/dsh-handover.roles.json
   // 续跑提示：{n} {max} {handover} {role} 会被替换成真值；{handover} 是本会话自己的交接绝对路径。
