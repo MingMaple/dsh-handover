@@ -32,7 +32,7 @@ ho_workspace(action="move")
 ho_workspace(action="move-switch")
 ```
 
-生成并派出后台助手，等你完全退出 DSH 后自动完成：旧目录改名为 `<旧>.old-<时间戳>`，再在原位置建 junction 指向新位置，并校验指向。日志写在 `~/.dsh/storages/dsh-handover/logs/`。
+生成并派出后台助手，等你完全退出 DSH 后自动完成：旧目录改名为 `<旧>.old-<时间戳>`，再在原位置建 junction 指向新位置，并校验指向。日志写在 `~/.dsh/storages/dsh-handover.move.log`。
 
 也可以双击生成的 `dsh-handover.move.cmd`。切换后原路径成为链接，工作区登记、profile 与会话工作目录都无需修改。
 

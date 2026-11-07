@@ -16,7 +16,7 @@
 ho_init(parent="<已存在目录的绝对路径>", register=true)
 ```
 
-装配里没有写死 `workspaceRoot`，插件按以下顺序定位：配置项、标题含「全局」且带 `_Control_Center` 的工作区、任一带 `_Control_Center` 的工作区、会话工作目录向上查找。
+装配里没有写死 `workspaceRoot`。工具侧按配置项、会话工作目录向上查找的顺序定位，向上找不到时再查工作区登记；设置页没有会话上下文，按配置项、标题含「全局」且带 `_Control_Center` 的工作区、任一带 `_Control_Center` 的工作区定位。
 
 ## 设置页刷新失败
 
