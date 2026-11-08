@@ -270,6 +270,19 @@ const rStore = resolveRole({ sessionId: 'session-t6', title: '全局10' });
 ok(rStore.role === 'misc' && rStore.source === 'store', '角色表优先于标题推断', JSON.stringify(rStore));
 ok(readRoles({}).sessions['session-t6'] && readRoles({}).sessions['session-t6'].task === 'X', '角色表应可读回');
 
+// 回归锁：首条提示里的 `Projects/**` 通配曾被当成项目名 `**、_Project_Meta`，
+// 于是交接路径、备份目录、归档目录全落在这个 Windows 非法名字上（实测四类报错）。
+const rGlob = resolveRole({ sessionId: 'session-glob-prompt', title: 'Android AI Agent 3', cwd: 'C:/Users/x/.dsh/profiles/desktop', firstPrompt: '- 动 _Control_Center/**、Projects/**、_Project_Meta/** 前先问用户。' });
+ok(rGlob.role === 'plain', '首条提示里的 Projects/** 通配不得被当成项目名', JSON.stringify(rGlob));
+const hpBad = handoverPathFor(WS, { role: 'project', project: '**、_Project_Meta' });
+ok(hpBad.path === null && /不合法/.test(String(hpBad.reason || '')), '非法项目名不得拼出交接路径', JSON.stringify(hpBad));
+{
+  let badWrite = '';
+  try { writeRole({}, 'session-bad-name', { role: 'project', project: '**、_Project_Meta' }); } catch (e) { badWrite = e.message; }
+  ok(/不合法/.test(badWrite), '角色表不得写入含非法字符的项目名', badWrite);
+  ok(readRoles({}).sessions['session-bad-name'] === undefined, '非法项目名不得落盘', JSON.stringify(readRoles({}).sessions['session-bad-name']));
+}
+
 const hpG = handoverPathFor(WS, { role: 'global' });
 ok(/Global_Handover\.md$/.test(hpG.path), '全局交接路径', hpG.path);
 const hpP = handoverPathFor(WS, { role: 'project', project: 'Demo' });
@@ -322,6 +335,10 @@ if (profTool) {
   ok(/已注册/.test(rr.text) && /application/.test(rr.text), 'ho_profile read 应读到已注册骨架');
   const vv = await profTool.execute({ action: 'validate' }, profExec);
   ok(/结论：通过/.test(vv.text), 'ho_profile validate 应通过', vv.text.slice(0, 120));
+  // 项目会话只处理自己的骨架：传别的项目名要报错，不能静默忽略入参（实测踩过）。
+  let crossErr = '';
+  try { await profTool.execute({ action: 'validate', project: '学习' }, profExec); } catch (e) { crossErr = e.message; }
+  ok(/只能读写自己的骨架/.test(crossErr), '项目会话传别的项目名应明确报错', crossErr);
 }
 
 // 回归锁：压缩调度器拿的是**会话 id 字符串**。早期版本这里错配了 exec 版函数，

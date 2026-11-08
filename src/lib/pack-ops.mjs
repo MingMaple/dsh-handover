@@ -13,6 +13,7 @@ import { scanAbsoluteRefs, renderAbsoluteRefs } from './absrefs.mjs';
 import { stampTz } from './brief.mjs';
 import { scanSessions } from './sessions.mjs';
 import { lintProject } from './lint.mjs';
+import { assertProjectName, assertTaskName } from './role.mjs';
 
 const SKIP_DIRS = ['__pycache__', '.git', 'node_modules', '.obsidian'];
 const SKIP_FILES = ['.DS_Store', 'Thumbs.db'];
@@ -152,11 +153,13 @@ export function packNow(env, args, exec) {
     roots.push(['_Project_Meta', path.join(ws, '_Project_Meta')]);
   } else if (kind === 'project') {
     if (!name) throw new Error('kind=project 需要 name');
+    assertProjectName(name);
     roots.push(['Projects/' + name, path.join(ws, 'Projects', name)]);
     roots.push(['_Project_Meta/' + name, path.join(ws, '_Project_Meta', name)]);
     roots.push(['_Archives/' + name + '/Handover', path.join(ws, '_Archives', name, 'Handover')]);
   } else if (kind === 'task') {
     if (!name) throw new Error('kind=task 需要 name');
+    assertTaskName(name);
     roots.push(['_Misc/tasks/' + name, path.join(ws, '_Misc', 'tasks', name)]);
   } else throw new Error('未知 kind：' + kind);
   const entries = [];

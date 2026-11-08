@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { textOutput } from '../lib/output.mjs';
 import { NL, isDir } from '../lib/text.mjs';
+import { assertProjectName } from '../lib/role.mjs';
 
 const SKIP_DIRS = ['__pycache__', '.git', 'node_modules', '.obsidian'];
 const SKIP_FILES = ['.DS_Store', 'Thumbs.db'];
@@ -50,7 +51,7 @@ export function pmSnapshotTool(env) {
     output: textOutput(),
     async execute(args, exec) {
       const ws = env.resolveWs(exec);
-      const project = typeof args.project === 'string' ? args.project.trim() : '';
+      const project = assertProjectName(typeof args.project === 'string' ? args.project.trim() : '');
       if (!project) throw new Error('project 不能为空（写项目名，如 Demo）');
       const projDir = path.join(ws, 'Projects', project);
       if (!isDir(projDir)) throw new Error('找不到项目：' + projDir);

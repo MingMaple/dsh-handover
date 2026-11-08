@@ -3,15 +3,23 @@ import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
 import { presets, readProfile, writeProfile, validateProfile, profilePathFor, PROFILE_KINDS } from '../lib/profile.mjs';
+import { assertProjectName, assertTaskName } from '../lib/role.mjs';
 import { stampTz } from '../lib/brief.mjs';
 
 function targetOf(env, info, args, exec) {
   if (info && (info.role === 'project' || info.role === 'misc')) {
+    const own = info.role === 'project' ? String(info.project || '') : String(info.task || '');
+    const given = String(args.project || args.task || '').trim();
+    // 项目会话只处理自己的骨架；传了别的名字就明确报错，而不是静默忽略入参（实测踩过）。
+    if (given && given !== own) {
+      throw new Error('本会话是' + (info.role === 'project' ? '项目「' + own + '」' : '杂项「' + own + '」')
+        + '，只能读写自己的骨架；要看「' + given + '」请由全局会话执行 ho_profile。');
+    }
     return { role: info.role, project: info.project || '', task: info.task || '', self: true };
   }
   if (info && info.role === 'global') {
-    if (args.project) return { role: 'project', project: String(args.project), task: '', self: false };
-    if (args.task) return { role: 'misc', project: '', task: String(args.task), self: false };
+    if (args.project) return { role: 'project', project: assertProjectName(String(args.project)), task: '', self: false };
+    if (args.task) return { role: 'misc', project: '', task: assertTaskName(String(args.task)), self: false };
     throw new Error('全局会话使用 ho_profile 时须给 project 或 task');
   }
   throw new Error('普通会话不参与骨架注册');

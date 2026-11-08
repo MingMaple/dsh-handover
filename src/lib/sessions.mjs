@@ -1,7 +1,7 @@
 /** 会话清点：只读投影缓存，不激活任何会话、不消耗 token。 */
 import os from 'node:os';
 import path from 'node:path';
-import { readJsonDir, pick } from './text.mjs';
+import { readJsonDir, pick, isSafeName } from './text.mjs';
 
 export function projCacheDir() {
   return path.join(os.homedir(), '.dsh', 'storages', 'session_projcache', 'sessions');
@@ -30,12 +30,9 @@ function cwdOf(data) {
   return pick(data, 'record', 'identity', 'cwd');
 }
 
-const BAD_CHARS = [60, 62, 47, 58, 42, 63, 124, 92, 34].map((c) => String.fromCharCode(c));
-
+/** 名字要当目录名用：统一走 text.mjs 的跨平台校验。 */
 function isPlausible(name) {
-  if (!name || name.length > 24) return false;
-  for (const ch of BAD_CHARS) if (name.indexOf(ch) !== -1) return false;
-  return true;
+  return isSafeName(name);
 }
 
 /** 返回 { project, real }：优先看 cwd 里的 Projects/<名>/，退回首条提示里的 Projects/<名>/ 或 「<名>」项目。 */
@@ -59,13 +56,17 @@ export function projectOf(data) {
       if (ch === " " || ch === String.fromCharCode(9) || ch === String.fromCharCode(10) || ch === String.fromCharCode(13)) { bad = true; break; }
       name += ch;
     }
-    if (!bad && name !== "") return { project: name, real: true };
+    // 首条提示常带 Markdown 通配写法（`Projects/**`），解析出的名字必须过名称校验才算项目。
+    if (!bad && isPlausible(name)) return { project: name, real: true };
   }
   const q = text.indexOf(String.fromCharCode(12300));
   if (q !== -1) {
     const rest = text.slice(q + 1);
     const j = rest.indexOf(String.fromCharCode(12301) + '项目');
-    if (j > 0) return { project: rest.slice(0, j), real: true };
+    if (j > 0) {
+      const name = rest.slice(0, j);
+      if (isPlausible(name)) return { project: name, real: true };
+    }
   }
   const title = pick(data, 'record', 'rows', 'title', 'val');
   return { project: (typeof title === 'string' && title.trim() !== '') ? title : '-', real: false };

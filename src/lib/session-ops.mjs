@@ -5,7 +5,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { NL, readUtf8, isDir, isFile } from './text.mjs';
-import { handoverPathFor } from './role.mjs';
+import { handoverPathFor, assertProjectName, assertTaskName } from './role.mjs';
 import { readHandover } from './handover-io.mjs';
 import { scanSessions } from './sessions.mjs';
 import { checkConsent } from './consent.mjs';
@@ -79,6 +79,9 @@ export async function sessionNew(env, args, exec) {
   // 换任（新建接班会话）先问用户。
   if (args.confirm !== true) throw new Error('新建会话（换任）需要用户确认：先向用户说明要建接班会话并得到同意，再传 confirm=true');
   if (!controller) throw new Error('ctx.sessionController 不可用');
+  // 名字要落成目录：先校验，别等会话建完、写角色表时才失败（那样会留下一个没有角色的会话）。
+  if (args.project) assertProjectName(String(args.project));
+  if (args.task) assertTaskName(String(args.task));
   const out = [];
   const title = String(args.title || '');
   if (args.project && title.indexOf('全局') === -1 && args.force !== true && env.cfg.reuseCheck !== false) {

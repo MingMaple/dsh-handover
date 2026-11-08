@@ -17,6 +17,33 @@ export function isDir(p) {
 }
 
 /**
+ * 项目名与任务名要当目录名用，必须在 Windows／macOS／Linux 上都合法。
+ * 规则：非空、不超过 24 字符、不含控制字符与 < > : " / \ | ? *、不以点或空格结尾、不是设备保留名。
+ * 名字来自首条提示等自由文本时尤其要校验：Markdown 里的 `Projects/**` 这类通配写法会被误当成名字（实测踩过）。
+ */
+const RESERVED_NAMES = ['con', 'prn', 'aux', 'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'];
+
+export function isSafeName(name, maxLen) {
+  const s = String(name === undefined || name === null ? '' : name);
+  const limit = maxLen === undefined ? 24 : maxLen;
+  if (s === '' || s.length > limit) return false;
+  if (/[\u0000-\u001f\u007f<>:"/\\|?*]/.test(s)) return false;
+  if (/[. ]$/.test(s)) return false;
+  if (RESERVED_NAMES.indexOf(s.toLowerCase()) !== -1) return false;
+  return true;
+}
+
+/** 名字不合法时抛出可直接展示的中文错误。 */
+export function assertSafeName(name, label, maxLen) {
+  if (isSafeName(name, maxLen)) return String(name);
+  const shown = String(name === undefined || name === null ? '' : name);
+  throw new Error((label || '名称') + '不合法：' + JSON.stringify(shown)
+    + '（不得为空、不超过 ' + (maxLen === undefined ? 24 : maxLen) + ' 个字符、不含 < > : " / \\ | ? * 与控制字符、不以点或空格结尾、不是设备保留名）');
+}
+
+/**
  * 读目录下全部 *.json，返回 [{ name, path, data, mtimeMs }]，读不动的跳过。
  *
  * 投影缓存里有几百个文件、几十 MB，单次读取约 0.2 秒；按会话逐条判定角色时会反复调用。

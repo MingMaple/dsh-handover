@@ -41,7 +41,7 @@ import { NAMES } from './lib/names.mjs';
 import { readExtraPrompt, writeExtraPrompt, EXTRA_PROMPT_ORDER, EXTRA_PROMPT_SECTION } from './lib/extra-prompt.mjs';
 import {
   ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
-  readRoles, writeRole, bootstrappedAt,
+  readRoles, writeRole, bootstrappedAt, assertProjectName, assertTaskName,
 } from './lib/role.mjs';
 import { manualFor, organizeMessageFor } from './lib/manual.mjs';
 import { routeWorkspace } from './lib/workspace.mjs';
@@ -381,6 +381,9 @@ export function apply(ctx, config) {
     if (ROLES.indexOf(role) === -1) return { ok: false, error: '角色只能是 global、project、misc、plain' };
     if (role === 'project' && !project) return { ok: false, error: '项目角色要填项目名' };
     if (role === 'misc' && !task) return { ok: false, error: '杂项角色要填任务名' };
+    // 名字要落成目录：不合法就当场拒绝，别等写角色表或拼路径时才失败。
+    if (role === 'project') { try { assertProjectName(project); } catch (e) { return { ok: false, error: msgOf(e) }; } }
+    if (role === 'misc') { try { assertTaskName(task); } catch (e) { return { ok: false, error: msgOf(e) }; } }
     try { writeRole(cfg, sid, { role, project, task, source: 'user' }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
     const info = { role, project, task, source: 'store', sessionId: sid };

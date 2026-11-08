@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readJsonDir, pick } from './text.mjs';
+import { readJsonDir, pick, isSafeName, assertSafeName } from './text.mjs';
 import { projCacheDir, isSubagent } from './sessions.mjs';
 import { globalWorkspaceSessionIds } from './registry.mjs';
 import { TOOL_NAMES, PEER_NAMES, nameOf, peerNameOf } from './names.mjs';
@@ -65,6 +65,9 @@ export function writeRole(cfg, sessionId, patch) {
   const data = readRoles(cfg);
   const prev = data.sessions[sid] || {};
   const next = Object.assign({}, prev, patch || {});
+  // 名字要落成目录：不合法就当场拒绝，别等拼路径时才 ENOENT。
+  if (next.role === 'project') assertProjectName(next.project);
+  if (next.role === 'misc') assertTaskName(next.task);
   next.setAt = stampTz(Date.now());
   // 角色变了就重新引导一次；只是改项目名也重引导，因为路径变了。
   if (prev.role !== next.role || prev.project !== next.project || prev.task !== next.task) delete next.bootstrappedAt;
@@ -99,24 +102,44 @@ function parts(p) {
   return String(p || '').replace(/\\/g, '/').split('/').filter(Boolean);
 }
 
-/** cwd 落在 Projects/<名>/ 或 _Misc/tasks/<任务>/ 里就据此判定。 */
+/** 项目名当目录名用，长度与字符集都比任务名紧一些；任务名放宽到 40 字符。 */
+export const PROJECT_NAME_MAX = 24;
+export const TASK_NAME_MAX = 40;
+
+export function projectNameOk(name) {
+  return isSafeName(name, PROJECT_NAME_MAX);
+}
+
+export function taskNameOk(name) {
+  return isSafeName(name, TASK_NAME_MAX);
+}
+
+export function assertProjectName(name) {
+  return assertSafeName(name, '项目名', PROJECT_NAME_MAX);
+}
+
+export function assertTaskName(name) {
+  return assertSafeName(name, '任务名', TASK_NAME_MAX);
+}
+
+/** cwd 落在 Projects/<名>/ 或 _Misc/tasks/<任务>/ 里就据此判定；名字不合法一律不认。 */
 function roleFromPath(cwd) {
   const seg = parts(cwd);
   for (let i = 0; i < seg.length; i++) {
-    if (seg[i] === 'Projects' && seg[i + 1] && seg[i + 1] !== '_Project_Meta') {
+    if (seg[i] === 'Projects' && projectNameOk(seg[i + 1]) && seg[i + 1] !== '_Project_Meta') {
       return { role: 'project', project: seg[i + 1], task: '' };
     }
-    if (seg[i] === '_Misc' && seg[i + 1] === 'tasks' && seg[i + 2]) {
+    if (seg[i] === '_Misc' && seg[i + 1] === 'tasks' && taskNameOk(seg[i + 2])) {
       return { role: 'misc', project: '', task: seg[i + 2] };
     }
-    if (seg[i] === '_Project_Meta' && seg[i + 1]) {
+    if (seg[i] === '_Project_Meta' && projectNameOk(seg[i + 1])) {
       return { role: 'project', project: seg[i + 1], task: '' };
     }
   }
   return null;
 }
 
-/** 首条提示里能解析出 Projects/<名>/ 或「<名>」项目 就算项目会话。 */
+/** 首条提示里能解析出 Projects/<名>/ 或「<名>」项目 就算项目会话；名字不合法不认。 */
 function roleFromPrompt(text) {
   const t = String(text || '').replace(/\\/g, '/');   // Windows 路径也能解析
   const i = t.indexOf('Projects/');
@@ -127,13 +150,17 @@ function roleFromPrompt(text) {
       if (ch === '/' || ch === ' ' || ch === String.fromCharCode(9) || ch === String.fromCharCode(10) || ch === String.fromCharCode(13)) break;
       name += ch;
     }
-    if (name) return { role: 'project', project: name, task: '' };
+    // 首条提示常把规则写成 `_Control_Center/**、Projects/**` 这样的通配，解析结果必须过名称校验。
+    if (projectNameOk(name)) return { role: 'project', project: name, task: '' };
   }
   const q = t.indexOf(String.fromCharCode(12300));
   if (q !== -1) {
     const rest = t.slice(q + 1);
     const j = rest.indexOf(String.fromCharCode(12301) + '项目');
-    if (j > 0) return { role: 'project', project: rest.slice(0, j), task: '' };
+    if (j > 0) {
+      const name = rest.slice(0, j);
+      if (projectNameOk(name)) return { role: 'project', project: name, task: '' };
+    }
   }
   return null;
 }
@@ -150,7 +177,13 @@ export function resolveRole(opts) {
   if (hit) {
     const role = String(hit.role || '');
     if (ROLES.indexOf(role) !== -1) {
-      return { role, project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
+      // 角色表里的名字要当目录名用。历史写入或手工编辑留下的非法名字一律不认，继续往下推断，
+      // 否则会把整条「写交接 → 备份 → 归档」链路卡在 Windows 的非法路径上。
+      const named = role === 'project' ? projectNameOk(hit.project)
+        : role === 'misc' ? taskNameOk(hit.task) : true;
+      if (named) {
+        return { role, project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
+      }
     }
     // 旧角色表的 unknown 是兜底态，按新口径并入普通。
     if (role === 'unknown') {
@@ -188,11 +221,13 @@ export function handoverPathFor(ws, info) {
   if (role === 'project') {
     const project = String(info.project || '');
     if (!project) return { path: null, kind: null, scope: '', role, reason: '项目名缺失' };
+    if (!projectNameOk(project)) return { path: null, kind: null, scope: '', role, reason: '项目名不合法（当目录名用）：' + JSON.stringify(project) };
     return { path: path.join(ws, '_Project_Meta', project, 'Handover.md'), kind: 'project', scope: project, role, project };
   }
   if (role === 'misc') {
     const task = String(info.task || '');
     if (!task) return { path: null, kind: null, scope: '', role, reason: '任务名缺失' };
+    if (!taskNameOk(task)) return { path: null, kind: null, scope: '', role, reason: '任务名不合法（当目录名用）：' + JSON.stringify(task) };
     return { path: path.join(ws, '_Misc', 'tasks', task, 'Handover.md'), kind: 'misc', scope: path.join('_Misc', task), role, task };
   }
   if (role === 'plain') return { path: null, kind: null, scope: '', role, reason: '普通会话不参与交接' };
