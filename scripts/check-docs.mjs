@@ -1,5 +1,5 @@
 /**
- * 文档校验：工具名集合、旧数与旧术语、内部链接、版本、语体。
+ * 文档校验：工具名集合、旧数与旧术语、内部链接、版本、语体，以及版本说明的对外口吻。
  * 只读，不做任何改写。退出码 0 表示全部通过。
  */
 import fs from 'node:fs';
@@ -14,6 +14,8 @@ const readme = path.join(root, 'README.md');
 const files = [readme]
   .concat(listFiles(path.join(root, 'docs'), ['.md']))
   .filter((f) => fs.existsSync(f));
+const releasesDir = path.join(root, 'docs', 'releases');
+const releaseFiles = files.filter((f) => path.dirname(f) === releasesDir);
 const problems = [];
 
 // 1. README 长度（对外首页承载全部说明，上限放宽）
@@ -22,10 +24,29 @@ if (readmeLines > 200) problems.push('README 应不超过 200 行（当前 ' + r
 
 // 2. 旧数与旧术语
 const FORBIDDEN = ['21 个工具', '27 个工具', '未分类', '追加系统提示词', '4,028', '4.6 KB', '每库 24 行', 'CHANGELOG'];
+// 审阅语境与内部用语：这些词只应出现在桌面审阅材料里，不能进对外文档与版本说明。
+const REVIEW_WORDS = ['过目', '待验收', '待您', '待你', '请确认', '麻烦您', '麻烦你', '假宿主', '桩服务', '桩实现'];
 for (const file of files) {
   const text = fs.readFileSync(file, 'utf8');
   for (const w of FORBIDDEN) {
     if (text.indexOf(w) !== -1) problems.push(path.relative(root, file) + ' 仍含旧表述「' + w + '」');
+  }
+  for (const w of REVIEW_WORDS) {
+    if (text.indexOf(w) !== -1) problems.push(path.relative(root, file) + ' 含审阅语境或内部用语「' + w + '」');
+  }
+}
+
+// 2.1 版本说明是对外发布正文：不出现二人体，且每个已发布版本都要有一份。
+for (const file of releaseFiles) {
+  const text = fs.readFileSync(file, 'utf8');
+  const person = text.match(/[您你]/);
+  if (person) problems.push(path.relative(root, file) + ' 版本说明不应出现二人体（命中「' + person[0] + '」）');
+  if (!/^#\s+\S/.test(text)) problems.push(path.relative(root, file) + ' 版本说明应以一级标题开头');
+}
+{
+  const pkgVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  if (!fs.existsSync(path.join(releasesDir, pkgVersion + '.md'))) {
+    problems.push('缺少版本说明 docs/releases/' + pkgVersion + '.md（Release 正文从这里取）');
   }
 }
 
@@ -70,5 +91,5 @@ if (problems.length) {
   for (const p of problems) console.log('  - ' + p);
   process.exitCode = 1;
 } else {
-  console.log('CHECK-DOCS OK（' + files.length + ' 份文档，工具名 ' + ALL_TOOL_NAMES.length + ' 个）');
+  console.log('CHECK-DOCS OK（' + files.length + ' 份文档，含版本说明 ' + releaseFiles.length + ' 份，工具名 ' + ALL_TOOL_NAMES.length + ' 个）');
 }
