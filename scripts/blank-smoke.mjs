@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 空白环境冒烟：不依赖任何真实工作区，验「装上就能跑」。
  * 1) 宿主半在假 ctx 上 apply：22 个工具、手册段、状态路由（200/404/405/HEAD）、只读工具不抛
  * 2) 浏览器半在假 window/React 上装载：bundle 外形、settings.section 注册、成体视图能渲染
@@ -28,7 +28,12 @@ const reg = { tools: [], sections: [], logs: [], listeners: {} };
 const ctx = {
   tools: { register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); }, restrict() { }, guard: (fn) => { reg.guardFn = fn; } },
   systemPrompt: { section: (s) => { reg.sections.push(s); return () => { reg.disposed = (reg.disposed || 0) + 1; }; } },
-  sessionController: {},
+  sessionController: {
+    create: async () => ({ sessionId: 'session-deploy-test' }),
+    rename: async () => { },
+    prompt: async () => ({ accepted: true }),
+  },
+
   logger: { warn: (m) => reg.logs.push(String(m)), error: (m) => reg.logs.push(String(m)), info() { } },
   effect: (fn) => fn(),
   on: (n, cb) => { (reg.listeners[n] = reg.listeners[n] || []).push(cb); },
@@ -104,6 +109,17 @@ const badEnv = await rpcBadEnv.json();
 ok(badEnv && badEnv.result && badEnv.result.ok === false && /信封不合法/.test(String(badEnv.result.error.message)), '载体应拒非法信封', JSON.stringify(badEnv && badEnv.result));
 const rpcGet = await carrier.fetch(new Request('http://127.0.0.1/api/dsh-handover', { method: 'GET' }));
 ok(rpcGet.status === 405, '载体 GET 应 405', String(rpcGet.status));
+
+// 一键部署：没有 workspaceRegistry 时仍要建体系并建会话，并把「工作区未注册」如实报出。
+const deployParent = path.join(BLANK, 'deploy');
+const rpcDeploy = await rpcCall('deploy', { parent: deployParent });
+const dv = rpcDeploy && rpcDeploy.result && rpcDeploy.result.ok ? rpcDeploy.result.value : null;
+ok(!!dv, 'deploy 应成功', JSON.stringify(rpcDeploy && rpcDeploy.result && rpcDeploy.result.error));
+if (dv) {
+  ok(dv.sessionId === 'session-deploy-test', 'deploy 应建出全局会话', String(dv.sessionId));
+  ok(fs.existsSync(path.join(dv.root, '_Control_Center', 'records', 'Global_Handover.md')), 'deploy 应在指定路径铺好文件体系', String(dv.root));
+  ok(!dv.workspace && /workspaceRegistry/.test(String(dv.workspaceError || '')), '无 workspaceRegistry 时应如实报告工作区未注册', JSON.stringify({ w: dv.workspace, e: dv.workspaceError }));
+}
 
 async function call(method, url) {
   const res = { code: 0, headers: null, body: undefined, writeHead(c, h) { this.code = c; this.headers = h; }, end(b) { this.body = b; } };
@@ -658,6 +674,7 @@ const FIXTURE = {
   generatedAt: '2026-11-07 21:25 +0800',
   plugin: { name: '@mingmaple/dsh-handover', version: 'test', tools: 22, inject: ['tools', 'systemPrompt'], initErrors: [], scheduler: '就绪' },
   workspace: { root: 'C:/ws', found: true },
+  globalSessions: 1,
   guardLast: { allow: true, source: 'title', title: '全局1', sid: 'session-x' },
   guide: payload ? payload.guide : { intro: ['说明'], situations: [{ when: 'w', say: 's', what: 'x' }], groups: [{ title: 'g', tools: [['ho_x', 'y']] }], rules: ['r'] },
   extraPrompt: '',
@@ -788,12 +805,12 @@ const clientSrc = fs.readFileSync(path.join(dist, 'client.js'), 'utf8');
 ok(!/[\u2705\u274C\u26A0\u2717]/.test(clientSrc), '界面不得使用图形结论符号');
 ok(clientSrc.indexOf('delWord.trim() !== "删除"') !== -1, '删除旧副本须输入确认词');
 
-// 未接入工作区：首次安装置顶。
+// 未接入工作区：一键部署卡片置顶。
 const NOT_READY = {
   generatedAt: '2026-11-07 21:25 +0800',
   plugin: { name: '@mingmaple/dsh-handover', version: 'test', tools: 22, inject: ['tools'], initErrors: [], scheduler: '就绪' },
   workspace: { root: '', found: false },
-  setup: { steps: ['准备一个长期存在的目录', '粘贴路径后点击「建立全局文件体系」'] },
+  setup: { steps: ['准备一个长期存在的目录', '粘贴路径后点「一键部署」'] },
   guide: payload ? payload.guide : null,
   notes: ['未找到 _Control_Center：这个实例还没接入工作区。'],
 };
@@ -804,8 +821,21 @@ const tree3 = Comp3({});
 const sections3 = tree3.kids.filter((k) => k && k.type === 'section');
 const titles3 = sections3.map((sec) => textOf(sec.kids[0]).join(''));
 ok(titles3[0] === '首次安装', '未接入工作区时首次安装置顶', JSON.stringify(titles3));
-ok(textOf(tree3).join(' ').indexOf('建立全局文件体系') !== -1, '未接入时应能建立文件体系');
-ok(textOf(tree3).join(' ').indexOf('待处理') !== -1, '未接入时应显示待处理项');
+const text3 = textOf(tree3).join(' ');
+ok(text3.indexOf('一键部署') !== -1, '未接入时应能一键部署（建体系＋注册工作区＋建全局会话）');
+ok(text3.indexOf('仅建立文件体系') !== -1, '未接入时仍可只建立文件体系');
+ok(text3.indexOf('待处理') !== -1, '未接入时应显示待处理项');
+
+// 已接入但没有全局会话：给出补建入口，且排在常规卡片之前。
+const READY_NO_GLOBAL = Object.assign({}, FIXTURE, { globalSessions: 0 });
+const exp4 = loaded.factory((name) => (name === 'react' ? fakeReact(READY_NO_GLOBAL) : (() => { throw new Error('x'); })));
+let Comp4 = null;
+exp4.apply({ slots: { inject: (n, cb) => cb(), register: (o, c) => { Comp4 = c; } } });
+const tree4 = Comp4({});
+const sections4 = tree4.kids.filter((k) => k && k.type === 'section');
+const titles4 = sections4.map((sec) => textOf(sec.kids[0]).join(''));
+ok(titles4[0] === '全局会话', '已接入但无全局会话时应给出补建卡片', JSON.stringify(titles4.slice(0, 3)));
+ok(textOf(tree4).join(' ').indexOf('创建全局会话') !== -1, '补建卡片应提供「创建全局会话」按钮');
 
 ok(styles.length === 1, '样式只注入一次（幂等）', String(styles.length));
 
@@ -908,6 +938,20 @@ if (process.platform === 'win32') ok(deepFile.length > 260, '构造的路径应�
 const delDeep = await mv.rmTree(path.join(mvRoot, 'deep'));
 ok(delDeep.ok && !fs.existsSync(path.join(mvRoot, 'deep')), 'rmTree 应删掉超长路径树', JSON.stringify(delDeep.fails));
 fs.rmSync(mvRoot, { recursive: true, force: true });
+
+// 工作区与会话的显式化：create 支持 ensure；新建会话缺工作区必须报错并列出可选项。
+ctx.workspaceRegistry = { list: () => [], create: async (p, t) => ({ id: 'ws-test', title: t, path: p }) };
+const wsToolEnsure = reg.tools.find((t) => t.name === 'ho_workspace');
+const wsEnsureDir = path.join(BLANK, 'proj', 'Demo');
+const wsEnsureOut = await wsToolEnsure.execute({ action: 'create', path: wsEnsureDir, title: 'Demo', ensure: true });
+ok(/已注册工作区/.test(String(wsEnsureOut && wsEnsureOut.text)), 'ho_workspace create 应支持 ensure 建目录', String(wsEnsureOut && wsEnsureOut.text));
+ok(fs.existsSync(wsEnsureDir), 'ensure=true 应真的建出目录', wsEnsureDir);
+const sessToolWs = reg.tools.find((t) => t.name === 'ho_sessions');
+let newErr = '';
+try {
+  await sessToolWs.execute({ action: 'new', confirm: true, title: '项目1' }, { agent: { session: { header: { id: 'session-x', cwd: BLANK } } } });
+} catch (e) { newErr = String(e && e.message ? e.message : e); }
+ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会话缺工作区时应报错并列出可选工作区', newErr.slice(0, 160));
 
 fs.rmSync(BLANK, { recursive: true, force: true });
 console.log('');

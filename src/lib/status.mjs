@@ -165,6 +165,12 @@ export function buildStatus(env, extra) {
     };
   }, { rows: [], notify: [], hot: 0, unknown: 0 });
 
+  // 设置页用：已接入工作区但没有全局会话时，给出补建入口。
+  out.globalSessions = guard(() => {
+    const all = (out.sessions && Array.isArray(out.sessions.all)) ? out.sessions.all : [];
+    return all.filter((r) => r && r.role === 'global').length;
+  }, 0);
+
   if (out.gate && !out.gate.ok && !out.gate.error) out.notes.push('通用约束条闸门未过：向对应项目会话派发，全局不代写项目库内文件。');
   if (out.handover && out.handover.fail) out.notes.push(out.handover.fail + ' 个项目交接体检不合格，交接前必须先补。');
   return out;

@@ -8,6 +8,7 @@ import { NL, readUtf8, isDir, isFile } from './text.mjs';
 import { handoverPathFor, assertProjectName, assertTaskName } from './role.mjs';
 import { readHandover } from './handover-io.mjs';
 import { scanSessions } from './sessions.mjs';
+import { workspaceRows } from './registry.mjs';
 import { checkConsent } from './consent.mjs';
 import { watermark } from './facts.mjs';
 
@@ -30,6 +31,20 @@ function findWorkspaceId(key) {
     if (normPath(w.path) === want) return id;
   }
   return null;
+}
+
+/** 已注册工作区清单（插件服务优先，退化读 workspace.json）：新建会话时用来列出可选项。 */
+function listWorkspaces(env) {
+  try {
+    const reg = env && typeof env.registry === 'function' ? env.registry() : null;
+    const list = reg && typeof reg.list === 'function' ? (reg.list() || []) : [];
+    if (list.length) {
+      return list.map((w) => ({ id: String((w && w.id) || ''), title: String((w && w.title) || ''), path: String((w && w.path) || '') }));
+    }
+  } catch { /* 退回读文件 */ }
+  try {
+    return workspaceRows().map((r) => ({ id: r.id, title: r.title, path: r.path }));
+  } catch { return []; }
 }
 
 function promptSelf(env, sessionId, text, mode) {
@@ -100,17 +115,51 @@ export async function sessionNew(env, args, exec) {
     }
   }
   let created = null;
-  if (args.cwd && !args.workspace) {
+  // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
+  const rows = listWorkspaces(env);
+  const choices = rows.length
+    ? rows.map((r) => '  ' + r.id + '  ' + (r.title || '-') + '  ' + (r.path || '-')).join(NL)
+    : '  （还没有注册任何工作区）';
+  const pickWorkspace = (key) => {
+    const wid = findWorkspaceId(key);
+    if (!wid) {
+      throw new Error('找不到工作区：' + key + NL + '已注册的工作区：' + NL + choices + NL + '传 id、标题或路径都行；要先建工作区，用 ho_workspace(action="create", path="<目录>")。');
+    }
+    return wid;
+  };
+  const wantGlobalWs = title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global';
+  if (args.workspace) {
+    created = await controller.create({ workspaceId: pickWorkspace(args.workspace) });
+  } else if (args.cwd) {
     if (!isDir(args.cwd)) throw new Error('cwd 不存在：' + args.cwd);
     // cwd 若正好是已注册工作区的根，必须按 workspaceId 建；否则会话会落进「未分组」。
     let wid = null;
     try { wid = findWorkspaceId(args.cwd); } catch { wid = null; }
-    created = wid ? await controller.create({ workspaceId: wid }) : await controller.create({ cwd: args.cwd });
-  } else {
-    const key = args.workspace || ws;
-    const wid = findWorkspaceId(key);
-    if (!wid) throw new Error('找不到工作区：' + key + '（给 id、标题、路径都行）');
+    if (!wid) {
+      throw new Error('cwd 不在任何已注册工作区里：' + args.cwd + NL + '已注册的工作区：' + NL + choices
+        + NL + '要么把 cwd 换成某个工作区的根，要么先注册它：ho_workspace(action="create", path="' + args.cwd + '")。');
+    }
     created = await controller.create({ workspaceId: wid });
+  } else if (args.project) {
+    // 项目会话：按项目名找同名工作区，或路径落在 Projects/<项目>、_Project_Meta/<项目> 下的工作区。
+    const want = String(args.project).toLowerCase();
+    const hit = rows.find((r) => {
+      if (String(r.title || '') === String(args.project)) return true;
+      const p = normPath(r.path);
+      return p.indexOf('/projects/' + want) !== -1 || p.indexOf('/_project_meta/' + want) !== -1;
+    });
+    if (!hit) {
+      throw new Error('项目「' + args.project + '」还没有对应的工作区。' + NL + '已注册的工作区：' + NL + choices
+        + NL + '做法一：ho_workspace(action="create", path="<该项目目录>", title="' + args.project + '") 后再建会话；'
+        + NL + '做法二：把 workspace 传成上面某个工作区。');
+    }
+    created = await controller.create({ workspaceId: String(hit.id) });
+  } else if (wantGlobalWs) {
+    created = await controller.create({ workspaceId: pickWorkspace(ws) });
+  } else {
+    throw new Error('新建会话必须指明工作区：传 workspace（id、标题或路径），或 cwd（某个已注册工作区的根）。' + NL
+      + '已注册的工作区：' + NL + choices + NL
+      + '全局会话落在标题含「全局」的工作区；项目会话同时传 project 与该项目的工作区；杂项会话传该项目外的独立工作区。');
   }
   const sessionId = created && created.sessionId;
   if (!sessionId) throw new Error('create 没有返回 sessionId');

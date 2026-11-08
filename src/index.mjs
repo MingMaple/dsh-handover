@@ -103,6 +103,7 @@ export function apply(ctx, config) {
   const initErrors = [];
   const registered = new Set();
   const scoped = new Map();               // sessionId → dispose（撤销该会话的工具限制与提示段）
+  const appliedRole = new Map();          // sessionId → 上次装配的角色（用于开轮前核对）
   const roleState = { gating: '', last: null, bootstrap: '' };
   let scheduler = null;
   let schedulerError = "";
@@ -223,10 +224,21 @@ export function apply(ctx, config) {
   }
 
   function agentOf(sid) {
+    const want = String(sid || '');
     try {
-      const a = ctx.agents && typeof ctx.agents.get === 'function' ? ctx.agents.get(sid) : null;
-      return a || null;
-    } catch { return null; }
+      const a = ctx.agents && typeof ctx.agents.get === 'function' ? ctx.agents.get(want) : null;
+      if (a) return a;
+    } catch { /* 退回列表查找 */ }
+    // 宿主的注册表键不保证就是会话 id：取不到时按会话头的 id 在活体列表里再找一次。
+    // 少了这一层，休眠会话在设置页被改角色时会被判成「不在内存」，只能等重启才装配。
+    try {
+      const list = ctx.agents && typeof ctx.agents.list === 'function' ? (ctx.agents.list() || []) : [];
+      for (const a of list) {
+        const h = a && a.session ? a.session.header : null;
+        if (h && String(h.id || '') === want) return a;
+      }
+    } catch { /* ignore */ }
+    return null;
   }
 
   /**
@@ -309,6 +321,7 @@ export function apply(ctx, config) {
 
   function applyScoped(agent, info) {
     const sid = agent && agent.id ? String(agent.id) : (agent && agent.session && agent.session.header ? String(agent.session.header.id || '') : '');
+    env.log('装配会话：' + sid + ' · 角色 ' + ((info && info.role) || 'plain'));
     const old = scoped.get(sid);
     if (typeof old === 'function') { try { old(); } catch { /* 旧限制已失效 */ } }
     scoped.delete(sid);
@@ -355,6 +368,7 @@ export function apply(ctx, config) {
     if (disposers.length) {
       scoped.set(sid, () => { for (const d of disposers) { try { d(); } catch { /* ignore */ } } });
     }
+    appliedRole.set(sid, info.role);
     roleState.last = { sid, role: info.role, at: stampTz(Date.now()) };
 
     // 不向会话历史写任何内容：会话格式 v4 拒绝插件自造的 source，写盘失败会连累该会话后续每次写盘。
@@ -588,7 +602,14 @@ export function apply(ctx, config) {
   }
   if (typeof ctx.on === 'function') {
     try {
-      ctx.on('agent/created', (payload) => {
+      // 事件作用域：宿主以 agent 作为事件的作用域载体，插件在根作用域裸注册时收不到别的会话的事件。
+      // 后果是「休眠的会话被唤醒时不再装配」——设置角色后必须重启 DSH 才生效，正是这一处。
+      // 传 { global: true } 才能收到全部会话的事件（0.2.2 支持；旧内核忽略选项，退回裸注册）。
+      const onAgentEvent = (name, fn) => {
+        try { ctx.on(name, fn, { global: true }); return true; }
+        catch { try { ctx.on(name, fn); return true; } catch (e) { env.log('会话事件监听失败（' + name + '）：' + msgOf(e)); return false; } }
+      };
+      onAgentEvent('agent/created', (payload) => {
         try {
           const agent = payload && payload.agent ? payload.agent : null;
           if (!agent) return;
@@ -596,6 +617,7 @@ export function apply(ctx, config) {
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
           const info = infoFor(sid, scopedMetaOf(h, sid));
+          env.log('会话创建事件：' + sid + ' · 角色 ' + info.role + ' · 依据 ' + info.source);
           // 0.2.2 起工具按「步」解析（tools.resolve），出生后第一轮就按当时的限制出工具表；
           // 早期为「先 create 再写角色表」的竞态留了 1.5 秒延迟复核，代价是子 Agent 在前 1.5 秒
           // 内看到全部 22 个工具。⇒ 子级 Agent／角色表已登记：当场装配；只有「靠 cwd、首条提示
@@ -610,15 +632,33 @@ export function apply(ctx, config) {
           env.log('角色装配失败：' + msgOf(e));
         }
       });
-      ctx.on('agent/disposed', (payload) => {
+      onAgentEvent('agent/disposed', (payload) => {
         try {
           const agent = payload && payload.agent ? payload.agent : null;
           const sid = agent && agent.id ? String(agent.id) : '';
-          if (sid) { scoped.delete(sid); clearLateCheck(sid); }
+          if (sid) { scoped.delete(sid); clearLateCheck(sid); appliedRole.delete(sid); }
         } catch { /* ignore */ }
       });
+      // 开轮前核对：会话休眠期间角色可能被改过，而宿主恢复同一活体时不保证再发 agent/created。
+      // 状态切到 running 时按角色表核一次，不一致就重装工具与提示段——不必重启 DSH。
+      onAgentEvent('agent/status', (payload) => {
+        try {
+          const status = String((payload && payload.status) || '');
+          if (status !== 'running') return;
+          const agent = payload && payload.agent ? payload.agent : null;
+          if (!agent) return;
+          const h = agent.session && agent.session.header ? agent.session.header : null;
+          const sid = String((h && h.id) || agent.id || '');
+          if (!sid) return;
+          const applied = appliedRole.get(sid) || '';
+          const info = infoFor(sid, scopedMetaOf(h, sid));
+          if (applied === info.role) return;
+          env.log('开轮前换装：' + sid + ' · 已装 ' + (applied || '-') + ' · 目标 ' + info.role);
+          applyScoped(agent, info);
+        } catch (e) { env.log('开轮前装配失败：' + msgOf(e)); }
+      });
     } catch (e) {
-      initErrors.push('agent/created 监听：' + msgOf(e));
+      initErrors.push('会话事件监听：' + msgOf(e));
     }
 
     // 插件重新加载（停用再启用、或启动时活体会话早于插件）时，已存在的会话不会再收到

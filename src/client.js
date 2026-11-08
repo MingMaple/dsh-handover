@@ -263,6 +263,9 @@ window.__ModuleLoader__.load({
       const [created, setCreated] = React.useState("");
       const [setupMsg, setSetupMsg] = React.useState("");
       const [setupBad, setSetupBad] = React.useState(false);
+      const [deployInfo, setDeployInfo] = React.useState(null);
+      const [globalMsg, setGlobalMsg] = React.useState("");
+      const [globalBad, setGlobalBad] = React.useState(false);
       const [working, setWorking] = React.useState(false);
       // 追加系统提示词
       const [extra, setExtra] = React.useState("");
@@ -332,12 +335,53 @@ window.__ModuleLoader__.load({
         setWorking(true); setSetupBad(false); setSetupMsg("");
         post("register", { path: created, title: "全局" }, 20000)
           .then((r) => {
-            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（" + (r.id || "?") + "）。新建一个标题含「全局」的会话即可接入。");
+            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（" + (r.id || "?") + "）。点「刷新」后可继续。");
             else { setSetupBad(true); setSetupMsg(((r && r.error) || "注册失败") + (r && r.hint ? "；" + r.hint : "")); }
           })
           .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
           .then(() => setWorking(false));
       }, [created]);
+
+      // 一键部署：建文件体系、注册「全局」工作区、建「全局」会话，一次做完。
+      const deployAll = React.useCallback(() => {
+        setWorking(true); setDeployInfo(null); setSetupBad(false); setSetupMsg("");
+        post("deploy", { parent: parent }, 180000)
+          .then((r) => {
+            if (!r || !r.ok) {
+              setSetupBad(true);
+              setSetupMsg((r && r.error) || "部署失败");
+              return;
+            }
+            const parts = [];
+            parts.push("文件体系：" + r.root);
+            if (r.workspace) parts.push("工作区：「" + r.workspace.title + "」（" + r.workspace.path + "）");
+            else if (r.workspaceError) parts.push("工作区未注册：" + r.workspaceError);
+            if (r.sessionId) parts.push("全局会话：" + r.sessionId + "。在左侧「" + (r.workspace ? r.workspace.title : "全局") + "」工作区打开它即可开始。");
+            else if (r.sessionError) parts.push("会话未创建：" + r.sessionError);
+            setCreated(r.root || "");
+            setDeployInfo({ text: parts.join("；"), bad: false });
+            load();
+          })
+          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .then(() => setWorking(false));
+      }, [parent, load]);
+
+      // 工作区已接入但没有全局会话时，补建一个。
+      const makeGlobalSession = React.useCallback(() => {
+        setWorking(true); setGlobalBad(false); setGlobalMsg("");
+        post("global-session", {}, 60000)
+          .then((r) => {
+            if (r && r.ok) {
+              setGlobalMsg("已创建全局会话 " + r.sessionId + "，在左侧工作区打开它即可开始。");
+              load();
+            } else {
+              setGlobalBad(true);
+              setGlobalMsg((r && r.error) || "创建失败");
+            }
+          })
+          .catch((e) => { setGlobalBad(true); setGlobalMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .then(() => setWorking(false));
+      }, [load]);
 
       const saveExtra = React.useCallback(() => {
         setWorking(true); setExtraBad(false); setExtraMsg("");
@@ -536,27 +580,41 @@ window.__ModuleLoader__.load({
       // 排序原则：进来大概率要做的事在前，只读数据居中，说明文字最后。
       const sections = [];
 
-      // 一、首次安装：仅在尚未接入工作区时出现，此时它是唯一可做的事。
+      // 一、首次安装与全局会话：未接入时给一键部署；已接入但还没有全局会话时给补建入口。
       const setup = data.setup;
       const notReady = !ws || ws.found === false;
-      if (setup && notReady && (setup.steps || []).length) {
+      const globalCount = Number(data.globalSessions || 0);
+      if (deployInfo) {
+        sections.push(card("部署结果", h("div", { className: deployInfo.bad ? "dshh-bad" : "dshh-ok" }, deployInfo.text)));
+      }
+      if (notReady) {
         const msg = setupMsg ? h("div", { className: setupBad ? "dshh-bad" : "dshh-ok" }, setupMsg) : null;
+        const steps = (setup && setup.steps) || [];
         sections.push(card("首次安装",
           h("div", null,
             h("div", { className: "dshh-muted" }, "插件已加载，工具与本页可用；闸门、交接体检与会话水位在接入工作区后显示。"),
-            h("ol", { className: "dshh-list" }, setup.steps.map((s, i) => h("li", { key: i }, s))),
+            h("ol", { className: "dshh-list" }, steps.map((s, i) => h("li", { key: i }, s))),
             h("input", {
               className: "dshh-input",
               type: "text",
               value: parent,
-              placeholder: "已存在目录的绝对路径，_Workspace 将建在其内",
+              placeholder: "粘贴一个绝对路径：全局根 _Workspace 会建在它里面",
               onChange: (e) => setParent(e.target.value),
             }),
             h("div", { className: "dshh-row" },
-              h("button", { className: "dshh-btn", type: "button", disabled: working || !parent, onClick: buildTree }, working ? "正在建立" : "建立全局文件体系"),
+              h("button", { className: "dshh-btn", type: "button", disabled: working || !parent, onClick: deployAll }, working ? "正在部署" : "一键部署"),
+              h("button", { className: "dshh-btn", type: "button", disabled: working || !parent, onClick: buildTree }, working ? "正在建立" : "仅建立文件体系"),
               created ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: registerWs }, "注册为工作区") : null),
             created ? h("div", { className: "dshh-code" }, created) : null,
             msg)));
+      } else if (globalCount === 0) {
+        sections.push(card("全局会话",
+          h("div", null,
+            h("div", { className: "dshh-muted" }, "工作区已接入，但还没有「全局」会话。点下面的按钮新建一个，插件会把它登记为全局角色。"),
+            h("div", { className: "dshh-muted" }, "全局根：" + (ws.root || "")),
+            h("div", { className: "dshh-row" },
+              h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: makeGlobalSession }, working ? "正在创建" : "创建全局会话")),
+            globalMsg ? h("div", { className: globalBad ? "dshh-bad" : "dshh-ok" }, globalMsg) : null)));
       }
 
       // 二、压缩授权：唯一合法的「用户同意」入口，置顶。

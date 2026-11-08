@@ -47,8 +47,9 @@ export function pmWorkspaceTool(env) {
           enum: ['list', 'create', 'delete', 'move-probe', 'move', 'move-switch', 'move-status', 'move-retarget', 'move-repair', 'move-cleanup'],
           description: 'list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup',
         },
-        path: { type: 'string', description: 'create 用：已存在的绝对目录（不会替你先建）' },
+        path: { type: 'string', description: 'create 用：目录绝对路径；默认要求已存在，ensure=true 时自动创建' },
         title: { type: 'string', description: 'create 用：显示标题' },
+        ensure: { type: 'boolean', description: 'create 用：目录不存在时自动创建（默认 false，不替你建目录）' },
         workspace: { type: 'string', description: 'delete 用：工作区 id、标题、路径' },
         to: { type: 'string', description: 'move 用：新根绝对路径（父目录可自动建）' },
         confirm: { type: 'boolean', description: 'move-cleanup 用：true 才真的删旧副本' },
@@ -82,10 +83,13 @@ export function pmWorkspaceTool(env) {
       if (action === 'create') {
         if (!reg || typeof reg.create !== 'function') throw new Error('workspaceRegistry.create 不可用');
         const p = String(args.path || '').trim();
-        if (!p) throw new Error('create 需要 path（已存在的绝对目录）');
+        if (!p) throw new Error('create 需要 path（目录绝对路径）');
         let st = null;
         try { st = fs.statSync(p); } catch { st = null; }
-        if (!st || !st.isDirectory()) throw new Error('目录不存在或不是目录：' + p + '（本工具不替你建目录，先手工建好再注册）');
+        if ((!st || !st.isDirectory()) && args.ensure === true) {
+          try { fs.mkdirSync(p, { recursive: true }); st = fs.statSync(p); } catch (e) { throw new Error('建目录失败：' + p + '（' + String(e && e.message ? e.message : e) + '）'); }
+        }
+        if (!st || !st.isDirectory()) throw new Error('目录不存在或不是目录：' + p + '（默认不替你建目录；要建请传 ensure=true，或先手工建好）');
         const title = String(args.title || '').trim() || p.split(/[\\/]/).filter(Boolean).pop() || p;
         let w = null;
         try { w = await reg.create(p, title); } catch (e) { throw new Error('建工作区失败：' + String(e && e.message ? e.message : e)); }

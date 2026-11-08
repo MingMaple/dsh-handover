@@ -73,6 +73,33 @@ function resolveConsentSid(env, input) {
   return s;
 }
 
+/** 在指定工作区根里建一个「全局」会话：能按工作区 id 就按 id，退而用 cwd；随后改名并登记全局角色。 */
+async function createGlobalSession(env, rootPath, title) {
+  const controller = typeof env.controller === 'function' ? env.controller() : null;
+  if (!controller || typeof controller.create !== 'function') return { error: 'sessionController.create 不可用，工作区已建好，需手工新建一个标题含「全局」的会话' };
+  const want = title || '全局';
+  let workspaceId = '';
+  try {
+    const reg = env.registry && env.registry();
+    const list = reg && typeof reg.list === 'function' ? (reg.list() || []) : [];
+    const norm = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const hit = list.find((w) => w && norm(w.path) === norm(rootPath));
+    if (hit) workspaceId = String(hit.id || '');
+  } catch { workspaceId = ''; }
+  let created = null;
+  try {
+    created = workspaceId ? await controller.create({ workspaceId }) : await controller.create({ cwd: rootPath });
+  } catch (e) {
+    return { error: '建会话失败：' + msgOf(e), workspaceId };
+  }
+  const sessionId = String((created && created.sessionId) || '');
+  if (!sessionId) return { error: 'create 没有返回 sessionId', workspaceId };
+  try { if (typeof controller.rename === 'function') await controller.rename({ sessionId, title: want }); } catch { /* 改名失败可事后改 */ }
+  try { if (typeof env.writeRole === 'function') env.writeRole(sessionId, { role: 'global', project: '', task: '', source: 'deploy' }); } catch { /* 角色登记失败不影响建会话 */ }
+  try { if (typeof env.applyScopedLive === 'function') env.applyScopedLive(sessionId, { role: 'global' }); } catch { /* 装配失败下一轮补齐 */ }
+  return { sessionId, workspaceId };
+}
+
 export function createApi(env, info) {
   const ok = (value) => ({ ok: true, value });
   const bad = (code, message, http) => ({ ok: false, error: { code, message, details: {} }, http: http || 400 });
@@ -90,6 +117,44 @@ export function createApi(env, info) {
         const r = createGlobalWorkspace(p.parent, { name: p.name });
         invalidateStatus(env);
         return r && r.ok ? ok(r) : { ok: false, error: { code: 'setup-failed', message: String((r && r.error) || '建立失败'), details: {} }, http: 400 };
+      }
+
+      if (method === 'deploy') {
+        // 一键部署：建文件体系 → 注册「全局」工作区 → 建「全局」会话（三件事一次做完）。
+        const scaffold = createGlobalWorkspace(p.parent, { name: p.name });
+        if (!scaffold || scaffold.ok !== true) {
+          return { ok: false, error: { code: 'setup-failed', message: String((scaffold && scaffold.error) || '建立失败'), details: {} }, http: 400 };
+        }
+        let ws = null;
+        let workspaceError = '';
+        try {
+          const reg = env.registry && env.registry();
+          if (reg && typeof reg.create === 'function') ws = await reg.create(scaffold.root, '全局');
+          else workspaceError = 'workspaceRegistry 不可用';
+        } catch (e) { workspaceError = '注册工作区失败：' + msgOf(e); }
+        const made = await createGlobalSession(env, scaffold.root, '全局');
+        invalidateStatus(env);
+        env.log('一键部署：体系 ' + scaffold.root + '；工作区 ' + (ws ? String(ws.id) : '失败') + '；会话 ' + (made.sessionId || '失败'));
+        return ok({
+          root: scaffold.root,
+          created: scaffold.created || [],
+          written: scaffold.written || [],
+          workspace: ws ? { id: String(ws.id || ''), title: String(ws.title || '全局'), path: String(ws.path || scaffold.root) } : null,
+          workspaceError,
+          sessionId: made.sessionId || '',
+          sessionError: made.error || '',
+        });
+      }
+
+      if (method === 'global-session') {
+        // 已接入工作区但没有全局会话时，补建一个（不建体系、不动既有文件）。
+        const root = currentRoot(env);
+        if (!root) return bad('no-workspace', '未找到全局根（工作区未接入）');
+        const made = await createGlobalSession(env, root, p.title || '全局');
+        invalidateStatus(env);
+        if (!made.sessionId) return bad('session-failed', made.error || '建会话失败');
+        env.log('补建全局会话：' + made.sessionId);
+        return ok({ root, sessionId: made.sessionId });
       }
 
       if (method === 'register') {
@@ -230,5 +295,5 @@ export function createApi(env, info) {
     }
   }
 
-  return { call, methods: ['status', 'setup', 'register', 'extra-prompt', 'role', 'move.probe', 'move.start', 'move.switch', 'move.status', 'move.retarget', 'move.retarget-stage', 'move.repair', 'move.cleanup', 'consent.grant', 'consent.list', 'consent.revoke'] };
+  return { call, methods: ['status', 'setup', 'deploy', 'global-session', 'register', 'extra-prompt', 'role', 'move.probe', 'move.start', 'move.switch', 'move.status', 'move.retarget', 'move.retarget-stage', 'move.repair', 'move.cleanup', 'consent.grant', 'consent.list', 'consent.revoke'] };
 }
