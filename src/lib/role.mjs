@@ -240,6 +240,11 @@ export function snapshotDirFor(ws, info) {
 }
 
 export function archiveDirFor(ws, info) {
+  // 规范 §4.1：杂项归档自包含在任务目录里（`_Misc/tasks/<任务>/_archive/`），不进全局归档；
+  // 全局与项目归档在 `_Archives/<范围>/Handover/`。
+  if (info && info.role === 'misc' && taskNameOk(info.task)) {
+    return path.join(ws, '_Misc', 'tasks', String(info.task), '_archive');
+  }
   const t = handoverPathFor(ws, info);
   return path.join(ws, '_Archives', t.scope || '_Global', 'Handover');
 }

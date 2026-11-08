@@ -35,6 +35,7 @@
 - 时间一律带偏移（例 `2026-10-24 22:40 +0800`）。
 - 不写「大概」「应该」这类没核过的话；没核就写「未核，待确认」。
 - 写交接用 `ho_handover(action="write")`、`action="append"`，不要手改文件（会绕过备份与体检）。
+- 归档命名：`_Archives/<范围>/Handover/<原文件名>_<YYYYMMDD_HHMMSS>.md`（例 `Handover_20261108_144307.md`）；杂项归档自包含在 `_Misc/tasks/<任务>/_archive/`。
 
 ## 5. 体检判据（插件自动跑）
 

@@ -366,6 +366,46 @@ ok(tg.indexOf('第 3/3 次压缩') !== -1, '续跑文案应填上次数', tg.sli
 ok(tcfg.directPeer === 'on', '会话之间直接对话应默认允许', String(tcfg.directPeer));
 ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办时收尾停止', tg.slice(0, 120));
 
+// 压缩额度用尽优先于水位判定：3/3 之后再压不是「水位没到」，而是该换任。
+// 实测：某项目会话压满 3 次、水位 25.4% 时，ho_checkpoint 只报「水位未到线」，误导它去找 force=true。
+{
+  const { decide } = await import(pathToFileURL(path.join(dist, 'lib', 'phase.mjs')).href);
+  const d1 = decide({ ratio: 0.25, compactionsUsed: 3, cfg: tcfg, lockState: 'clean' });
+  ok(d1.action === 'new_session', '压满 3/3 时水位低也应建议换任', JSON.stringify(d1));
+  const d2 = decide({ ratio: 0.9, compactionsUsed: 3, cfg: tcfg, lockState: 'clean' });
+  ok(d2.action === 'new_session', '压满 3/3 时到硬顶也应换任', JSON.stringify(d2));
+  const d3 = decide({ ratio: 0.4, compactionsUsed: 2, cfg: tcfg, lockState: 'clean' });
+  ok(d3.action === 'checkpoint', '未压满时过交接线仍应压缩', JSON.stringify(d3));
+}
+
+// 归档命名按 Handover_Rules §4.2：<原文件名>_<YYYYMMDD_HHMMSS>.md，不加链标识；杂项归档在任务目录内。
+{
+  const io = await import(pathToFileURL(path.join(dist, 'lib', 'handover-io.mjs')).href);
+  const stamp = io.archiveStamp(new Date(2026, 10, 8, 14, 43, 7));
+  ok(stamp === '20261108_144307', '归档时间戳应到秒', stamp);
+  const projName = io.archiveFileName('E:/ws/_Project_Meta/Demo/Handover.md', stamp);
+  ok(projName === 'Handover_' + stamp + '.md', '项目归档名应为 Handover_<时间>.md，不加项目前缀', projName);
+  const globName = io.archiveFileName('E:/ws/_Control_Center/records/Global_Handover.md', stamp);
+  ok(globName === 'Global_Handover_' + stamp + '.md', '全局归档名应为 Global_Handover_<时间>.md', globName);
+  const ad = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
+  const miscDir = ad.archiveDirFor(WS, { role: 'misc', task: '抢名额' }).replace(/\\/g, '/');
+  ok(miscDir.endsWith('_Misc/tasks/抢名额/_archive'), '杂项归档目录应在任务目录内（_archive）', miscDir);
+  const handTool = reg.tools.find((t) => t.name === 'ho_handover');
+  ok(!!handTool, '应注册 ho_handover');
+  if (handTool) {
+    const archExec = { name: 'ho_handover', arguments: { action: 'archive' }, agent: { session: { header: { id: 'session-arch', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), title: 'Demo1' } } } };
+    const r = await handTool.execute({ action: 'archive' }, archExec);
+    const m = /已归档 (.+?\.md)/.exec(r.text || '');
+    ok(!!m, '归档应报出目标路径', String(r.text).slice(0, 140));
+    if (m) {
+      const p = m[1];
+      ok(p.replace(/\\/g, '/').indexOf('_Archives/Demo/Handover/') !== -1, '项目归档目录应为 _Archives/Demo/Handover', p);
+      ok(/^Handover_\d{8}_\d{6}\.md$/.test(path.basename(p)), '归档文件名不加项目前缀且时间到秒', path.basename(p));
+      ok(fs.existsSync(p), '归档文件应存在', p);
+    }
+  }
+}
+
 const listeners = (reg.listeners && reg.listeners['agent/created']) || [];
 ok(listeners.length === 1, '应监听 agent/created 且只一处', String(listeners.length));
 const calls = { restrict: [], sections: [], injected: [], lifted: 0 };

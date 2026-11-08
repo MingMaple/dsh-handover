@@ -340,7 +340,13 @@ export function apply(ctx, config) {
       const text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null });
       const sc = agent && agent.ctx ? agent.ctx : null;
       if (text && sc && sc.systemPrompt && typeof sc.systemPrompt.section === 'function') {
-        disposers.push(sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
+        try {
+          disposers.push(sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
+        } catch (e) {
+          // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍在（宿主按 agent 持有，插件卸载不移除），
+          // 既无法移除也不能重复注册：视为已就位，沿用旧文本；换文本需重启 DSH 或让会话重建。
+          if (!/already registered/.test(msgOf(e))) throw e;
+        }
       }
     } catch (e) {
       initErrors.push('角色提示段：' + msgOf(e));
@@ -614,6 +620,43 @@ export function apply(ctx, config) {
     } catch (e) {
       initErrors.push('agent/created 监听：' + msgOf(e));
     }
+
+    // 插件重新加载（停用再启用、或启动时活体会话早于插件）时，已存在的会话不会再收到
+    // agent/created；这里补一次装配，否则它们的角色裁剪与提示段会随旧实例一起消失，
+    // 变成「已启用的项目会话又能看到全部 22 个工具」。
+    // agents 未在 inject 里声明，激活瞬间可能还取不到，所以取不到时延迟再试一次。
+    const scopeOne = (a) => {
+      const h = a && a.session && a.session.header ? a.session.header : null;
+      const sid = String((h && h.id) || (a && a.id) || '');
+      if (!sid) return false;
+      const info = infoFor(sid, scopedMetaOf(h, sid));
+      if (isChildAgent(a) && info.source !== 'store') {
+        applyScoped(a, { role: 'plain', project: '', task: '', source: 'child', sessionId: sid });
+      } else {
+        applyScoped(a, info);
+      }
+      return true;
+    };
+    const reapplyLive = () => {
+      let agents = null;
+      try { agents = ctx.agents; } catch { agents = null; }
+      if (!agents || typeof agents.list !== 'function') {
+        try { agents = typeof ctx.get === 'function' ? ctx.get('agents') : null; } catch { agents = null; }
+      }
+      if (!agents || typeof agents.list !== 'function') return 0;
+      let n = 0;
+      for (const a of agents.list()) {
+        try { if (scopeOne(a)) n++; } catch { /* 单个会话装配失败不影响插件激活 */ }
+      }
+      if (n > 0) env.log('补装配 ' + n + ' 个活体会话');
+      return n;
+    };
+    try {
+      if (reapplyLive() === 0) {
+        const t = setTimeout(() => { try { reapplyLive(); } catch { /* ignore */ } }, 1200);
+        if (t && typeof t.unref === 'function') t.unref();
+      }
+    } catch { /* 拿不到 agents 服务就跳过补装配 */ }
   }
 
   // ---------------- 设置页数据接口：主通道＝DSH 认证的 /api 载体；旧通道＝/dsh-handover HTTP 路由

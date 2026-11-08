@@ -5,7 +5,7 @@ import { NL } from '../lib/text.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { readHandover, writeHandover } from '../lib/handover-io.mjs';
+import { readHandover, writeHandover, archiveStamp, archiveFileName } from '../lib/handover-io.mjs';
 import { archiveDirFor } from '../lib/role.mjs';
 
 function noPath(input) {
@@ -51,13 +51,14 @@ export function pmHandoverTool(env) {
       if (args.action === "archive") {
         const src = readHandover(target.path);
         if (src.text === null) throw new Error("要归档的交接不存在：" + target.path);
-        const d = new Date();
-        const p = (n) => (n < 10 ? "0" + n : "" + n);
-        const stampText = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes());
+        const stampText = archiveStamp(new Date());
         const dir = archiveDirFor(ws, info);
         fs.mkdirSync(dir, { recursive: true });
-        const base = info.role === 'project' ? (info.project + '_Handover_') : info.role === 'misc' ? ((info.task || 'task') + '_Handover_') : 'Global_Handover_';
-        const dest = path.join(dir, base + stampText + ".md");
+        // 命名按 Handover_Rules §4.2：<原文件名>_<YYYYMMDD_HHMMSS>.md；同一秒重复归档加 -2、-3。
+        let dest = path.join(dir, archiveFileName(target.path, stampText));
+        for (let n = 2; fs.existsSync(dest) && n < 100; n++) {
+          dest = path.join(dir, archiveFileName(target.path, stampText + "-" + n));
+        }
         if (fs.existsSync(dest)) throw new Error("归档目标已存在，不覆盖：" + dest);
         fs.copyFileSync(target.path, dest);
         const a = crypto.createHash("sha256").update(fs.readFileSync(target.path)).digest("hex");

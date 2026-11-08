@@ -18,6 +18,26 @@ export function readHandover(file) {
 }
 
 /**
+ * 归档时间戳：`YYYYMMDD_HHMMSS`（到秒）。
+ * 规范要求时间戳取归档那一刻；只到分钟会在同一分钟内归档两份时撞名，故到秒。
+ */
+export function archiveStamp(d) {
+  const x = d || new Date();
+  const p = (n) => (n < 10 ? "0" + n : "" + n);
+  return x.getFullYear() + p(x.getMonth() + 1) + p(x.getDate()) + "_" + p(x.getHours()) + p(x.getMinutes()) + p(x.getSeconds());
+}
+
+/**
+ * 归档文件名：`<原文件名>_<YYYYMMDD_HHMMSS>.md`。
+ * 「原文件名」取源文件主名（不含扩展名）：全局 `Global_Handover_…`、项目与杂项 `Handover_…`；
+ * 不加链标识——归档目录本身已按链隔离（规范 §4.1）。
+ */
+export function archiveFileName(file, stampText) {
+  const base = String(file || "").split(/[\\/]/).pop().replace(/\.md$/i, "");
+  return base + "_" + String(stampText) + ".md";
+}
+
+/**
  * 写交接：先把旧文件复制到 <作用域>/Snapshots/pm-handover-<stamp>/，再原子替换，最后按角色体检。
  * @param {object} [opts] { info?: 角色信息（决定体检判据与备份目录）, kind?: 'global'|'project'|'misc' }
  * @returns {{ path, backup, verdict, reasons, bytes }}
