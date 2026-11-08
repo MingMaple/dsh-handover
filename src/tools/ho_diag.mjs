@@ -44,7 +44,8 @@ export function pmDiagTool(env, state) {
         ? env.compactionState(exec)
         : (() => { const c = countCompactions(eventsOf(exec)); return { used: c.used, lock: c.lock, source: 'events' }; })();
       out.push("压缩      " + st.used + "/" + env.cfg.maxCompactions + " 次；锁 " + st.lock + "；来源 " + st.source);
-      out.push("水位      " + (env.selfPct(meId) === null ? "读不到" : env.selfPct(meId).toFixed(1) + "%") + (typeof env.staleNote === "function" ? env.staleNote(exec) : ""));
+      const pct = env.selfPct(meId);
+      out.push("水位      " + (pct === null ? "读不到" : pct.toFixed(1) + "%") + (typeof env.staleNote === "function" ? env.staleNote(exec) : ""));
       const ws = env.resolveWs(exec);
       let wsOk = false;
       try { wsOk = fs.existsSync(path.join(ws, '_Control_Center')); } catch { wsOk = false; }
@@ -56,8 +57,7 @@ export function pmDiagTool(env, state) {
           if (typeof env.roleState === "function") {
             const rs = env.roleState();
             const cnt = typeof rs.count === "number" ? " · 已装配 " + rs.count + " 个会话" : "";
-            out.push("角色收窄  " + (rs.gating || "未触发") + cnt + (rs.last ? " · 最近：" + rs.last.sid + " → " + rs.last.role + "（" + rs.last.at + "）" : ""));
-            if (rs.bootstrap) out.push("一次性引导 " + rs.bootstrap);
+            out.push("角色装配  " + (rs.mode || "未知") + cnt + (rs.last ? " · 最近：" + rs.last.sid + " → " + rs.last.role + "（" + rs.last.at + "）" : ""));
           }
         } catch (e) {
           out.push("角色      判定失败：" + (e && e.message ? e.message : e));

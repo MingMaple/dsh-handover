@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 设置页用的状态快照（只读）：插件自身状态 ＋ 闸门 ＋ 交接体检 ＋ 会话水位 ＋ 最近一次守卫判定。
  * 全部读本地文件，不唤醒任何会话、不花任何会话的 token。
  * 任何一段出错都只让该段带 error 字段，不让整页 500。
@@ -64,7 +64,7 @@ export function buildStatus(env, extra) {
       const map = {};
       for (const sid of Object.keys(store.sessions)) {
         const e = store.sessions[sid] || {};
-        map[sid] = { role: String(e.role || ''), project: String(e.project || ''), task: String(e.task || ''), setAt: String(e.setAt || ''), bootstrappedAt: String(e.bootstrappedAt || '') };
+        map[sid] = { role: String(e.role || ''), project: String(e.project || ''), task: String(e.task || ''), setAt: String(e.setAt || '') };
       }
       return map;
     }, {}),

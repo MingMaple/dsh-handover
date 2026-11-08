@@ -26,7 +26,7 @@ process.env.HOME = BLANK;
 const { apply, schedDepsFor } = await import(pathToFileURL(path.join(dist, 'index.mjs')).href);
 const reg = { tools: [], sections: [], logs: [], listeners: {} };
 const ctx = {
-  tools: { register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); }, restrict() { }, guard: (fn) => { reg.guardFn = fn; } },
+  tools: { register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); }, restrict() { }, resolve: () => ({}), guard: (fn) => { reg.guardFn = fn; } },
   systemPrompt: { section: (s) => { reg.sections.push(s); return () => { reg.disposed = (reg.disposed || 0) + 1; }; } },
   sessionController: {
     create: async () => ({ sessionId: 'session-deploy-test' }),
@@ -54,14 +54,28 @@ ok(reg.tools.filter((t) => t.name.startsWith('peer_')).length === 6, 'peer_* 应
 // 每步条件启用：内核 0.2.2 起工具按「步」解析，子会话在解析工具表这一步就要被排除，
 // 否则它的首轮提示词会带着 22 个用不了的 schema（每步白付约 2.5k token）。
 ok((reg.toolOpts || []).length === 22 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '22 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
+
+/** 取某个工具的每步启用条件（0.2.2 起工具按步解析）。 */
+const gateFor = (name) => {
+  const i = (reg.tools || []).findIndex((t) => t && t.name === name);
+  return i >= 0 && reg.toolOpts && reg.toolOpts[i] ? reg.toolOpts[i].when : null;
+};
+
 {
-  const gate = (reg.toolOpts || [])[0] && reg.toolOpts[0].when;
+  // 每步条件同时承担子会话排除与角色过滤：调用方每步重算工具表，换角色下一轮即生效。
+  const gate = gateFor('ho_brief');
   ok(typeof gate === 'function', '每步启用条件应可调用');
   if (typeof gate === 'function') {
-    ok(gate({ agent: { session: { header: { id: 'session-root', cwd: '/tmp/x' } } } }) === true, '根级会话的工具条件应放行（收窄交给角色裁剪）');
+    ok(gate({}) === true, '没有 agent 的调用应放行（命令行与演练路径）');
     ok(gate({ agent: { session: { header: { id: 'session-sub', origin: 'subagent' } } } }) === false, '子会话的工具条件应拒绝');
     ok(gate({ agent: { session: { header: { id: 'session-child', parentSession: 'session-root' } } } }) === false, '带父会话的会话也应拒绝');
-    ok(gate({}) === true, '没有 agent 的调用应放行（命令行与演练路径）');
+    ok(gate({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '未登记角色的会话按普通处理（0 个插件工具）');
+    const roleMod = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
+    roleMod.writeRole({}, 'session-boss', { role: 'global' });
+    ok(gate({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_brief');
+    const gatePlain = gateFor('ho_phase');
+    ok(typeof gatePlain === 'function' && gatePlain({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_phase');
+    ok(gatePlain({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '普通角色不可见 ho_phase');
   }
 }
 // 可选注入多了 connection（/api 载体）。两个都必须是**可选**的，否则旧宿主整插件不激活。
@@ -430,14 +444,18 @@ const projAgent = {
   session: { header: { id: 'session-proj', title: 'Demo1', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库') } },
   ctx: {
     tools: { restrict: (f) => { calls.restrict.push(f); return () => { calls.lifted++; }; } },
-    systemPrompt: { section: (o) => { calls.sections.push(o); return () => { }; } },
+    systemPrompt: { section: (o) => { calls.sections.push(o); return () => { calls.lifted++; }; } },
   },
   inject: (m) => calls.injected.push(m),
 };
 for (const cb of listeners) cb({ agent: projAgent, source: 'fresh' });
-ok(calls.restrict.length === 1, '项目角色应调用 restrict 一次', String(calls.restrict.length));
-ok(calls.restrict[0] && Array.isArray(calls.restrict[0].deny) && calls.restrict[0].deny.length === 13, 'restrict 的 deny 名单应为 13 个', JSON.stringify(calls.restrict[0] && calls.restrict[0].deny && calls.restrict[0].deny.length));
-ok(Array.isArray(calls.restrict[0] && calls.restrict[0].deny) && calls.restrict[0].deny.indexOf('ho_pack') !== -1 && calls.restrict[0].deny.indexOf('ho_handover') === -1, 'deny 名单应与角色矩阵一致');
+ok(calls.restrict.length === 0, '按步路径不用 restrict 收窄工具', String(calls.restrict.length));
+const projGatePack = gateFor('ho_pack');
+const projGateHand = gateFor('ho_handover');
+const projExec = { agent: projAgent };
+ok(typeof projGatePack === 'function' && projGatePack(projExec) === false, '项目角色不可见 ho_pack（每步条件）');
+ok(typeof projGateHand === 'function' && projGateHand(projExec) === true, '项目角色可见 ho_handover（每步条件）');
+ok(gateFor('ho_brief')(projExec) === false, '项目角色不可见 ho_brief');
 ok(calls.sections.length === 1 && calls.sections[0].name === 'dsh-handover:manual', '应注册同名提示段遮蔽兜底段');
 const secNorm = String(calls.sections[0].text).replace(/\\/g, '/');
 ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '项目提示段应含自己的路径', secNorm.slice(0, 200));
@@ -537,60 +555,59 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   ok(opsSrc.indexOf('不得自行开展作业') !== -1 && opsSrc.indexOf('待用户指派') !== -1, '启动提示词应先报告再待指派');
 }
 
-const unrCalls = { restrict: 0 };
+// 按步路径（0.2.2 起）：创建即按角色登记提示段；工具可见性由每步条件算，不再调用 restrict。
+const unrCalls = { restrict: 0, section: null };
 const unrAgent = {
   id: 'session-unr',
   session: { header: { id: 'session-unr', title: '随便', cwd: '/tmp/x' } },
   ctx: {
-    tools: { restrict: (f) => { unrCalls.restrict++; unrCalls.lastDeny = (f && f.deny) || null; return () => { }; } },
-    systemPrompt: { section: () => () => { } },
+    tools: { restrict: () => { unrCalls.restrict++; return () => { }; } },
+    systemPrompt: { section: (o) => { unrCalls.section = o; return () => { }; } },
   },
   inject: () => { throw new Error('未设角色的会话不应写历史'); },
 };
 for (const cb of listeners) cb({ agent: unrAgent, source: 'fresh' });
 ok(true, '未设角色的会话装配不应抛错');
-// 回归锁：ho_sessions(action="new") 是「先 create（触发 agent/created）→ 再写角色表」，
-// 出生时必然未设角色（判为普通）。若当场收窄，新会话会在角色写入前一直只有 0 个工具
-// （2026-10-24 全局9 接任实撞）。⇒ 未设角色出生不得当场 restrict，由延迟复核按真角色装配。
-ok(unrCalls.restrict === 0, '未设角色出生时不得当场收窄（等角色表到位再装）', String(unrCalls.restrict));
-// 延迟复核要真的「补装」，不能只是「什么都不做」：角色表随后写入 ⇒ 1.5 s 后应按真角色改造工具集。
-// 用独立的假会话（session-late），别占用后面 order 用例要用的「无角色」会话。
-const lateCalls = { restrict: 0, lastDeny: null };
-const lateAgent = {
-  id: 'session-late',
-  session: { header: { id: 'session-late', title: '随便', cwd: '/tmp/y' } },
-  ctx: {
-    tools: { restrict: (f) => { lateCalls.restrict++; lateCalls.lastDeny = (f && f.deny) || null; return () => { }; } },
-    systemPrompt: { section: () => () => { } },
-  },
-  inject: () => { throw new Error('未设角色的会话不应写历史'); },
-};
-for (const cb of listeners) cb({ agent: lateAgent, source: 'fresh' });
-ok(lateCalls.restrict === 0, '未设角色出生时也不得对第二个会话当场收窄', String(lateCalls.restrict));
-writeRole({}, 'session-late', { role: 'project', project: 'Demo', source: 'user' });
-await new Promise((res) => setTimeout(res, 1700));
-ok(lateCalls.restrict === 1, '角色后到时延迟复核应补装真角色', String(lateCalls.restrict));
-ok(lateCalls.restrict === 1 && lateCalls.lastDeny && lateCalls.lastDeny.length === 13, '补装后 deny 名单应为项目角色的 13 个', JSON.stringify(lateCalls.lastDeny && lateCalls.lastDeny.length));
+ok(unrCalls.restrict === 0, '按步路径不再用 restrict 收窄工具', String(unrCalls.restrict));
+ok(!unrCalls.section, '普通会话不注册角色提示段');
 
-// 0.2.2 起工具按「步」解析：出生后第一轮就按当时的限制出工具表。
-// 子级 Agent（子会话、团队成员的运行时子级）与用户会话无关，必须出生即收窄，不能留真空。
-// 判定优先看会话头（origin=subagent 或 parentSession），不依赖投影缓存是否已落盘。
+// 开轮前核对：休眠期间改了角色，下一轮开始时补装提示段（工具由每步条件即时生效）。
+writeRole({}, 'session-unr', { role: 'project', project: 'Demo', source: 'user' });
+for (const cb of ((reg.listeners && reg.listeners['agent/status']) || [])) cb({ agent: unrAgent, status: 'running' });
+ok(!!unrCalls.section && /项目/.test(String(unrCalls.section.text)), '开轮前核对应按新角色补装提示段', JSON.stringify(unrCalls.section && unrCalls.section.name));
+
+// 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 22 个，改角色后开轮前换成 13 个。
 {
-  const childCalls = { restrict: 0, lastDeny: null };
-  const childAgent = {
-    id: 'session-child',
-    session: { header: { id: 'session-child', title: '', cwd: '/tmp/z', origin: 'subagent' } },
-    ctx: {
-      tools: { restrict: (f) => { childCalls.restrict++; childCalls.lastDeny = (f && f.deny) || null; return () => { }; } },
-      systemPrompt: { section: () => () => { } },
-    },
-    inject: () => { throw new Error('子会话不应写历史'); },
+  const legacyCalls = { restrict: 0, lastDeny: null, disposed: 0 };
+  const legacyListeners = {};
+  const legacyTools = {
+    register: () => { },
+    restrict: (f) => { legacyCalls.restrict++; legacyCalls.lastDeny = (f && f.deny) || null; return () => { legacyCalls.disposed++; }; },
+    guard: () => { },
   };
-  for (const cb of listeners) cb({ agent: childAgent, source: 'fresh' });
-  ok(childCalls.restrict === 1, '子级 Agent 出生即按普通角色收窄（工具按步解析，不留真空）', String(childCalls.restrict));
-  ok(childCalls.lastDeny && childCalls.lastDeny.length === 22, '子级 Agent 的 deny 名单应为全部 22 个', JSON.stringify(childCalls.lastDeny && childCalls.lastDeny.length));
+  const legacyCtx = {
+    tools: legacyTools,
+    systemPrompt: { section: () => () => { } },
+    sessionController: {},
+    logger: { warn: () => { }, error: () => { }, info: () => { } },
+    effect: (fn) => fn(),
+    on: (n, cb) => { (legacyListeners[n] = legacyListeners[n] || []).push(cb); },
+    get: () => null,
+    inject: () => { },
+  };
+  apply(legacyCtx, {});
+  const legacyAgent = {
+    id: 'session-legacy',
+    session: { header: { id: 'session-legacy', cwd: '/tmp/l' } },
+    ctx: { tools: legacyTools, systemPrompt: legacyCtx.systemPrompt },
+  };
+  for (const cb of (legacyListeners['agent/created'] || [])) cb({ agent: legacyAgent, source: 'fresh' });
+  ok(legacyCalls.restrict === 1 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 22, '旧内核：创建时按普通收窄 22 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  writeRole({}, 'session-legacy', { role: 'project', project: 'Demo', source: 'user' });
+  for (const cb of (legacyListeners['agent/status'] || [])) cb({ agent: legacyAgent, status: 'running' });
+  ok(legacyCalls.restrict === 2 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 13, '旧内核：开轮前换成项目角色的 13 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  ok(legacyCalls.disposed === 1, '旧内核：换角色应撤销旧限制', String(legacyCalls.disposed));
 }
-
 // ---------- 角色路由 ----------
 const noRole = await postJson('/dsh-handover/role', { session_id: 'session-r1', role: 'project' });
 ok(noRole.code === 400 && /项目名/.test(String(noRole.json && noRole.json.error)), '设项目角色缺项目名应 400', JSON.stringify(noRole.json));
@@ -612,9 +629,9 @@ ok(/order 需要 session_id/.test(oNoSid), 'order 缺 session_id 应报错', oNo
 const oBad = await orderCall({ action: 'order', order: 'wave', session_id: 'session-r1' });
 ok(/只能是 handover 或 compact/.test(oBad), 'order 取值应受限', oBad);
 // 交接／压缩指令必须先问用户
-const oNoConfirm = await orderCall({ action: 'order', order: 'handover', session_id: 'session-unr' });
+const oNoConfirm = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole' });
 ok(/需要用户确认/.test(oNoConfirm), 'order 未确认应拒绝', oNoConfirm);
-const oUnr = await orderCall({ action: 'order', order: 'handover', session_id: 'session-unr', confirm: true });
+const oUnr = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole', confirm: true });
 ok(/没有交接路径/.test(oUnr), '未设角色的会话不能下交接指令（避免退回全局交接）', oUnr);
 const oCold = await orderCall({ action: 'order', order: 'compact', session_id: 'session-r1', confirm: true });
 ok(/不在内存/.test(oCold), '休眠会话不能排压缩（compactNow 需要活体 agent）', oCold);

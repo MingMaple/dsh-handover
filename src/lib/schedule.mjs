@@ -1,7 +1,8 @@
-import fsx from "node:fs";
+﻿import fsx from "node:fs";
 import osx from "node:os";
 import pathx from "node:path";
 import { checkConsent } from './consent.mjs';
+import { sendPrompt } from './prompt.mjs';
 
 /**
  * 压缩调度：compactNow 只允许 idle，所以 ho_checkpoint 只登记，轮次结束后由这里排程。
@@ -92,16 +93,8 @@ export function createScheduler(deps) {
     return fillResumePrompt(cfg, { n, handover: hp && hp.path ? hp.path : '', role: info && info.role ? info.role : 'plain' });
   }
 
-  async function promptSelf(sessionId, text) {
-    const controller = service('sessionController');
-    if (!controller || typeof controller.prompt !== "function") throw new Error("sessionController.prompt 不可用");
-    const req = {
-      requestId: (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : String(Date.now()),
-      sessionId,
-      mode: "queue",
-      content: [{ type: "text", text }],
-    };
-    return controller.prompt(req, new AbortController().signal);
+  function promptSelf(sessionId, text) {
+    return sendPrompt(service('sessionController'), sessionId, text, 'queue');
   }
 
   /**

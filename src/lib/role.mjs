@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话角色：判定、逐角色交接路径、工具集与文案。角色表是本机状态（不进仓库、不进迁移包）。
  * 判定顺序：角色表 → 全局标题 → 全局工作区 → 子会话（默认普通）→ cwd（Projects/<名> 或 _Misc/tasks/<任务>）→ 首条提示 → 普通。
  */
@@ -69,17 +69,11 @@ export function writeRole(cfg, sessionId, patch) {
   if (next.role === 'project') assertProjectName(next.project);
   if (next.role === 'misc') assertTaskName(next.task);
   next.setAt = stampTz(Date.now());
-  // 角色变了就重新引导一次；只是改项目名也重引导，因为路径变了。
-  if (prev.role !== next.role || prev.project !== next.project || prev.task !== next.task) delete next.bootstrappedAt;
   data.sessions[sid] = next;
   writeRolesFile(cfg, data);
   return next;
 }
 
-export function bootstrappedAt(cfg, sessionId) {
-  const cur = readRoles(cfg).sessions[String(sessionId || '')];
-  return cur && cur.bootstrappedAt ? String(cur.bootstrappedAt) : '';
-}
 
 // ---------------------------------------------------------------- 判定
 

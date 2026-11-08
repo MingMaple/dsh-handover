@@ -41,9 +41,11 @@ import { NAMES } from './lib/names.mjs';
 import { readExtraPrompt, writeExtraPrompt, EXTRA_PROMPT_ORDER, EXTRA_PROMPT_SECTION } from './lib/extra-prompt.mjs';
 import {
   ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
-  readRoles, writeRole, bootstrappedAt, assertProjectName, assertTaskName,
+  readRoles, writeRole, assertProjectName, assertTaskName,
 } from './lib/role.mjs';
 import { manualFor, organizeMessageFor } from './lib/manual.mjs';
+import { sendPrompt } from './lib/prompt.mjs';
+import { resolveShortSid } from './lib/api.mjs';
 import { routeWorkspace } from './lib/workspace.mjs';
 import { stampTz } from './lib/brief.mjs';
 import { grantConsent } from './lib/consent.mjs';
@@ -101,10 +103,15 @@ export function schedDepsFor(env) {
 export function apply(ctx, config) {
   const cfg = resolveConfig(config);
   const initErrors = [];
-  const registered = new Set();
-  const scoped = new Map();               // sessionId → dispose（撤销该会话的工具限制与提示段）
-  const appliedRole = new Map();          // sessionId → 上次装配的角色（用于开轮前核对）
-  const roleState = { gating: '', last: null, bootstrap: '' };
+  const registered = new Set();           // 已注册的工具名（旧内核的限制式裁剪要用）
+  // 0.2.2 起工具按「步」解析（tools.resolve）：可用工具集合每一步重算，角色过滤直接放进注册条件。
+  // 更早的内核忽略注册选项，只能退回 agent 作用域的 restrict；两条路径按能力二选一，不并行。
+  const perStep = (() => { try { return !!(ctx.tools && typeof ctx.tools.resolve === 'function'); } catch { return false; } })();
+  const sectionDispose = new Map();       // sessionId → 撤销提示段
+  const legacyRestrict = new Map();       // sessionId → 撤销限制（仅无按步解析的内核）
+  const appliedRole = new Map();          // sessionId → 上次装配的角色
+  const roleCache = new Map();            // sessionId → { at, info }（每步过滤用，短 TTL）
+  const roleState = { last: null };
   let scheduler = null;
   let schedulerError = "";
   let guardLast = null;
@@ -197,8 +204,8 @@ export function apply(ctx, config) {
     version() {
       try { return pkgInfo().version; } catch { return '?'; }
     },
-    /** 当前按角色收窄过的会话数（诊断用；重启后从 0 重新累计）。 */
-    scopedCount() { return scoped.size; },
+    /** 当前已装配提示段的会话数（诊断用）。 */
+    assembledCount() { return sectionDispose.size; },
     log(m) {
       try { if (ctx.logger && typeof ctx.logger.warn === 'function') ctx.logger.warn(String(m)); } catch { /* ignore */ }
     },
@@ -253,18 +260,6 @@ export function apply(ctx, config) {
     } catch { return false; }
   }
 
-  /**
-   * 运行时子级 Agent（子会话、团队成员的子级）：先看会话头，再看注册表里是否不是根级。
-   * 用于出生那一刻就判定「与用户会话无关」，不必等投影缓存落盘。
-   */
-  function isChildAgent(agent) {
-    if (isChildSession(agent)) return true;
-    try {
-      const agents = ctx.agents;
-      if (!agents || typeof agents.roots !== 'function' || !agent) return false;
-      return agents.roots().indexOf(agent) === -1;
-    } catch { return false; }
-  }
 
   // ---------------- 角色判定
   function infoFor(sid, opts) {
@@ -282,9 +277,22 @@ export function apply(ctx, config) {
 
   env.roleOf = (exec) => infoFor(env.selfId(exec) || '', { cwd: env.selfCwd(exec) || '' });
   env.toolsetOf = (role) => toolsetFor(role);
-  env.roleState = () => ({ gating: roleState.gating, last: roleState.last, bootstrap: roleState.bootstrap, count: scoped.size });
+  env.roleState = () => ({ mode: roleMode(), last: roleState.last, count: appliedRole.size });
   env.rolesSnapshot = () => readRoles(cfg).sessions;
-  env.writeRole = (sid, patch) => writeRole(cfg, sid, patch);
+  // 写角色表是一切角色变更的唯一入口：写完立刻让每步过滤的短缓存失效，下一步就用新角色。
+  env.writeRole = (sid, patch) => {
+    const saved = writeRole(cfg, sid, patch);
+    roleCache.delete(String(sid || ''));
+    return saved;
+  };
+
+  /** 当前生效的裁剪机制，供 ho_diag 报出。 */
+  function roleMode() {
+    if (cfg.roleGating === 'off') return '关闭（roleGating=off，所有会话可见全部工具）';
+    return perStep
+      ? '按步过滤（工具表每步重算，换角色下一轮即生效）'
+      : '旧式收窄（内核不支持按步解析，用 agent 作用域 restrict）';
+  }
 
   function handoverInfoFor(info, ws) {
     if (cfg.handoverPath && info.role === 'global') {
@@ -312,85 +320,67 @@ export function apply(ctx, config) {
   env.agentOfSid = (sid) => agentOf(String(sid || ''));
   env.compactionStateOfSid = (sid) => compactionStateOf(String(sid || ''), null);
 
-  // ---------------- 按角色装配（工具限制 + 提示段 + 一次性引导）
+  // ---------------- 按角色装配：工具可见性由每步条件即时算，这里只维护提示段（旧内核另加 restrict）
   function workspaceForAgent(agent) {
     if (cfg.workspaceRoot) return cfg.workspaceRoot;
     const cwd = agent && agent.session && agent.session.header ? String(agent.session.header.cwd || '') : '';
     return walkUpToWorkspace(cwd || process.cwd());
   }
 
-  function applyScoped(agent, info) {
-    const sid = agent && agent.id ? String(agent.id) : (agent && agent.session && agent.session.header ? String(agent.session.header.id || '') : '');
-    env.log('装配会话：' + sid + ' · 角色 ' + ((info && info.role) || 'plain'));
-    const old = scoped.get(sid);
-    if (typeof old === 'function') { try { old(); } catch { /* 旧限制已失效 */ } }
-    scoped.delete(sid);
-    const disposers = [];
-
-    // 1) 工具：只留本角色需要的（restrict 掩码取交集，所以必须先把旧限制撤掉）
-    if (cfg.roleGating !== 'off' && info.role !== 'global') {
-      const deny = toolsetFor(info.role).deny.filter((n) => registered.has(n));
-      if (deny.length) {
-        try {
-          const sc = agent && agent.ctx ? agent.ctx : null;
-          if (sc && sc.tools && typeof sc.tools.restrict === 'function') {
-            disposers.push(sc.tools.restrict({ deny }));
-            roleState.gating = '可用';
-          } else {
-            roleState.gating = '不可用（agent.ctx.tools.restrict 缺失，本会话仍可见全部工具）';
-          }
-        } catch (e) {
-          roleState.gating = '失败：' + msgOf(e);
-        }
-      }
-    } else if (info.role === 'global') {
-      roleState.gating = '可用（全局不裁剪）';
-    }
-
-    // 2) 提示段：普通会话不注册；其余角色注册自己的段落。
+  /** 注册/替换本会话的角色提示段；普通会话不注册。 */
+  function applySection(agent, sid, info) {
+    const old = sectionDispose.get(sid);
+    if (typeof old === 'function') { try { old(); } catch { /* 旧段已失效 */ } }
+    sectionDispose.delete(sid);
+    let text = '';
     try {
       const ws = workspaceForAgent(agent);
-      const text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null });
-      const sc = agent && agent.ctx ? agent.ctx : null;
-      if (text && sc && sc.systemPrompt && typeof sc.systemPrompt.section === 'function') {
-        try {
-          disposers.push(sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
-        } catch (e) {
-          // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍在（宿主按 agent 持有，插件卸载不移除），
-          // 既无法移除也不能重复注册：视为已就位，沿用旧文本；换文本需重启 DSH 或让会话重建。
-          if (!/already registered/.test(msgOf(e))) throw e;
-        }
-      }
+      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null });
     } catch (e) {
       initErrors.push('角色提示段：' + msgOf(e));
+      return;
     }
+    const sc = agent && agent.ctx ? agent.ctx : null;
+    if (!text || !sc || !sc.systemPrompt || typeof sc.systemPrompt.section !== 'function') return;
+    try {
+      sectionDispose.set(sid, sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
+    } catch (e) {
+      // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍在（宿主按 agent 持有，插件卸载不移除），
+      // 既无法移除也不能重复注册：视为已就位，沿用旧文本；换文本需重启 DSH 或让会话重建。
+      if (!/already registered/.test(msgOf(e))) initErrors.push('角色提示段：' + msgOf(e));
+    }
+  }
 
-    if (disposers.length) {
-      scoped.set(sid, () => { for (const d of disposers) { try { d(); } catch { /* ignore */ } } });
+  /** 旧内核（没有按步解析）才用的限制式裁剪。 */
+  function applyLegacyRestrict(agent, sid, info) {
+    const old = legacyRestrict.get(sid);
+    if (typeof old === 'function') { try { old(); } catch { /* 旧限制已失效 */ } }
+    legacyRestrict.delete(sid);
+    if (cfg.roleGating === 'off' || info.role === 'global') return;
+    try {
+      const sc = agent && agent.ctx ? agent.ctx : null;
+      if (!sc || !sc.tools || typeof sc.tools.restrict !== 'function') return;
+      const deny = toolsetFor(info.role).deny.filter((n) => registered.has(n));
+      if (deny.length) legacyRestrict.set(sid, sc.tools.restrict({ deny }));
+    } catch { /* 旧内核裁剪失败只影响可见工具，不影响其余功能 */ }
+  }
+
+  /** 让一个活体会话的提示段与本会话当前角色对齐。info 可传入已解析好的角色，省一次判定。 */
+  function applyRoleTo(agent, infoOpt) {
+    const h = agent && agent.session ? agent.session.header : null;
+    const sid = String((h && h.id) || (agent && agent.id) || '');
+    if (!sid) return;
+    let info = infoOpt || null;
+    if (!info) {
+      try { info = infoFor(sid, scopedMetaOf(h, sid)); } catch { return; }
     }
+    applySection(agent, sid, info);
+    if (!perStep) applyLegacyRestrict(agent, sid, info);
     appliedRole.set(sid, info.role);
     roleState.last = { sid, role: info.role, at: stampTz(Date.now()) };
-
-    // 不向会话历史写任何内容：会话格式 v4 拒绝插件自造的 source，写盘失败会连累该会话后续每次写盘。
-    // 角色需要的静态信息全部由第 2 步的同名提示段承载。
-    if (info.role === 'project' || info.role === 'misc') {
-      const was = bootstrappedAt(cfg, sid);
-      roleState.bootstrap = was ? '不写历史（提示段承载）· ' + sid : '不写历史（提示段承载）';
-    }
   }
 
-  function promptSession(sessionId, text) {
-    const controller = env.controller();
-    if (!controller || typeof controller.prompt !== 'function') throw new Error('sessionController.prompt 不可用');
-    return controller.prompt({
-      requestId: (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : String(Date.now()),
-      sessionId,
-      mode: 'queue',
-      content: [{ type: 'text', text }],
-    }, new AbortController().signal);
-  }
-
-  /** 设定角色：写角色表 → 存活会话当场换工具与提示 → 可选投一次性整理指令（唤醒它一轮）。 */
+  /** 设定角色：写角色表 → 存活会话当场换提示段（工具在下一步按新角色重算）→ 可选投整理指令。 */
   async function applyRole(input) {
     const i = input || {};
     const sid = String(i.sessionId || '').trim();
@@ -406,18 +396,19 @@ export function apply(ctx, config) {
     if (role === 'misc') { try { assertTaskName(task); } catch (e) { return { ok: false, error: msgOf(e) }; } }
     try { writeRole(cfg, sid, { role, project, task, source: 'user' }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
+    roleCache.delete(sid);
     const info = { role, project, task, source: 'store', sessionId: sid };
     let live = false;
     try {
       const a = agentOf(sid);
-      if (a) { live = true; applyScoped(a, info); }
+      if (a) { live = true; applyRoleTo(a, info); }
     } catch { /* 活体装配失败不影响写盘 */ }
     let delivered = false;
     let error = '';
     const msg = organizeMessageFor(info, { ws: routeWorkspace(env) });
     if (i.wake !== false && msg) {
       try {
-        const r = await promptSession(sid, msg);
+        const r = await sendPrompt(env.controller(), sid, msg, 'queue');
         delivered = !!(r && r.accepted);
       } catch (e) {
         error = msgOf(e);
@@ -427,18 +418,14 @@ export function apply(ctx, config) {
   }
   env.applyRole = applyRole;
 
-  /**
-   * 会话新建后立即按已登记角色装配（不唤醒、不投消息）。
-   * 为什么不让它等延迟复核：0.2.2 起工具按「步」解析，新建会话的首次提示词会按当下限制出工具表，
-   * 延迟 1.5 秒会让它在第一轮看到全部 22 个工具。
-   */
+  /** 会话新建后立即按已登记角色装配（不唤醒、不投消息）。 */
   env.applyScopedLive = (sid, info) => {
     try {
       const a = agentOf(String(sid || ''));
       if (!a) return false;
       const i = Object.assign({ role: 'plain', project: '', task: '', source: 'live' }, info || {});
       if (!i.role) i.role = 'plain';
-      applyScoped(a, i);
+      applyRoleTo(a, i);
       return true;
     } catch { return false; }
   };
@@ -484,9 +471,30 @@ export function apply(ctx, config) {
   try { applyExtraPrompt(readExtraPrompt()); } catch (e) { initErrors.push('全局前置提示词：' + msgOf(e)); }
 
   // ---------------- 工具注册（16 个 ho_* + 6 个 peer_*）
-  // 每步条件启用：子级会话在「解析工具表」这一步就被排除，模型首轮不会看到这 22 个工具，
-  // 调用也会以 unknown tool 拒绝。0.2.2 之前内核忽略第二个参数，此时退回按角色 restrict 的老路径。
-  const visibleTo = ({ agent } = {}) => !isChildSession(agent);
+  // 0.2.2 起工具按「步」解析：可用工具集合每一步重算。子会话排除与角色过滤都在这里一次做完，
+  // 不再另用 agent 作用域 restrict —— 两套机制并行时，换角色要么等到重启、要么互相覆盖。
+  const roleToolsets = new Map(ROLES.map((r) => [r, new Set(toolsetFor(r).allow)]));
+  /** 每步过滤：子会话一律不可用；角色按当前角色表算；「无 agent」的路径（命令行、演练）放行。 */
+  function visibleTo(name) {
+    return (c) => {
+      const agent = c && c.agent ? c.agent : null;
+      if (isChildSession(agent)) return false;
+      if (!perStep || cfg.roleGating === 'off' || !agent) return true;
+      const h = agent.session && agent.session.header ? agent.session.header : null;
+      const sid = String((h && h.id) || agent.id || '');
+      if (!sid) return true;
+      let info = null;
+      const hit = roleCache.get(sid);
+      if (hit && Date.now() - hit.at < 2000) info = hit.info;
+      else {
+        try { info = infoFor(sid, scopedMetaOf(h, sid)); } catch { info = null; }
+        if (info) roleCache.set(sid, { at: Date.now(), info });
+      }
+      if (!info) return true;
+      const allow = roleToolsets.get(info.role);
+      return allow ? allow.has(name) : true;
+    };
+  }
   const tools = [
     pmBriefTool(env),
     pmGateTool(env),
@@ -512,7 +520,7 @@ export function apply(ctx, config) {
       // 名字以工厂自带的为准；工厂没写才用位置表补，且顺序错位时报出来（不再静默错名）。
       if (!tools[i].name) tools[i].name = NAMES[key];
       else if (tools[i].name !== NAMES[key]) initErrors.push('工具名错位：数组第 ' + i + ' 项是 ' + tools[i].name + '，位置表期望 ' + NAMES[key]);
-      ctx.tools.register(tools[i], { when: visibleTo });
+      ctx.tools.register(tools[i], { when: visibleTo(tools[i].name) });
       registered.add(tools[i].name);
     } catch (e) {
       initErrors.push(key + '：' + msgOf(e));
@@ -529,7 +537,7 @@ export function apply(ctx, config) {
   ];
   for (const t of peerTools) {
     try {
-      ctx.tools.register(t, { when: visibleTo });
+      ctx.tools.register(t, { when: visibleTo(t && t.name ? String(t.name) : '') });
       if (t && t.name) registered.add(t.name);
     } catch (e) {
       initErrors.push((t && t.name ? String(t.name) : 'peer_?') + '：' + msgOf(e));
@@ -571,39 +579,14 @@ export function apply(ctx, config) {
     } catch { /* 老版本没有 guard：退化为规则约束 */ }
   }
 
-  // ---------------- 会话创建：按角色装配工具/提示段（载荷是 { agent, source, signal }）
-  // 出生竞态：ho_sessions(action="new") 先 controller.create（本监听当场跑完）再写角色表，
-  // 新建会话出生时会被判成普通并收窄为零工具。做法是普通出生先不收窄，排一次延迟复核：
-  // 角色到位就按真角色装配，仍是普通才收窄。
-  const lateChecks = new Map();
-  function clearLateCheck(sid) {
-    const t = lateChecks.get(sid);
-    if (t) { try { clearTimeout(t); } catch { /* ignore */ } lateChecks.delete(sid); }
-  }
+  // ---------------- 会话生命周期：创建时装配提示段；开轮前按角色表核对一次
+  // 工具可见性不在这里处理：0.2.2 起每步条件已按当前角色算好（见 visibleTo），换角色下一轮即生效。
   function scopedMetaOf(h, sid) {
     return { title: (h && h.title) || titleOf(sid), cwd: (h && h.cwd) || '' };
   }
-  function scheduleLateScoped(agent, sid, h) {
-    clearLateCheck(sid);
-    const arm = (delay, last) => {
-      const t = setTimeout(() => {
-        let info = null;
-        try { info = infoFor(sid, scopedMetaOf(h, sid)); } catch { /* 读角色表失败就再等一轮 */ }
-        if (info && info.role !== 'plain') { applyScoped(agent, info); lateChecks.delete(sid); return; }
-        if (!last) { arm(3000, true); return; }
-        lateChecks.delete(sid);
-        if (!info) return;
-        try { applyScoped(agent, info); } catch { /* 普通会话收窄失败不影响会话 */ }
-      }, delay);
-      if (t && typeof t.unref === 'function') t.unref();
-      lateChecks.set(sid, t);
-    };
-    arm(1500, false);
-  }
   if (typeof ctx.on === 'function') {
     try {
-      // 事件作用域：宿主以 agent 作为事件的作用域载体，插件在根作用域裸注册时收不到别的会话的事件。
-      // 后果是「休眠的会话被唤醒时不再装配」——设置角色后必须重启 DSH 才生效，正是这一处。
+      // 事件作用域：宿主以 agent 作为事件的作用域载体，插件在根作用域裸注册收不到别的会话的事件。
       // 传 { global: true } 才能收到全部会话的事件（0.2.2 支持；旧内核忽略选项，退回裸注册）。
       const onAgentEvent = (name, fn) => {
         try { ctx.on(name, fn, { global: true }); return true; }
@@ -612,49 +595,39 @@ export function apply(ctx, config) {
       onAgentEvent('agent/created', (payload) => {
         try {
           const agent = payload && payload.agent ? payload.agent : null;
-          if (!agent) return;
-          const h = agent.session && agent.session.header ? agent.session.header : null;
-          const sid = String((h && h.id) || agent.id || '');
-          if (!sid) return;
-          const info = infoFor(sid, scopedMetaOf(h, sid));
-          env.log('会话创建事件：' + sid + ' · 角色 ' + info.role + ' · 依据 ' + info.source);
-          // 0.2.2 起工具按「步」解析（tools.resolve），出生后第一轮就按当时的限制出工具表；
-          // 早期为「先 create 再写角色表」的竞态留了 1.5 秒延迟复核，代价是子 Agent 在前 1.5 秒
-          // 内看到全部 22 个工具。⇒ 子级 Agent／角色表已登记：当场装配；只有「靠 cwd、首条提示
-          // 或标题推断、可能随后被改写」的普通会话才延迟复核。
-          if (isChildAgent(agent) && info.source !== 'store') {
-            applyScoped(agent, { role: 'plain', project: '', task: '', source: 'child', sessionId: sid });
-            return;
-          }
-          if (info.role === 'plain' && info.source !== 'store') { scheduleLateScoped(agent, sid, h); return; }
-          applyScoped(agent, info);
-        } catch (e) {
-          env.log('角色装配失败：' + msgOf(e));
-        }
+          if (agent) applyRoleTo(agent);
+        } catch (e) { env.log('角色装配失败：' + msgOf(e)); }
       });
       onAgentEvent('agent/disposed', (payload) => {
         try {
           const agent = payload && payload.agent ? payload.agent : null;
-          const sid = agent && agent.id ? String(agent.id) : '';
-          if (sid) { scoped.delete(sid); clearLateCheck(sid); appliedRole.delete(sid); }
+          const h = agent && agent.session ? agent.session.header : null;
+          const sid = String((h && h.id) || (agent && agent.id) || '');
+          if (!sid) return;
+          const d = sectionDispose.get(sid);
+          if (typeof d === 'function') { try { d(); } catch { /* ignore */ } }
+          sectionDispose.delete(sid);
+          const ld = legacyRestrict.get(sid);
+          if (typeof ld === 'function') { try { ld(); } catch { /* ignore */ } }
+          legacyRestrict.delete(sid);
+          appliedRole.delete(sid);
+          roleCache.delete(sid);
         } catch { /* ignore */ }
       });
-      // 开轮前核对：会话休眠期间角色可能被改过，而宿主恢复同一活体时不保证再发 agent/created。
-      // 状态切到 running 时按角色表核一次，不一致就重装工具与提示段——不必重启 DSH。
+      // 开轮前核对：休眠期间角色可能被改过，而宿主恢复同一活体时不保证再发创建事件。
+      // 状态切到 running 时核一次，提示段与旧内核的限制同角色表对齐。
       onAgentEvent('agent/status', (payload) => {
         try {
-          const status = String((payload && payload.status) || '');
-          if (status !== 'running') return;
-          const agent = payload && payload.agent ? payload.agent : null;
+          if (!payload || payload.status !== 'running') return;
+          const agent = payload.agent || null;
           if (!agent) return;
           const h = agent.session && agent.session.header ? agent.session.header : null;
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
-          const applied = appliedRole.get(sid) || '';
           const info = infoFor(sid, scopedMetaOf(h, sid));
-          if (applied === info.role) return;
-          env.log('开轮前换装：' + sid + ' · 已装 ' + (applied || '-') + ' · 目标 ' + info.role);
-          applyScoped(agent, info);
+          if (appliedRole.get(sid) === info.role) return;
+          env.log('开轮前换装：' + sid + ' · 已装 ' + (appliedRole.get(sid) || '-') + ' · 目标 ' + info.role);
+          applyRoleTo(agent, info);
         } catch (e) { env.log('开轮前装配失败：' + msgOf(e)); }
       });
     } catch (e) {
@@ -662,21 +635,8 @@ export function apply(ctx, config) {
     }
 
     // 插件重新加载（停用再启用、或启动时活体会话早于插件）时，已存在的会话不会再收到
-    // agent/created；这里补一次装配，否则它们的角色裁剪与提示段会随旧实例一起消失，
-    // 变成「已启用的项目会话又能看到全部 22 个工具」。
+    // 创建事件；这里补一次装配，否则它们的提示段会随旧实例一起消失。
     // agents 未在 inject 里声明，激活瞬间可能还取不到，所以取不到时延迟再试一次。
-    const scopeOne = (a) => {
-      const h = a && a.session && a.session.header ? a.session.header : null;
-      const sid = String((h && h.id) || (a && a.id) || '');
-      if (!sid) return false;
-      const info = infoFor(sid, scopedMetaOf(h, sid));
-      if (isChildAgent(a) && info.source !== 'store') {
-        applyScoped(a, { role: 'plain', project: '', task: '', source: 'child', sessionId: sid });
-      } else {
-        applyScoped(a, info);
-      }
-      return true;
-    };
     const reapplyLive = () => {
       let agents = null;
       try { agents = ctx.agents; } catch { agents = null; }
@@ -686,7 +646,7 @@ export function apply(ctx, config) {
       if (!agents || typeof agents.list !== 'function') return 0;
       let n = 0;
       for (const a of agents.list()) {
-        try { if (scopeOne(a)) n++; } catch { /* 单个会话装配失败不影响插件激活 */ }
+        try { applyRoleTo(a); n++; } catch { /* 单个会话装配失败不影响插件激活 */ }
       }
       if (n > 0) env.log('补装配 ' + n + ' 个活体会话');
       return n;
@@ -735,26 +695,13 @@ export function apply(ctx, config) {
   try {
     const registerAllowCompact = (service) => {
       if (!service || typeof service.register !== 'function') return;
-      const sidByShort = (short) => {
-        const s = String(short || '').trim();
-        if (!s) return '';
-        if (s.indexOf('session-') === 0) return s;
-        try {
-          for (const f of readJsonDir(projCacheDir())) {
-            const stem = f.name.replace('.json', '');
-            if (stem.indexOf('session-' + s) === 0) return stem;
-            if (stem.slice(8, 8 + s.length) === s) return stem;
-          }
-        } catch { /* ignore */ }
-        return s;
-      };
       const d = service.register({
         name: 'allow-compact',
         description: '允许本会话压缩一次（用户授权，5 分钟有效；可带会话短号授权别的会话）',
         input: { hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话' },
         handler: ({ agent, rawInput }) => {
           const arg = String(rawInput || '').trim();
-          const sid = arg ? sidByShort(arg) : (agent && agent.id ? String(agent.id) : '');
+          const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
           if (!sid) return { kind: 'error', text: '拿不到会话 id：请写成 /allow-compact session-xxxx' };
           const g = grantConsent(sid, '聊天页命令 /allow-compact');
           try { env.log('压缩授权（命令）：' + sid); } catch { /* ignore */ }

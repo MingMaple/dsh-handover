@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 设置页数据与动作的唯一实现：HTTP 路由（旧通道）和 /api 载体（新通道）都调它。
  * 返回统一信封：{ ok:true, value } | { ok:false, error:{code,message,details}, http }。
  * http 只是给旧 HTTP 通道用的状态码提示，载体通道不用它。
@@ -11,6 +11,7 @@ import { createGlobalWorkspace } from './scaffold.mjs';
 import { probeMove, startMove, moveStatus, cleanupOld, stageSwitch, repairLink, stageRetarget, applyRetarget } from './mover.mjs';
 import { routeWorkspace } from './workspace.mjs';
 import { grantConsent, listConsent, consumedConsent } from './consent.mjs';
+import { newSessionIn } from './session-create.mjs';
 
 function msgOf(e) { return String(e && e.message ? e.message : e); }
 
@@ -53,16 +54,15 @@ export function statusSnapshot(env, info, why) {
   return json;
 }
 
-/** 允许在设置页填短号：session-xxxx… 前 8 位即可，这里补全成完整 id。 */
-function resolveConsentSid(env, input) {
+/** 允许在设置页与聊天命令里填短号：session-xxxx… 前 8 位即可，这里补全成完整 id。 */
+export function resolveShortSid(env, input) {
   const s = String(input || '').trim();
   if (!s) return '';
   if (s.indexOf('session-') === 0) return s;
   try {
     const dir = typeof env.cacheDir === 'function' ? env.cacheDir() : '';
     if (dir) {
-      const fsMod = fs;
-      for (const name of fsMod.readdirSync(dir)) {
+      for (const name of fs.readdirSync(dir)) {
         if (!name.endsWith('.json')) continue;
         const stem = name.replace('.json', '');
         if (stem.indexOf('session-' + s) === 0) return stem;
@@ -73,11 +73,8 @@ function resolveConsentSid(env, input) {
   return s;
 }
 
-/** 在指定工作区根里建一个「全局」会话：能按工作区 id 就按 id，退而用 cwd；随后改名并登记全局角色。 */
+/** 在已注册的工作区里建一个「全局」会话：先按工作区 id，抓不到再用 cwd。 */
 async function createGlobalSession(env, rootPath, title) {
-  const controller = typeof env.controller === 'function' ? env.controller() : null;
-  if (!controller || typeof controller.create !== 'function') return { error: 'sessionController.create 不可用，工作区已建好，需手工新建一个标题含「全局」的会话' };
-  const want = title || '全局';
   let workspaceId = '';
   try {
     const reg = env.registry && env.registry();
@@ -86,18 +83,13 @@ async function createGlobalSession(env, rootPath, title) {
     const hit = list.find((w) => w && norm(w.path) === norm(rootPath));
     if (hit) workspaceId = String(hit.id || '');
   } catch { workspaceId = ''; }
-  let created = null;
-  try {
-    created = workspaceId ? await controller.create({ workspaceId }) : await controller.create({ cwd: rootPath });
-  } catch (e) {
-    return { error: '建会话失败：' + msgOf(e), workspaceId };
-  }
-  const sessionId = String((created && created.sessionId) || '');
-  if (!sessionId) return { error: 'create 没有返回 sessionId', workspaceId };
-  try { if (typeof controller.rename === 'function') await controller.rename({ sessionId, title: want }); } catch { /* 改名失败可事后改 */ }
-  try { if (typeof env.writeRole === 'function') env.writeRole(sessionId, { role: 'global', project: '', task: '', source: 'deploy' }); } catch { /* 角色登记失败不影响建会话 */ }
-  try { if (typeof env.applyScopedLive === 'function') env.applyScopedLive(sessionId, { role: 'global' }); } catch { /* 装配失败下一轮补齐 */ }
-  return { sessionId, workspaceId };
+  const made = await newSessionIn(env, {
+    workspaceId,
+    cwd: workspaceId ? '' : rootPath,
+    title: title || '全局',
+    role: 'global',
+  });
+  return { sessionId: made.sessionId || '', error: made.error || '', workspaceId };
 }
 
 export function createApi(env, info) {
@@ -246,7 +238,7 @@ export function createApi(env, info) {
       }
 
       if (method === 'consent.grant') {
-        const sid = resolveConsentSid(env, p.session_id);
+        const sid = resolveShortSid(env, p.session_id);
         if (!sid) return bad('bad-request', '缺少 session_id');
         const g = grantConsent(sid, '设置页点击');
         env.log('压缩授权：' + sid + '（5 分钟）');

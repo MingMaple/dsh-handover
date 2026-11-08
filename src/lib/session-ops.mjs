@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话管理的实现（原 ho_session_new / ho_prompt / ho_session_archive / ho_session_unarchive 的代码搬到这里）。
  * 对外只经 ho_sessions(action=…) 暴露，少 4 份 schema 的固定开销。
  */
@@ -11,6 +11,8 @@ import { scanSessions } from './sessions.mjs';
 import { workspaceRows } from './registry.mjs';
 import { checkConsent } from './consent.mjs';
 import { watermark } from './facts.mjs';
+import { sendPrompt } from './prompt.mjs';
+import { newSessionIn } from './session-create.mjs';
 
 const FENCE = String.fromCharCode(96, 96, 96);
 
@@ -47,16 +49,6 @@ function listWorkspaces(env) {
   } catch { return []; }
 }
 
-function promptSelf(env, sessionId, text, mode) {
-  const controller = env.controller();
-  if (!controller || typeof controller.prompt !== 'function') throw new Error('sessionController.prompt 不可用');
-  return controller.prompt({
-    requestId: (globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : String(Date.now()),
-    sessionId,
-    mode: mode || 'queue',
-    content: [{ type: 'text', text }],
-  }, new AbortController().signal);
-}
 
 /** 取某个 ## 小节之后第一个代码块的内容（找不到返回 null）。 */
 function blockAfter(text, heading) {
@@ -114,7 +106,14 @@ export async function sessionNew(env, args, exec) {
       }
     }
   }
-  let created = null;
+  // 角色先算好：新建会话按它登记并当场装配。
+  let role = args.role || (args.project ? 'project' : args.kind || '');
+  if (role === 'session') role = '';
+  const project = args.project || '';
+  const task = args.task || '';
+  const finalRole = title.indexOf('全局') !== -1 ? 'global'
+    : (role === 'project' || role === 'misc' ? role : (project ? 'project' : ''));
+
   // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
   const rows = listWorkspaces(env);
   const choices = rows.length
@@ -128,8 +127,9 @@ export async function sessionNew(env, args, exec) {
     return wid;
   };
   const wantGlobalWs = title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global';
+  let workspaceId = '';
   if (args.workspace) {
-    created = await controller.create({ workspaceId: pickWorkspace(args.workspace) });
+    workspaceId = pickWorkspace(args.workspace);
   } else if (args.cwd) {
     if (!isDir(args.cwd)) throw new Error('cwd 不存在：' + args.cwd);
     // cwd 若正好是已注册工作区的根，必须按 workspaceId 建；否则会话会落进「未分组」。
@@ -139,7 +139,7 @@ export async function sessionNew(env, args, exec) {
       throw new Error('cwd 不在任何已注册工作区里：' + args.cwd + NL + '已注册的工作区：' + NL + choices
         + NL + '要么把 cwd 换成某个工作区的根，要么先注册它：ho_workspace(action="create", path="' + args.cwd + '")。');
     }
-    created = await controller.create({ workspaceId: wid });
+    workspaceId = wid;
   } else if (args.project) {
     // 项目会话：按项目名找同名工作区，或路径落在 Projects/<项目>、_Project_Meta/<项目> 下的工作区。
     const want = String(args.project).toLowerCase();
@@ -153,35 +153,19 @@ export async function sessionNew(env, args, exec) {
         + NL + '做法一：ho_workspace(action="create", path="<该项目目录>", title="' + args.project + '") 后再建会话；'
         + NL + '做法二：把 workspace 传成上面某个工作区。');
     }
-    created = await controller.create({ workspaceId: String(hit.id) });
+    workspaceId = String(hit.id);
   } else if (wantGlobalWs) {
-    created = await controller.create({ workspaceId: pickWorkspace(ws) });
+    workspaceId = pickWorkspace(ws);
   } else {
     throw new Error('新建会话必须指明工作区：传 workspace（id、标题或路径），或 cwd（某个已注册工作区的根）。' + NL
       + '已注册的工作区：' + NL + choices + NL
       + '全局会话落在标题含「全局」的工作区；项目会话同时传 project 与该项目的工作区；杂项会话传该项目外的独立工作区。');
   }
-  const sessionId = created && created.sessionId;
-  if (!sessionId) throw new Error('create 没有返回 sessionId');
-  out.push('已建会话 ' + sessionId);
-  try { if (controller.rename) await controller.rename({ sessionId, title: args.title }); } catch (e) { out.push('改名失败（可事后 peer_rename）：' + e.message); }
 
-  // 角色：按 kind/project/task 记住，子会话一起来就收窄；同时标记已引导，避免二份指令。
-  let role = args.role || (args.project ? 'project' : args.kind || '');
-  if (role === 'session') role = '';
-  const project = args.project || '';
-  const task = args.task || '';
-  const looksGlobal = String(args.title || '').indexOf('全局') !== -1;
-  const finalRole = looksGlobal ? 'global' : (role === 'project' || role === 'misc' ? role : (project ? 'project' : ''));
-  if (finalRole && typeof env.writeRole === 'function') {
-    try { env.writeRole(sessionId, { role: finalRole, project, task, source: 'create' }); out.push('已登记角色：' + finalRole + (project ? '（' + project + '）' : '')); }
-    catch (e) { out.push('角色登记失败（不影响建会话）：' + e.message); }
-  }
-  // 角色表一落盘就当场装配：工具按「步」解析，等延迟复核会让新会话首轮看到全部 22 个工具。
-  if (typeof env.applyScopedLive === 'function') {
-    try { env.applyScopedLive(sessionId, { role: finalRole || 'plain', project, task }); } catch { /* 装配失败不影响建会话 */ }
-  }
-
+  const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task });
+  const sessionId = made.sessionId || '';
+  if (!sessionId) throw new Error(made.error || 'create 没有返回 sessionId');
+  out.push('已建会话 ' + sessionId + (finalRole ? '，角色 ' + finalRole + (project ? '（' + project + '）' : '') : ''));
   const meId = env.selfId(exec) || '（未知）';
   // 交接路径按**接任者自身的角色**取用：项目换任读取项目交接，不再退回全局交接。
   const hp = handoverPathFor(ws, finalRole === 'project' && project ? { role: 'project', project } : { role: 'global' });
@@ -193,7 +177,7 @@ export async function sessionNew(env, args, exec) {
     (finalRole === 'project' ? '现任全局 id：' : '上任全局 id：') + meId,
     '默认沉默：仅在三种时机各发一条 peer_send 至现任全局——≥' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、发现全局口径有误；任务完成不向全局报告（任务属本会话内部事务）。会话之间可直接 peer_send，不必经全局转述；不得每轮回执，亦不得发送「收到」「已完成」一类确认（全局只看文件末态）。',
   ].join(NL);
-  const r = await promptSelf(env, sessionId, text, 'queue');
+  const r = await sendPrompt(env.controller(), sessionId, text, 'queue');
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');
   return out.join(NL);
 }
@@ -346,7 +330,7 @@ export async function sessionOrder(env, args) {
   }
   if (order === "handover") {
     const text = orderHandoverText(env, sid, extra);
-    const r = await promptSelf(env, sid, text, "queue");
+    const r = await sendPrompt(env.controller(), sid, text, "queue");
     out.push("已投交接指令 accepted=" + String(r && r.accepted) + "（会唤醒它一轮）");
     out.push("等它回一条 `交接已写 <路径>` 之后，再用 ho_sessions(action=\"new\") 建接任会话。");
     return out.join(NL);
