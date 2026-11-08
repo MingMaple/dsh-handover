@@ -17,6 +17,7 @@ export function pmDiagTool(env, state) {
       const out = [];
       const meId = env.selfId(exec);
       out.push("会话      " + (meId || "?"));
+      if (typeof env.version === "function") out.push("版本      " + env.version());
       out.push("调度器    " + (state.schedulerReady() ? "就绪" : "未就绪" + (state.schedulerError() ? "：" + state.schedulerError() : "（稍后重试或重启）")));
       if (typeof env.injectList === 'function') out.push('inject    ' + env.injectList().join(' / '));
       if (typeof env.initErrors === 'function') {
@@ -54,7 +55,8 @@ export function pmDiagTool(env, state) {
           out.push("角色      " + info.role + (info.project ? "（项目 " + info.project + "）" : info.task ? "（任务 " + info.task + "）" : "") + " · 依据 " + info.source + (ts ? " · 可见工具 " + ts.allow.length + "/" + (ts.allow.length + ts.deny.length) : ""));
           if (typeof env.roleState === "function") {
             const rs = env.roleState();
-            out.push("角色收窄  " + (rs.gating || "未触发") + (rs.last ? " · 最近：" + rs.last.sid + " → " + rs.last.role + "（" + rs.last.at + "）" : ""));
+            const cnt = typeof rs.count === "number" ? " · 已装配 " + rs.count + " 个会话" : "";
+            out.push("角色收窄  " + (rs.gating || "未触发") + cnt + (rs.last ? " · 最近：" + rs.last.sid + " → " + rs.last.role + "（" + rs.last.at + "）" : ""));
             if (rs.bootstrap) out.push("一次性引导 " + rs.bootstrap);
           }
         } catch (e) {

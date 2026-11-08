@@ -192,6 +192,12 @@ export function apply(ctx, config) {
     staleNote(exec) {
       try { return stalePressureNote(this.selfId(exec)); } catch { return ''; }
     },
+    /** 自身版本：从 dist/package.json 读，设置页与 ho_diag 共用同一值。 */
+    version() {
+      try { return pkgInfo().version; } catch { return '?'; }
+    },
+    /** 当前按角色收窄过的会话数（诊断用；重启后从 0 重新累计）。 */
+    scopedCount() { return scoped.size; },
     log(m) {
       try { if (ctx.logger && typeof ctx.logger.warn === 'function') ctx.logger.warn(String(m)); } catch { /* ignore */ }
     },
@@ -223,6 +229,31 @@ export function apply(ctx, config) {
     } catch { return null; }
   }
 
+  /**
+   * 会话头就能判定的子级会话：子会话与团队成员的会话都带 origin=subagent 或 parentSession。
+   * 只读 header，不碰磁盘，可放在「每一步」的条件启用里。
+   */
+  function isChildSession(agent) {
+    try {
+      const h = agent && agent.session ? agent.session.header : null;
+      if (!h) return false;
+      return h.origin === 'subagent' || !!h.parentSession;
+    } catch { return false; }
+  }
+
+  /**
+   * 运行时子级 Agent（子会话、团队成员的子级）：先看会话头，再看注册表里是否不是根级。
+   * 用于出生那一刻就判定「与用户会话无关」，不必等投影缓存落盘。
+   */
+  function isChildAgent(agent) {
+    if (isChildSession(agent)) return true;
+    try {
+      const agents = ctx.agents;
+      if (!agents || typeof agents.roots !== 'function' || !agent) return false;
+      return agents.roots().indexOf(agent) === -1;
+    } catch { return false; }
+  }
+
   // ---------------- 角色判定
   function infoFor(sid, opts) {
     const o = opts || {};
@@ -239,7 +270,7 @@ export function apply(ctx, config) {
 
   env.roleOf = (exec) => infoFor(env.selfId(exec) || '', { cwd: env.selfCwd(exec) || '' });
   env.toolsetOf = (role) => toolsetFor(role);
-  env.roleState = () => ({ gating: roleState.gating, last: roleState.last, bootstrap: roleState.bootstrap });
+  env.roleState = () => ({ gating: roleState.gating, last: roleState.last, bootstrap: roleState.bootstrap, count: scoped.size });
   env.rolesSnapshot = () => readRoles(cfg).sessions;
   env.writeRole = (sid, patch) => writeRole(cfg, sid, patch);
 
@@ -373,6 +404,22 @@ export function apply(ctx, config) {
   }
   env.applyRole = applyRole;
 
+  /**
+   * 会话新建后立即按已登记角色装配（不唤醒、不投消息）。
+   * 为什么不让它等延迟复核：0.2.2 起工具按「步」解析，新建会话的首次提示词会按当下限制出工具表，
+   * 延迟 1.5 秒会让它在第一轮看到全部 22 个工具。
+   */
+  env.applyScopedLive = (sid, info) => {
+    try {
+      const a = agentOf(String(sid || ''));
+      if (!a) return false;
+      const i = Object.assign({ role: 'plain', project: '', task: '', source: 'live' }, info || {});
+      if (!i.role) i.role = 'plain';
+      applyScoped(a, i);
+      return true;
+    } catch { return false; }
+  };
+
   // ---------------- 调度器（续跑文案要按角色取交接路径）
   // 注意：调度器拿到的是会话 id 字符串，不是 exec；这里用按 id 解析的版本，直接读角色表与磁盘。
   const schedDeps = { ctx, cfg, logger: (ctx.logger || null), roleOf: null, handoverFor: null };
@@ -414,6 +461,9 @@ export function apply(ctx, config) {
   try { applyExtraPrompt(readExtraPrompt()); } catch (e) { initErrors.push('全局前置提示词：' + msgOf(e)); }
 
   // ---------------- 工具注册（16 个 ho_* + 6 个 peer_*）
+  // 每步条件启用：子级会话在「解析工具表」这一步就被排除，模型首轮不会看到这 22 个工具，
+  // 调用也会以 unknown tool 拒绝。0.2.2 之前内核忽略第二个参数，此时退回按角色 restrict 的老路径。
+  const visibleTo = ({ agent } = {}) => !isChildSession(agent);
   const tools = [
     pmBriefTool(env),
     pmGateTool(env),
@@ -439,7 +489,7 @@ export function apply(ctx, config) {
       // 名字以工厂自带的为准；工厂没写才用位置表补，且顺序错位时报出来（不再静默错名）。
       if (!tools[i].name) tools[i].name = NAMES[key];
       else if (tools[i].name !== NAMES[key]) initErrors.push('工具名错位：数组第 ' + i + ' 项是 ' + tools[i].name + '，位置表期望 ' + NAMES[key]);
-      ctx.tools.register(tools[i]);
+      ctx.tools.register(tools[i], { when: visibleTo });
       registered.add(tools[i].name);
     } catch (e) {
       initErrors.push(key + '：' + msgOf(e));
@@ -456,7 +506,7 @@ export function apply(ctx, config) {
   ];
   for (const t of peerTools) {
     try {
-      ctx.tools.register(t);
+      ctx.tools.register(t, { when: visibleTo });
       if (t && t.name) registered.add(t.name);
     } catch (e) {
       initErrors.push((t && t.name ? String(t.name) : 'peer_?') + '：' + msgOf(e));
@@ -537,7 +587,15 @@ export function apply(ctx, config) {
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
           const info = infoFor(sid, scopedMetaOf(h, sid));
-          if (info.role === 'plain') { scheduleLateScoped(agent, sid, h); return; }
+          // 0.2.2 起工具按「步」解析（tools.resolve），出生后第一轮就按当时的限制出工具表；
+          // 早期为「先 create 再写角色表」的竞态留了 1.5 秒延迟复核，代价是子 Agent 在前 1.5 秒
+          // 内看到全部 22 个工具。⇒ 子级 Agent／角色表已登记：当场装配；只有「靠 cwd、首条提示
+          // 或标题推断、可能随后被改写」的普通会话才延迟复核。
+          if (isChildAgent(agent) && info.source !== 'store') {
+            applyScoped(agent, { role: 'plain', project: '', task: '', source: 'child', sessionId: sid });
+            return;
+          }
+          if (info.role === 'plain' && info.source !== 'store') { scheduleLateScoped(agent, sid, h); return; }
           applyScoped(agent, info);
         } catch (e) {
           env.log('角色装配失败：' + msgOf(e));

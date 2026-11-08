@@ -1,6 +1,6 @@
 {
   "name": "@mingmaple/dsh-handover",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "type": "module",
   "description": "DeepSeek Harness 插件：把「全局」的交接、闸门、会话清点与上下文压缩续跑流程做成工具（dsh-handover）",
   "license": "MIT",
@@ -23,7 +23,8 @@
     "context-compaction"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
   },
   "exports": {
     ".": "./src/index.mjs",
@@ -51,8 +52,20 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-connection"
       ]
+    },
+    "compatibility": {
+      "dsh": "0.2.2-rc.1",
+      "profiles": [
+        "desktop",
+        "web"
+      ],
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible",
+        "0.2.2-rc.1": "compatible"
+      }
     }
   }
 }

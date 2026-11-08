@@ -26,7 +26,7 @@ process.env.HOME = BLANK;
 const { apply, schedDepsFor } = await import(pathToFileURL(path.join(dist, 'index.mjs')).href);
 const reg = { tools: [], sections: [], logs: [], listeners: {} };
 const ctx = {
-  tools: { register: (t) => reg.tools.push(t), restrict() { }, guard: (fn) => { reg.guardFn = fn; } },
+  tools: { register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); }, restrict() { }, guard: (fn) => { reg.guardFn = fn; } },
   systemPrompt: { section: (s) => { reg.sections.push(s); return () => { reg.disposed = (reg.disposed || 0) + 1; }; } },
   sessionController: {},
   logger: { warn: (m) => reg.logs.push(String(m)), error: (m) => reg.logs.push(String(m)), info() { } },
@@ -46,6 +46,19 @@ const fatDesc = reg.tools.filter((t) => budget.estimateTokens(t.description) > b
 ok(fatDesc.length === 0, '单条工具描述应不超过 ' + budget.TOKEN_BUDGET.toolDescTokens + ' token（上下文成本）', fatDesc.join(','));
 ok(reg.tools.filter((t) => t.name.startsWith('ho_')).length === 16, 'ho_* 应为 16 个', String(reg.tools.filter((t) => t.name.startsWith('ho_')).length));
 ok(reg.tools.filter((t) => t.name.startsWith('peer_')).length === 6, 'peer_* 应为 6 个');
+// 每步条件启用：内核 0.2.2 起工具按「步」解析，子会话在解析工具表这一步就要被排除，
+// 否则它的首轮提示词会带着 22 个用不了的 schema（每步白付约 2.5k token）。
+ok((reg.toolOpts || []).length === 22 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '22 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
+{
+  const gate = (reg.toolOpts || [])[0] && reg.toolOpts[0].when;
+  ok(typeof gate === 'function', '每步启用条件应可调用');
+  if (typeof gate === 'function') {
+    ok(gate({ agent: { session: { header: { id: 'session-root', cwd: '/tmp/x' } } } }) === true, '根级会话的工具条件应放行（收窄交给角色裁剪）');
+    ok(gate({ agent: { session: { header: { id: 'session-sub', origin: 'subagent' } } } }) === false, '子会话的工具条件应拒绝');
+    ok(gate({ agent: { session: { header: { id: 'session-child', parentSession: 'session-root' } } } }) === false, '带父会话的会话也应拒绝');
+    ok(gate({}) === true, '没有 agent 的调用应放行（命令行与演练路径）');
+  }
+}
 // 可选注入多了 connection（/api 载体）。两个都必须是**可选**的，否则旧宿主整插件不激活。
 const injectNames = (reg.injects || []).map((i) => i.names.join(','));
 ok(injectNames.some((n) => n.indexOf('webServer') !== -1), '应把 webServer 作为可选注入', injectNames.join(' | '));
@@ -485,6 +498,25 @@ writeRole({}, 'session-late', { role: 'project', project: 'Demo', source: 'user'
 await new Promise((res) => setTimeout(res, 1700));
 ok(lateCalls.restrict === 1, '角色后到时延迟复核应补装真角色', String(lateCalls.restrict));
 ok(lateCalls.restrict === 1 && lateCalls.lastDeny && lateCalls.lastDeny.length === 13, '补装后 deny 名单应为项目角色的 13 个', JSON.stringify(lateCalls.lastDeny && lateCalls.lastDeny.length));
+
+// 0.2.2 起工具按「步」解析：出生后第一轮就按当时的限制出工具表。
+// 子级 Agent（子会话、团队成员的运行时子级）与用户会话无关，必须出生即收窄，不能留真空。
+// 判定优先看会话头（origin=subagent 或 parentSession），不依赖投影缓存是否已落盘。
+{
+  const childCalls = { restrict: 0, lastDeny: null };
+  const childAgent = {
+    id: 'session-child',
+    session: { header: { id: 'session-child', title: '', cwd: '/tmp/z', origin: 'subagent' } },
+    ctx: {
+      tools: { restrict: (f) => { childCalls.restrict++; childCalls.lastDeny = (f && f.deny) || null; return () => { }; } },
+      systemPrompt: { section: () => () => { } },
+    },
+    inject: () => { throw new Error('子会话不应写历史'); },
+  };
+  for (const cb of listeners) cb({ agent: childAgent, source: 'fresh' });
+  ok(childCalls.restrict === 1, '子级 Agent 出生即按普通角色收窄（工具按步解析，不留真空）', String(childCalls.restrict));
+  ok(childCalls.lastDeny && childCalls.lastDeny.length === 22, '子级 Agent 的 deny 名单应为全部 22 个', JSON.stringify(childCalls.lastDeny && childCalls.lastDeny.length));
+}
 
 // ---------- 角色路由 ----------
 const noRole = await postJson('/dsh-handover/role', { session_id: 'session-r1', role: 'project' });

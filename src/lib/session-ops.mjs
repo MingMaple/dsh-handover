@@ -125,6 +125,10 @@ export async function sessionNew(env, args, exec) {
     try { env.writeRole(sessionId, { role: finalRole, project, task, source: 'create' }); out.push('已登记角色：' + finalRole + (project ? '（' + project + '）' : '')); }
     catch (e) { out.push('角色登记失败（不影响建会话）：' + e.message); }
   }
+  // 角色表一落盘就当场装配：工具按「步」解析，等延迟复核会让新会话首轮看到全部 22 个工具。
+  if (typeof env.applyScopedLive === 'function') {
+    try { env.applyScopedLive(sessionId, { role: finalRole || 'plain', project, task }); } catch { /* 装配失败不影响建会话 */ }
+  }
 
   const meId = env.selfId(exec) || '（未知）';
   // 交接路径按**接任者自身的角色**取用：项目换任读取项目交接，不再退回全局交接。

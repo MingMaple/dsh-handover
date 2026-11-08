@@ -45,9 +45,12 @@ const distPkg = {
   description: rootPkg.description,
   license: rootPkg.license,
   exports: { ".": "./index.mjs", "./client": "./client.js" },
+  ...(rootPkg.engines ? { engines: rootPkg.engines } : {}),
   dsh: {
     bundle: { patch: "./cordis.patch.yml" },
     client: rootPkg.dsh && rootPkg.dsh.client ? rootPkg.dsh.client : { platform: "web" },
+    // 兼容声明随构建产物走：安装面读的是 dist/package.json，不是对外仓库的根清单。
+    ...(rootPkg.dsh && rootPkg.dsh.compatibility ? { compatibility: rootPkg.dsh.compatibility } : {}),
   },
 };
 fs.writeFileSync(path.join(dist, "package.json"), JSON.stringify(distPkg, null, 2) + "\n");
