@@ -11,13 +11,14 @@ export function pmCheckpointTool(env) {
   return {
     name: nameOf('checkpoint'),
     description:
-      '写交接、登记压缩；回合结束后自动压缩并续跑。',
+      '写交接、登记压缩；回合结束后自动压缩。resume=continue（默认）压缩后续跑；resume=wait 表示任务已收尾，压缩后不唤醒。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         handover_text: { type: 'string', description: '要写入的交接正文；不给则要求磁盘上已有合格交接' },
         handover_path: { type: 'string', description: '覆盖交接路径（演练用）' },
+        resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向：continue（默认）按交接 §2 继续；wait 表示本轮任务已收尾，压缩后不唤醒，等用户派新任务' },
         at_risk: { type: 'boolean', description: '当前处在关键步骤：为 true 时，水位在提醒线～交接线之间只提醒、不压缩（过交接线仍会压）' },
         force: { type: 'boolean', description: '忽略关键步骤判定，直接排压缩' },
         confirm: { type: 'boolean', description: '判定为「可压缩」后须经用户同意才传 true；还需用户在设置页点「允许压缩」（5 分钟一次性授权），否则不排压缩' },
@@ -115,10 +116,16 @@ export function pmCheckpointTool(env) {
       }
       consumedConsent(meId);
       const n = count.used + 1;
-      env.schedule(meId, n);
+      const resume = args.resume === 'wait' ? 'wait' : 'continue';
+      env.schedule(meId, n, { resume });
       out.push('用户已授权（' + cs.atText + ' 点击，剩 ' + Math.round(cs.leftMs / 1000) + ' 秒）。');
-      out.push("已登记压缩（第 " + n + "/" + env.cfg.maxCompactions + " 次）。本回合结束后执行，完成后会自动收到续跑消息。");
-      out.push("压缩期间不要结束会话；如果 60 秒内没有续跑消息，用 ho_phase 看状态。");
+      out.push("已登记压缩（第 " + n + "/" + env.cfg.maxCompactions + " 次）。本回合结束后执行。");
+      if (resume === 'wait') {
+        out.push("去向：wait —— 压缩完成后不会唤醒本会话，等你派新任务。");
+      } else {
+        out.push("去向：continue —— 压缩完成后自动收到续跑消息；若 60 秒内没有续跑消息，用 ho_phase 看状态。");
+      }
+      out.push("压缩期间不要结束会话。");
       return { text: out.join(NL) };
     },
   };

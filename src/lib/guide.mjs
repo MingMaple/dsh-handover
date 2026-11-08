@@ -28,11 +28,11 @@ export function buildGuide(cfg) {
   situations: [
     { when: '作业开始与结束', say: '先出一份起始简报', what: '汇总上下文水位、通用约束条闸门、会话清点与阶段建议（ho_brief）' },
     { when: '查阅规则', say: '把 Charter 第 7.2.3 节取出来', what: '按节返回规则正文，避免整篇读取（ho_charter；完整流程用 doc="runtime"）' },
-    { when: '交接与压缩续跑', say: '先把交接文档写好，再压缩并继续', what: '写自己角色的交接、体检、登记压缩，回合结束后自动压缩并自动续跑（ho_handover、ho_checkpoint）' },
+    { when: '交接与压缩续跑', say: '先把交接文档写好，再压缩并继续', what: '写自己角色的交接、体检、登记压缩，并由助手选择压缩后去向：继续工作时用 resume=continue，任务已收尾时用 resume=wait（压缩后不唤醒）（ho_handover、ho_checkpoint）' },
     { when: '接近上下文上限', say: '查一下本会话的上下文水位', what: compact + '（ho_phase）' },
     { when: '换任', say: '建立下一代全局会话', what: '建会话、唤醒并投递启动提示词；在任会话水位低于 ' + w.warn + ' 时拒绝新建（ho_sessions action=new）' },
     { when: '会话角色', say: '把 Demo1 设成项目角色，并让它整理自己的文件', what: '写角色表、当场收窄该会话的工具与提示、投递一次性整理指令（ho_sessions action=role / 本页会话角色）' },
-    { when: '通知项目会话', say: '通知 Demo 更新交接文档', what: '投递一条消息；会消耗目标会话一整轮 token，应尽量少用（peer_send）' },
+    { when: '通知项目会话', say: '通知 Demo 更新交接文档', what: '投递一条消息；会话之间可直接对话，不必经全局转述；会消耗目标会话一整轮 token，应尽量少用（peer_send）' },
     { when: '全局前置提示词', say: '把这段设为全局前置提示词', what: '保存到本机；仅在你开启且内容非空时注入全部会话，关闭或留空时不注册提示段' },
     { when: '项目骨架', say: '注册 Demo 的骨架', what: '读取、注册、校验项目或杂项的骨架档案；由该项目会话自己写文件并注册（ho_profile）' },
     { when: '查看会话', say: '列出当前活跃的会话', what: '水位、运行状态、活跃或沉默、在任或前任（ho_sessions）' },
@@ -85,6 +85,8 @@ export function buildGuide(cfg) {
   rules: [
     '交接线：上下文水位达到 ' + w.warn + ' 时提醒，达到 ' + w.handover + ' 时写交接并压缩，' + w.hard + ' 为硬上限；同一会话最多压缩 ' + w.max + ' 次，第四段改用新建会话。',
     '压缩不可逆：历史会被摘要替换，因此必须先写出合格的交接文档；体检未通过时，插件拒绝安排压缩。',
+    '会话之间可直接 peer_send 对话，不必经全局转述；默认沉默仍适用：只在到交接线且已写交接、需用户决定、发现全局口径有误时发一条，任务完成不向全局报告。',
+    '压缩后的去向由助手在登记时选择：任务未完成用 continue 续跑，任务已收尾用 wait 静默收尾，等用户派新任务。',
     '交接文件按角色分离：全局写 _Control_Center/records/Global_Handover.md，项目写 _Project_Meta/<项目>/Handover.md，杂项写 _Misc/tasks/<任务>/Handover.md，互不串用。',
     '会话本身不迁移：跨机器、跨平台的连续性依托交接文档。',
     '全局前置提示词属于用户内容，不是插件约束；关闭或留空时不占用注入点位，可与其它提示词插件并存。',

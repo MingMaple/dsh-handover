@@ -146,7 +146,9 @@ export function createScheduler(deps) {
         return;
       }
       note("compacted " + sessionId + " shadowed=" + (result.shadowedTokenCount || "?"));
-      if (cfg.autoResume !== false) {
+      // resume=wait：任务已收尾，压缩后不唤醒，等用户派新任务。
+      // resume=continue（默认）：照旧投续跑消息，按交接 §2 继续。
+      if (cfg.autoResume !== false && job.resume !== "wait") {
         const text = resumeText(sessionId, job.n);
         try {
           await promptSelf(sessionId, text);
@@ -156,7 +158,8 @@ export function createScheduler(deps) {
           note("resume prompt failed: " + e.message);
         }
       } else {
-        job.done("ok", result);
+        if (job.resume === "wait") note("resume skipped (wait): " + sessionId);
+        job.done(job.resume === "wait" ? "ok-wait" : "ok", result);
       }
       pending.delete(sessionId);
     } catch (e) {
@@ -209,7 +212,7 @@ export function createScheduler(deps) {
           return;
         }
       }
-      pending.set(sessionId, { n: opts.n || 0, attempts: 0, done, startedAt: Date.now() });
+      pending.set(sessionId, { n: opts.n || 0, resume: opts.resume === "wait" ? "wait" : "continue", attempts: 0, done, startedAt: Date.now() });
       retryLater(sessionId, opts.delayMs === undefined ? 600 : opts.delayMs);
     });
   }

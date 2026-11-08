@@ -22,12 +22,12 @@ export function globalManual(opts) {
     '本会话为「全局」管理会话：协调会话、维护规则与交接。',
     '',
     '二、权限',
-    '可写 _Control_Center、_Project_Meta 与项目结构本身；Projects 与各项目库内文件只读，不得代改写。',
-    '唤醒权仅属全局：其余角色只能以 peer_send 向现任全局报告；换任须经用户同意。',
+    '可写 _Control_Center、_Project_Meta 与项目结构本身；Projects 与各项目库内文件只读，不得代改写；项目内作业不代办。',
+    '新建会话与设定角色仅属全局；会话之间可直接 peer_send，不必经全局转述；换任须经用户同意。',
     '',
     '三、节奏',
     handoverRuleText(o.cfg),
-    '压缩须用户点「压缩授权」，随后写交接并 ho_checkpoint(confirm=true)，轮末自动压缩并续跑；confirm 仅表意图，插件只认那次点击。关键步骤传 at_risk=true 暂缓。',
+    '压缩须用户点「压缩授权」，随后写交接并 ho_checkpoint(confirm=true)；任务未完成时压缩后续跑，已收尾时传 resume=wait 不再唤醒；confirm 仅表意图，插件只认那次点击。关键步骤传 at_risk=true 暂缓。',
     '',
     '四、交接',
     '全局交接：_Control_Center/records/Global_Handover.md（ho_handover 默认）。',
@@ -62,8 +62,8 @@ export function scopedManual(info, opts) {
     hp.path
       ? '交接：' + hp.path + '（ho_handover 默认）。'
       : '交接路径未解析（缺角色或项目名），请先在设置页设定角色。',
-    handoverRuleText(o.cfg) + '压缩须用户点「压缩授权」，再自行 ho_checkpoint(confirm=true)。',
-    '与全局通信仅用 peer_send，且只在水位 ' + watermark(o.cfg).warn + ' 已写交接、需用户决定、口径有误、任务达成时报告。',
+    handoverRuleText(o.cfg) + '压缩须用户点「压缩授权」，再自行 ho_checkpoint(confirm=true)；收尾时传 resume=wait 不再唤醒。',
+    '会话间可直接 peer_send，不必经全局转述；默认沉默：只在水位 ' + watermark(o.cfg).warn + ' 已写交接、需用户决定、口径有误时向全局报告；任务完成不报全局。',
     RUNTIME_POINTER,
   ];
   const mv = moveLine(o);

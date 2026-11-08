@@ -825,16 +825,16 @@ window.__ModuleLoader__.load({
         ["工作区", ws.found ? h("span", { className: "dshh-code" }, ws.root) : verdict("未接入（未找到 _Control_Center）", false)],
       ])));
 
-      // 十、唤醒权守卫
+      // 十、会话间通信守卫
       const g = data.guardLast;
-      sections.push(card("唤醒权守卫",
+      sections.push(card("会话间通信守卫",
         g
           ? kv([
             ["结论", g.allow ? verdict("允许", true) : verdict("拒绝", false)],
             ["依据", g.source + (g.title ? "；会话标题 " + g.title : "")],
             ["会话", h("span", { className: "dshh-code" }, g.sid || "-")],
           ])
-          : h("div", { className: "dshh-muted" }, "本进程尚未收到唤醒请求，暂无判定。")));
+          : h("div", { className: "dshh-muted" }, "本进程尚未收到会话间通信请求，暂无判定。")));
 
       if ((data.notes || []).length) {
         sections.push(card("待处理", h("ul", { className: "dshh-list" }, data.notes.map((n, i) => h("li", { key: i }, n)))));

@@ -135,7 +135,7 @@ export async function sessionNew(env, args, exec) {
     '读毕先向用户报告，不得自行开展作业：其一，当前停在哪一步；其二，交接列有哪些待办；其三，你建议先做哪一条。待用户指派后再动手；交接中无待办者，如实说明即可，不得自行编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '现任全局 id：' : '上任全局 id：') + meId,
-    '默认沉默：仅在四种时机各发一条 peer_send 至现任全局——任务达成、≥' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、发现全局口径有误；不得每轮回执，亦不得发送「收到」「已完成」一类确认（全局只看文件末态）。',
+    '默认沉默：仅在三种时机各发一条 peer_send 至现任全局——≥' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、发现全局口径有误；任务完成不向全局报告（任务属本会话内部事务）。会话之间可直接 peer_send，不必经全局转述；不得每轮回执，亦不得发送「收到」「已完成」一类确认（全局只看文件末态）。',
   ].join(NL);
   const r = await promptSelf(env, sessionId, text, 'queue');
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');
@@ -330,9 +330,15 @@ export async function sessionOrder(env, args) {
     out.push("请用户到设置页的 dsh-handover 中，点「压缩授权」的「允许该会话压缩一次」（5 分钟内有效），再重下这条指令。");
     return out.join(NL);
   }
-  env.schedule(sid, n);
+  const resume = args.resume === "continue" ? "continue" : "wait";
+  env.schedule(sid, n, { resume });
   out.push("用户已授权（" + (cs.atText || '') + " 点击，剩 " + Math.round((cs.leftMs || 0) / 1000) + " 秒）。");
-  out.push("已登记压缩（它自己第 " + n + "/" + max + " 次）：等它空闲后执行，完成后它会自动收到**它自己的**续跑消息（带它自己的交接路径）。");
+  out.push("已登记压缩（它自己第 " + n + "/" + max + " 次）：等它空闲后执行。");
+  if (resume === "wait") {
+    out.push("去向：wait（缺省）—— 压缩后不再唤醒它，等用户派新任务，或由新会话接手。");
+  } else {
+    out.push("去向：continue —— 压缩后它会自动收到**它自己的**续跑消息（带它自己的交接路径）。");
+  }
   out.push("压缩走的是插件调度器（compactNow 只允许空闲时执行），不是给它发消息让它自己压。");
   out.push("若它正在跑，调度器会等它空闲（上限 " + Math.round(((env.cfg && env.cfg.waitIdleMs) || 180000) / 1000) + " 秒）。");
   return out.join(NL);

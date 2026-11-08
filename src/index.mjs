@@ -463,7 +463,8 @@ export function apply(ctx, config) {
     }
   }
 
-  // ---------------- 唤醒权（Charter §7.2.4-9.1）：按角色判定，只有全局可以唤醒别的会话
+  // ---------------- 会话守卫（Charter §7.2.4）：新建会话与设定角色仅属全局；
+  // 会话之间允许直接 peer_send（不必经全局转述），directPeer=off 时退回「只能向全局报告」的旧口径。
   if (cfg.wakeAuthority !== 'off' && typeof ctx.tools.guard === 'function') {
     try {
       ctx.tools.guard((exec) => {
@@ -475,15 +476,18 @@ export function apply(ctx, config) {
         try { info = env.roleOf(exec); } catch { info = { role: 'plain', source: 'error' }; }
         const mk = (allow, why) => {
           guardLast = { sid, allow, source: why, title: titleOf(sid) };
-          return allow ? undefined : '唤醒权只在全局：非全局会话只能 peer_send 给现任全局报告，不能唤醒其他项目会话（杂项自建 Misc 换任除外）。请把结论发回现任全局。';
+          if (allow) return undefined;
+          if (nm === 'peer_new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项自建 Misc 换任除外）。';
+          return '会话间通信受限（directPeer=off）：非全局会话只能向现任全局报告，不得唤醒其他会话。';
         };
         if (info.role === 'global') return mk(true, 'global/' + info.source);
         if (nm === 'peer_send') {
-          // 项目、杂项会话可以向「全局」报告；不许唤醒别的项目会话。
+          // 会话之间可直接对话；向全局报告也在此路。directPeer=off 才退回旧口径。
           const target = String(args.session_id || '');
           let t = null;
           try { t = target ? infoFor(target, {}) : null; } catch { t = null; }
           if (t && t.role === 'global') return mk(true, 'report-to-global/' + (t.source || ''));
+          if (cfg.directPeer !== 'off') return mk(true, 'direct/' + info.role + ' → ' + (t ? t.role : 'unknown'));
           return mk(false, info.source + '/' + info.role + ' → ' + (t ? t.role : 'unknown'));
         }
         // peer_new：只有杂项可以自建 Misc 换任

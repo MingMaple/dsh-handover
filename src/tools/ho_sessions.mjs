@@ -67,6 +67,7 @@ export function pmSessionsTool(env) {
       properties: {
         action: { type: 'string', enum: ['list', 'role', 'new', 'order', 'place', 'prompt', 'archive', 'unarchive'], description: '缺省 list' },
         order: { type: 'string', enum: ['handover', 'compact'], description: 'order 的动作：handover 让它写交接再换任；compact 给它排压缩（先要有合格交接）' },
+        resume: { type: 'string', enum: ['continue', 'wait'], description: 'order=compact 时的去向：缺省 wait（交接后收尾，压缩后不唤醒）；continue 表示压缩后按交接继续' },
         include_subagents: { type: 'boolean', description: 'list 时含子会话' },
         limit: { type: 'number', description: 'list 行数（默认 40）' },
         warn: { type: 'number', description: 'list 预警阈值（默认 ' + watermark(env.cfg).warn + '）' },

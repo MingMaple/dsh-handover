@@ -333,6 +333,8 @@ const tu = fillResumePrompt(tcfg, { n: 1, handover: '', role: 'plain' });
 ok(/普通会话，不参与交接/.test(tu), '普通会话的续跑文案应说明不参与交接', tu.slice(0, 90));
 const tg = fillResumePrompt(tcfg, { n: 3, handover: hpG.path, role: 'global' });
 ok(tg.indexOf('第 3/3 次压缩') !== -1, '续跑文案应填上次数', tg.slice(0, 40));
+ok(tcfg.directPeer === 'on', '会话之间直接对话应默认允许', String(tcfg.directPeer));
+ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办时收尾停止', tg.slice(0, 120));
 
 const listeners = (reg.listeners && reg.listeners['agent/created']) || [];
 ok(listeners.length === 1, '应监听 agent/created 且只一处', String(listeners.length));
@@ -353,6 +355,10 @@ ok(Array.isArray(calls.restrict[0] && calls.restrict[0].deny) && calls.restrict[
 ok(calls.sections.length === 1 && calls.sections[0].name === 'dsh-handover:manual', '应注册同名提示段遮蔽兜底段');
 const secNorm = String(calls.sections[0].text).replace(/\\/g, '/');
 ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '项目提示段应含自己的路径', secNorm.slice(0, 200));
+ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明任务完成不向全局报告', secNorm.slice(0, 400));
+ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务达成');
+ok(secNorm.indexOf('可直接 peer_send') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
+ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
 ok(budget.estimateTokens(calls.sections[0].text) <= budget.TOKEN_BUDGET.projectTokens, '项目提示段应控制在 ' + budget.TOKEN_BUDGET.projectTokens + ' token 内（成本守门）', String(budget.estimateTokens(calls.sections[0].text)));
 ok(calls.sections[0].text.indexOf('子智能体') === -1, '项目段不得携带子智能体派发纪律（不属于本插件）');
 // 真实工作区路径 + 迁移提示是最坏情形，预算另设一档
@@ -425,6 +431,11 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   // 换任启动提示词不得再写「然后接着干」——没任务时它会抠字眼给自己找活
   const opsSrc = fs.readFileSync(path.join(dist, 'lib', 'session-ops.mjs'), 'utf8');
   ok(opsSrc.indexOf('接着干') === -1, '启动提示词与交接提示不得再出现「接着干」');
+  ok(opsSrc.indexOf('任务达成') === -1 && opsSrc.indexOf('三种时机') !== -1, '启动提示词应改为三种时机且不再含任务达成');
+  const ckSrc = fs.readFileSync(path.join(dist, 'tools', 'ho_checkpoint.mjs'), 'utf8');
+  ok(ckSrc.indexOf('resume') !== -1, 'ho_checkpoint 应支持 resume 选择压缩后去向');
+  const idxSrc = fs.readFileSync(path.join(dist, 'index.mjs'), 'utf8');
+  ok(idxSrc.indexOf('directPeer') !== -1, '会话守卫应支持直接对话开关');
   // 语体扫描——界面与文档一律标准书面语（口语词、感叹号、图形结论、全角斜杠、时间缺时区）。
   {
     const uiFiles = listFiles(path.join(repo, 'src'), ['.mjs', '.js'], { skip: ['templates'] });
@@ -520,9 +531,9 @@ if (typeof reg.guardFn === 'function') {
   const gReport = reg.guardFn(guardExec('peer_send', { session_id: 'session-glob' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(gReport === undefined, '项目会话向全局报告应放行', String(gReport));
   const gPeer = reg.guardFn(guardExec('peer_send', { session_id: 'session-proj' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
-  ok(typeof gPeer === 'string' && /唤醒权只在全局/.test(gPeer), '项目会话之间不得互相唤醒', String(gPeer));
+  ok(gPeer === undefined, '会话之间可直接对话，不必经全局转述', String(gPeer));
   const gNew = reg.guardFn(guardExec('peer_new', { workspace: 'Demo库' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
-  ok(typeof gNew === 'string', '项目会话不得建平级会话', String(gNew));
+  ok(typeof gNew === 'string' && /仅属全局/.test(gNew), '项目会话不得建平级会话', String(gNew));
   const gMisc = reg.guardFn(guardExec('peer_new', { workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '抢名额'), '杂项1'));
   ok(gMisc === undefined, '杂项会话自建 Misc 换任应放行', String(gMisc));
 }
@@ -641,7 +652,7 @@ for (const want of ['dsh-handover', '刷新', '读数', '压缩授权', '会话�
 // 回到重构前的版式——常用区直接展开，只折叠低频项；授权可直接点。
 const sections = tree.kids.filter((k) => k && k.type === 'section');
 const cardTitles = sections.map((sec) => textOf(sec.kids[0]).join(''));
-const wantOrder = ['压缩授权', '移动全局根目录', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '插件', '唤醒权守卫', '使用说明'];
+const wantOrder = ['压缩授权', '移动全局根目录', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '插件', '会话间通信守卫', '使用说明'];
 ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、守卫、说明', JSON.stringify(cardTitles));
 
 const folds = treeJson.split('"details"').length - 1;

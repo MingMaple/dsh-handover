@@ -32,7 +32,7 @@
 
 ### 写
 - `ho_handover` —— 读、写、追加、归档**本会话自己的**交接（写前自动备份、写后按角色体检）。
-- `ho_checkpoint` —— 写交接 → 体检 → 登记压缩 → 轮末自动压缩 → 自动续跑。
+- `ho_checkpoint` —— 写交接 → 体检 → 登记压缩 → 轮末自动压缩。`resume=continue`（缺省）压缩后续跑；`resume=wait` 表示任务已收尾，压缩后不唤醒。
 - `ho_snapshot` —— 库快照：逐字节复制、sha256 清单、来源说明。
 - `ho_changelog` —— 按固定表格追加一行台账。
 - `ho_pack` —— `action`：`check`（打包前置闸门）、`pack`（打包，缺省）、`verify`（校验包是否仍是现版）、`restore`（默认预演，覆盖前备份，从不删除目标文件）。`format=auto|7z|tar`：有 7-Zip 出 `.7z`，没有就出 `.tar.gz`（内置归档器，功能等价）；解包按魔数识别，包内路径必须是相对路径且不含 `..`，否则整体中止。
@@ -47,7 +47,7 @@
 | `list`（缺省） | 会话清点 | `limit`、`warn`、`include_subagents` |
 | `role` | 设定会话角色（写角色表＋当场收窄＋可选投整理指令） | `session_id`、`role`、`project`、`task`、`notify` |
 | `new` | 建下一代会话并唤醒，自动投启动提示词（按接任者角色取**接任者自己的**交接路径） | `title`、`workspace`、`cwd`、`message`、`project`、`force` |
-| `order` | 远程给某个会话下指令：`order=handover` 让它写交接再换任；`order=compact` 给它排压缩（目标必须在内存、要有合格交接、未压满） | `session_id`、`order`、`extra`、`force` |
+| `order` | 远程给某个会话下指令：`order=handover` 让它写交接再换任；`order=compact` 给它排压缩（目标必须在内存、要有合格交接、未压满） | `session_id`、`order`、`resume`、`extra`、`force` |
 | `prompt` | 按 `templates/Prompt_Templates.md` 渲染可粘贴的启动提示词 | `kind`、`project`、`title`、`sessionId`、`globalSessionId` |
 | `place` | 把已存在的会话移进工作区（会话 cwd 必须正是该工作区根） | `session_id`、`workspace` |
 | `archive` | 归档会话（相当于图形界面的删除） | `session_id`、`force` |
@@ -56,7 +56,7 @@
 ## 3. 水位与交接协议
 
 - 32% 提醒、35% 交接线、85% 硬顶；同一会话最多压缩 3 次（共 4 段使用）。数值来自 `config.mjs`，提示段与设置页由 `lib/facts.mjs` 统一渲染。
-- 到线流程：`ho_handover` 写交接（体检不通过就拒绝压缩）→ `ho_checkpoint` 登记 → 轮末自动压缩 → 续跑消息要求先 `ho_handover(action=read)`。
+- 到线流程：`ho_handover` 写交接（体检不通过就拒绝压缩）→ `ho_checkpoint` 登记（`resume=continue|wait`）→ 轮末自动压缩 → 继续时投续跑消息；收尾时不唤醒，等用户派新任务。
 - 第 4 段到线：写交接 ＋ 全局用 `ho_sessions(action="new")` 建下一任；项目会话自己**不要**建会话（换任由全局做）。
 - 关键步骤不要压：`ho_checkpoint` 传 `at_risk=true`，它只提醒不压；硬顶 85% 除外。
 - 压缩不可逆：历史会被摘要替换，所以「先把交接写合格」是硬前提。
@@ -81,7 +81,7 @@
 
 ## 6. 给项目会话发提示词的硬要求
 
-- 必须以 `_Control_Center/templates/Prompt_Templates.md` §1 共用骨架起头，保留「默认沉默·四种时机」那一行。
+- 必须以 `_Control_Center/templates/Prompt_Templates.md` §1 共用骨架起头，保留「默认沉默·三种时机」那一行。
 - **不要索要回执、不要写「每轮报告」**；写完即为完成，证据看文件末态。
 - 换任提示词必须带：新会话自己的 session id、现任全局 session id、它自己的交接绝对路径。
 
@@ -159,7 +159,7 @@
 
 1. 体积：全局段 ≤320、项目段 ≤300（含迁移提示与真实长路径时按 360、340 档）。
 2. 结构：全局五节、项目九行各出现一次，顺序不变。
-3. 一处一规则：唤醒权、压缩授权、交接线各只出现一次。
+3. 一处一规则：会话间通信规则、压缩授权、交接线各只出现一次。
 4. 禁止回灌：工作流细节（`ho_pack`、`move-probe`、具体命令步骤）不得出现在 L0。
 5. 手册同步：凡 L0 指向的 section 必须在本文中存在且标题可匹配。
 
