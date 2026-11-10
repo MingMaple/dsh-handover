@@ -1,14 +1,17 @@
 /**
- * 压缩授权：压缩会丢历史，所以「同意」必须由用户自己产生，AI 不能自己给自己批。
+ * 一次性授权：压缩会丢历史，换任会换掉在任会话，所以「同意」必须由用户自己产生，AI 不能自己给自己批。
  *
- * 做法：唯一的授权入口是设置页上的一次点击（用户在场、只能是用户按），
- * 授权一次有效 5 分钟、只对指定会话生效；`ho_checkpoint`、全局代排与调度器三处都校验它。
+ * 做法：授权入口只有用户亲手产生的那一次（设置页点击或聊天页斜杠命令），
+ * 授权一次有效 5 分钟、只对指定会话与指定种类生效；压缩与换任各有各的授权，互不顶替。
+ * 种类取 compact（压缩）或 succeed（换任），缺省为 compact；旧文件里没有 kind 的条目按 compact 处理。
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 export const CONSENT_TTL_MS = 5 * 60 * 1000;
+export const CONSENT_KINDS = ['compact', 'succeed'];
+const DEFAULT_KIND = 'compact';
 
 function consentPath() {
   const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
@@ -37,48 +40,84 @@ function stampNow() {
   return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ' +0800';
 }
 
-/** 用户点了一次「允许该会话压缩一次」。 */
-export function grantConsent(sessionId, note) {
+function kindOf(kind) {
+  const k = String(kind === undefined || kind === null ? '' : kind).trim();
+  if (!k) return DEFAULT_KIND;
+  if (CONSENT_KINDS.indexOf(k) === -1) throw new Error('未知授权种类：' + k + '（只能是 compact 或 succeed）');
+  return k;
+}
+
+/**
+ * 存储键：压缩沿用会话 id 本身（兼容旧文件），换任另加后缀，两种授权可以同时存在。
+ */
+function keyFor(sid, kind) {
+  return kind === DEFAULT_KIND ? sid : sid + '|' + kind;
+}
+
+function sidOfKey(key) {
+  return key.indexOf('|') === -1 ? key : key.slice(0, key.indexOf('|'));
+}
+
+/** 条目自身的种类优先；旧条目没有 kind，按 compact 处理。 */
+function kindOfEntry(key, entry) {
+  const k = entry && entry.kind ? String(entry.kind) : '';
+  if (CONSENT_KINDS.indexOf(k) !== -1) return k;
+  return key.indexOf('|succeed') === -1 ? DEFAULT_KIND : 'succeed';
+}
+
+/** 用户授权一次：kind 缺省为压缩。 */
+export function grantConsent(sessionId, note, kind) {
   const sid = String(sessionId || '');
   if (!sid) throw new Error('缺少会话 id');
+  const k = kindOf(kind);
   const all = readAll();
   const now = Date.now();
-  all[sid] = { at: now, until: now + CONSENT_TTL_MS, atText: stampNow(), note: String(note || '') };
+  const key = keyFor(sid, k);
+  all[key] = { at: now, until: now + CONSENT_TTL_MS, atText: stampNow(), note: String(note || ''), kind: k };
   writeAll(all);
-  return { sessionId: sid, until: new Date(all[sid].until).toISOString(), minutes: CONSENT_TTL_MS / 60000, atText: all[sid].atText };
+  return { sessionId: sid, kind: k, until: new Date(all[key].until).toISOString(), minutes: CONSENT_TTL_MS / 60000, atText: all[key].atText };
 }
 
 /** 授权是否有效（每次读取时一并清除已过期者）。 */
-export function checkConsent(sessionId) {
+export function checkConsent(sessionId, kind) {
   const sid = String(sessionId || '');
+  const k = kindOf(kind);
   if (!sid) return { ok: false, reason: '没有会话 id' };
   const all = readAll();
-  const hit = all[sid];
+  const key = keyFor(sid, k);
+  const hit = all[key];
   const now = Date.now();
   let dirty = false;
-  for (const k of Object.keys(all)) {
-    if (!all[k] || !all[k].until || all[k].until <= now) { delete all[k]; dirty = true; }
+  for (const keyName of Object.keys(all)) {
+    if (!all[keyName] || !all[keyName].until || all[keyName].until <= now) { delete all[keyName]; dirty = true; }
   }
   if (dirty) { try { writeAll(all); } catch { /* ignore */ } }
   if (!hit || !hit.until || hit.until <= now) {
-    return { ok: false, reason: '用户还没有在设置页点「允许压缩」' };
+    return {
+      ok: false,
+      kind: k,
+      reason: k === 'succeed' ? '用户还没有授权换任（聊天页命令 /allow-succeed）' : '用户还没有在设置页点「允许压缩」',
+    };
   }
-  return { ok: true, until: hit.until, leftMs: hit.until - now, atText: hit.atText || '' };
+  return { ok: true, kind: k, until: hit.until, leftMs: hit.until - now, atText: hit.atText || '' };
 }
 
-export function consumedConsent(sessionId) {
+export function consumedConsent(sessionId, kind) {
   const all = readAll();
   const sid = String(sessionId || '');
-  if (all[sid]) { delete all[sid]; try { writeAll(all); } catch { /* ignore */ } }
+  const key = keyFor(sid, kindOf(kind));
+  if (all[key]) { delete all[key]; try { writeAll(all); } catch { /* ignore */ } }
 }
 
 export function listConsent() {
   const all = readAll();
   const now = Date.now();
-  return Object.keys(all).map((sid) => ({
-    sessionId: sid,
-    leftMs: Math.max(0, (all[sid].until || 0) - now),
-    atText: all[sid].atText || '',
-    note: all[sid].note || '',
+  const rows = Object.keys(all).map((key) => ({
+    sessionId: sidOfKey(key),
+    kind: kindOfEntry(key, all[key]),
+    leftMs: Math.max(0, (all[key].until || 0) - now),
+    atText: all[key].atText || '',
+    note: all[key].note || '',
   })).filter((r) => r.leftMs > 0);
+  return rows.sort((a, b) => a.sessionId.localeCompare(b.sessionId, 'zh') || a.kind.localeCompare(b.kind));
 }

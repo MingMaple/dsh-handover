@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话角色：判定、逐角色交接路径、工具集与文案。角色表是本机状态（不进仓库、不进迁移包）。
  * 判定顺序：角色表 → 全局标题 → 全局工作区 → 子会话（默认普通）→ cwd（Projects/<名> 或 _Misc/tasks/<任务>）→ 首条提示 → 普通。
  */
@@ -19,8 +19,8 @@ export const ALL_TOOL_NAMES = TOOL_NAMES.concat(PEER_NAMES);
 /** 角色 → 可见工具（其余一律 deny）。改这张表就是改成本结构。 */
 const ROLE_TOOLS = {
   global: ALL_TOOL_NAMES.slice(),
-  project: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('gate'), nameOf('snapshot'), nameOf('profile'), peerNameOf('send'), peerNameOf('status')],
-  misc: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('snapshot'), nameOf('profile'), peerNameOf('send'), peerNameOf('status'), peerNameOf('new')],
+  project: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('gate'), nameOf('snapshot'), nameOf('profile'), nameOf('office'), nameOf('succeed'), peerNameOf('send'), peerNameOf('status')],
+  misc: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('snapshot'), nameOf('profile'), nameOf('office'), nameOf('succeed'), peerNameOf('send'), peerNameOf('status'), peerNameOf('new')],
   plain: [],
 };
 
@@ -179,7 +179,7 @@ export function resolveRole(opts) {
         return { role, project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
       }
     }
-    // 旧角色表的 unknown 是兜底态，按新口径并入普通。
+    // 旧角色表的 unknown 是备用状态，按新口径并入普通。
     if (role === 'unknown') {
       return { role: 'plain', project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
     }

@@ -1,6 +1,6 @@
 /**
  * 空白 DSH 验收：证明「移到一个没有任何旧全局文件的空 DSH 上，插件所有功能 100% 可用」。
- * 做法：临时 HOME（无 ~/.dsh 状态）→ 只靠 dist/ 自带的东西跑完 22 个工具 + 迁移四件。
+ * 做法：临时 HOME（无 ~/.dsh 状态）→ 只靠 dist/ 自带的东西跑完 24 个工具 + 迁移四件。
  * 额外覆盖：7-Zip 不存在（强制 format=tar）、工作区规则文件被删光（必须退回内置模板）。
  * 用法：node scripts/blank-dsh.mjs
  */
@@ -58,7 +58,7 @@ const ctx = {
 apply(ctx, { packFormat: 'tar' });   // 强制内置归档器：模拟一台没有 7-Zip 的机器
 
 section('装配');
-ok(reg.tools.length === 22, '注册 22 个工具', String(reg.tools.length));
+ok(reg.tools.length === 24, '注册 24 个工具', String(reg.tools.length));
 ok(reg.tools.every((t) => t && t.name && t.description && typeof t.execute === 'function'), '每个工具都有 name／description／execute');
 const names = reg.tools.map((t) => t.name).sort();
 ok(names.indexOf('ho_pack') !== -1 && names.indexOf('peer_send') !== -1, '关键工具都在');
@@ -96,7 +96,7 @@ for (const rel of [
   ok(fs.existsSync(path.join(WS, rel)), '铺好 ' + rel);
 }
 
-section('22 个工具在空白工作区逐个跑');
+section('24 个工具在空白工作区逐个跑');
 const calls = [
   ['ho_diag', {}],
   ['ho_brief', {}],
@@ -118,6 +118,7 @@ const calls = [
   ['peer_status', { session_id: 'session-blank-test' }],
   ['peer_peek', { session_id: 'session-blank-test', limit: 2 }],
   ['peer_rename', { session_id: 'session-blank-test', title: '空白验收' }],
+  ['ho_succeed', {}],
 ];
 for (const [tool, args] of calls) {
   const r = await run(tool, args, WS, 'session-blank-test', '空白验收');
@@ -199,5 +200,5 @@ if (fails.length) {
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 }
-console.log('BLANK-DSH OK（空白 DSH 上 22 工具 + 迁移四件全部可用）');
+console.log('BLANK-DSH OK（空白 DSH 上 24 工具 + 迁移四件全部可用）');
 

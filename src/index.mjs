@@ -1,7 +1,7 @@
 /**
  * dsh-handover —— 全局运行期插件。
  * 判据进代码、流程进工具；规则正文留磁盘，需要时用 ho_charter 取节（完整流程 doc="runtime"）。
- * 按会话角色载入工具与提示段：全局 22 个工具、项目 9、杂项 9、普通 0。
+ * 按会话角色载入工具与提示段：全局 24 个工具、项目 11、杂项 11、普通 0。
  * 源码不热加载：改完要重启 DSH。
  */
 import fs from 'node:fs';
@@ -27,6 +27,8 @@ import { pmPackTool } from './tools/ho_pack.mjs';
 import { pmWorkspaceTool } from './tools/ho_workspace.mjs';
 import { pmInitTool } from './tools/ho_init.mjs';
 import { pmProfileTool } from './tools/ho_profile.mjs';
+import { pmOfficeTool } from './tools/ho_office.mjs';
+import { pmSucceedTool } from './tools/ho_succeed.mjs';
 import { pmPeerListTool } from './tools/peer_list.mjs';
 import { pmPeerStatusTool } from './tools/peer_status.mjs';
 import { pmPeerSendTool } from './tools/peer_send.mjs';
@@ -470,7 +472,7 @@ export function apply(ctx, config) {
   };
   try { applyExtraPrompt(readExtraPrompt()); } catch (e) { initErrors.push('全局前置提示词：' + msgOf(e)); }
 
-  // ---------------- 工具注册（16 个 ho_* + 6 个 peer_*）
+  // ---------------- 工具注册（18 个 ho_* + 6 个 peer_*）
   // 0.2.2 起工具按「步」解析：可用工具集合每一步重算。子会话排除与角色过滤都在这里一次做完，
   // 不再另用 agent 作用域 restrict —— 两套机制并行时，换角色要么等到重启、要么互相覆盖。
   const roleToolsets = new Map(ROLES.map((r) => [r, new Set(toolsetFor(r).allow)]));
@@ -512,8 +514,10 @@ export function apply(ctx, config) {
     pmWorkspaceTool(env),
     pmInitTool(env),
     pmProfileTool(env),
+    pmOfficeTool(env),
+    pmSucceedTool(env),
   ];
-  const keys = ['brief', 'gate', 'sessions', 'phase', 'charter', 'handover', 'checkpoint', 'snapshot', 'diag', 'drift', 'changelog', 'tokens', 'pack', 'workspace', 'init', 'profile'];
+  const keys = ['brief', 'gate', 'sessions', 'phase', 'charter', 'handover', 'checkpoint', 'snapshot', 'diag', 'drift', 'changelog', 'tokens', 'pack', 'workspace', 'init', 'profile', 'office', 'succeed'];
   for (let i = 0; i < tools.length; i++) {
     const key = keys[i];
     try {
@@ -558,7 +562,7 @@ export function apply(ctx, config) {
         const mk = (allow, why) => {
           guardLast = { sid, allow, source: why, title: titleOf(sid) };
           if (allow) return undefined;
-          if (nm === 'peer_new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项自建 Misc 换任除外）。';
+          if (nm === 'peer_new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项落到 Misc 除外）。';
           return '会话间通信受限（directPeer=off）：非全局会话只能向现任全局报告，不得唤醒其他会话。';
         };
         if (info.role === 'global') return mk(true, 'global/' + info.source);
@@ -571,7 +575,7 @@ export function apply(ctx, config) {
           if (cfg.directPeer !== 'off') return mk(true, 'direct/' + info.role + ' → ' + (t ? t.role : 'unknown'));
           return mk(false, info.source + '/' + info.role + ' → ' + (t ? t.role : 'unknown'));
         }
-        // peer_new：只有杂项可以自建 Misc 换任
+        // peer_new：只有杂项可以落到 Misc
         const target = String(args.workspace || args.cwd || '').toLowerCase();
         if (info.role === 'misc' && target.indexOf('misc') !== -1) return mk(true, 'misc/' + info.source);
         return mk(false, info.source + '/' + info.role);
@@ -689,36 +693,56 @@ export function apply(ctx, config) {
     initErrors.push('设置页路由：' + msgOf(e));
   }
 
-  // ---------------- 聊天页命令：用户在自己的输入框敲 /allow-compact 即可授权压缩
+  // ---------------- 聊天页命令：用户在自己的输入框敲 /allow-compact、/allow-succeed 即可授权
   // 为什么要有它：设置页要切页面、还要填会话 id，太绕。斜杠命令是「用户亲手敲的一行」，
   // 天然满足「只有用户能产生同意」这条判据，且不产生模型消息、不花 token。
   try {
-    const registerAllowCompact = (service) => {
-      if (!service || typeof service.register !== 'function') return;
-      const d = service.register({
+    const allowCommands = [
+      {
         name: 'allow-compact',
         description: '允许本会话压缩一次（用户授权，5 分钟有效；可带会话短号授权别的会话）',
-        input: { hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话' },
-        handler: ({ agent, rawInput }) => {
-          const arg = String(rawInput || '').trim();
-          const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
-          if (!sid) return { kind: 'error', text: '拿不到会话 id：请写成 /allow-compact session-xxxx' };
-          const g = grantConsent(sid, '聊天页命令 /allow-compact');
-          try { env.log('压缩授权（命令）：' + sid); } catch { /* ignore */ }
-          return { kind: 'success', text: '已允许 ' + sid + ' 在 ' + g.minutes + ' 分钟内压缩一次（用掉即失效）。' };
-        },
-      });
-      if (typeof d === 'function' && typeof ctx.effect === 'function') {
-        ctx.effect(() => d, 'dsh-handover: /allow-compact');
+        hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话',
+        kind: 'compact',
+        note: '聊天页命令 /allow-compact',
+        action: '压缩',
+      },
+      {
+        name: 'allow-succeed',
+        description: '允许本会话换任一次（用户授权，5 分钟有效；可带会话短号授权别的会话）',
+        hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话',
+        kind: 'succeed',
+        note: '聊天页命令 /allow-succeed',
+        action: '换任',
+      },
+    ];
+    const registerAllow = (service) => {
+      if (!service || typeof service.register !== 'function') return;
+      for (const cmd of allowCommands) {
+        const d = service.register({
+          name: cmd.name,
+          description: cmd.description,
+          input: { hint: cmd.hint },
+          handler: ({ agent, rawInput }) => {
+            const arg = String(rawInput || '').trim();
+            const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
+            if (!sid) return { kind: 'error', text: '拿不到会话 id：请写成 /' + cmd.name + ' session-xxxx' };
+            const g = grantConsent(sid, cmd.note, cmd.kind);
+            try { env.log(cmd.action + '授权（命令）：' + sid); } catch { /* ignore */ }
+            return { kind: 'success', text: '已允许 ' + sid + ' 在 ' + g.minutes + ' 分钟内' + cmd.action + '一次（用掉即失效）。' };
+          },
+        });
+        if (typeof d === 'function' && typeof ctx.effect === 'function') {
+          ctx.effect(() => d, 'dsh-handover: /' + cmd.name);
+        }
       }
     };
     // 可选服务：能用 ctx.inject 就走注入（老宿主没有 commands 时插件照常激活），否则退回直取。
     if (typeof ctx.inject === 'function') {
       ctx.inject(['commands'], (scope) => {
-        try { registerAllowCompact(scope && scope.commands); } catch (e) { initErrors.push('命令注册：' + msgOf(e)); }
+        try { registerAllow(scope && scope.commands); } catch (e) { initErrors.push('命令注册：' + msgOf(e)); }
       });
     } else {
-      registerAllowCompact(ctx.commands);
+      registerAllow(ctx.commands);
     }
   } catch (e) {
     initErrors.push('命令注册：' + msgOf(e));

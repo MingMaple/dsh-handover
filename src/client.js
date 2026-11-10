@@ -488,31 +488,31 @@ window.__ModuleLoader__.load({
       // 压缩授权：只有用户在这里点一下，压缩才排得进去（AI 不能自己批）
       const [csSid, setCsSid] = React.useState("");
       const [csMsg, setCsMsg] = React.useState("");
-      const doGrant = React.useCallback(() => {
+      const doGrant = React.useCallback((kind) => {
         setWorking(true); setCsMsg("");
-        post("consent.grant", { session_id: csSid }, 15000)
+        post("consent.grant", { session_id: csSid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可压缩一次，用后失效。"); load(); }
+            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
             else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
           })
           .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
           .then(() => setWorking(false));
       }, [csSid, load]);
-      const doGrantSid = React.useCallback((sid) => {
+      const doGrantSid = React.useCallback((sid, kind) => {
         setWorking(true); setCsMsg("");
-        post("consent.grant", { session_id: sid }, 15000)
+        post("consent.grant", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可压缩一次，用后失效。"); load(); }
+            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
             else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
           })
           .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
           .then(() => setWorking(false));
       }, [load]);
 
-      const doRevoke = React.useCallback((sid) => {
+      const doRevoke = React.useCallback((sid, kind) => {
         setWorking(true); setCsMsg("");
-        post("consent.revoke", { session_id: sid }, 15000)
-          .then(() => { setCsMsg("已撤销 " + sid + " 的压缩授权。"); load(); })
+        post("consent.revoke", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
+          .then(() => { setCsMsg("已撤销 " + sid + " 的" + (kind === "succeed" ? "换任" : "压缩") + "授权。"); load(); })
           .catch(() => { /* 撤销失败不影响别的 */ })
           .then(() => setWorking(false));
       }, [load]);
@@ -617,7 +617,7 @@ window.__ModuleLoader__.load({
             globalMsg ? h("div", { className: globalBad ? "dshh-bad" : "dshh-ok" }, globalMsg) : null)));
       }
 
-      // 二、压缩授权：唯一合法的「用户同意」入口，置顶。
+      // 二、压缩与换任授权：唯一合法的「用户同意」入口，置顶。
       const consentRows = Array.isArray(data.consent) ? data.consent : [];
       sections.push(card("压缩授权",
         h("div", null,
@@ -629,8 +629,18 @@ window.__ModuleLoader__.load({
               key: i,
               disabled: working,
               title: r.title || r.sid,
-              onClick: () => doGrantSid(r.sid),
+              onClick: () => doGrantSid(r.sid, "compact"),
             }, "允许 " + shortSid(r.sid)))),
+          h("div", { className: "dshh-muted" }, "换任由在任会话自己执行，同样须由你授权：点「允许换任」后，该会话可在 5 分钟内换任一次。也可在对话中发送 /allow-succeed。"),
+          h("div", { className: "dshh-pick" },
+            byActivity.slice(0, 10).map((r, i) => h("button", {
+              className: "dshh-btn",
+              type: "button",
+              key: i,
+              disabled: working,
+              title: r.title || r.sid,
+              onClick: () => doGrantSid(r.sid, "succeed"),
+            }, "允许换任 " + shortSid(r.sid)))),
           h("div", { className: "dshh-row" },
             h("input", {
               className: "dshh-inputSm",
@@ -639,15 +649,16 @@ window.__ModuleLoader__.load({
               placeholder: "或输入会话 id 或 8 位短号",
               onChange: (e) => setCsSid(e.target.value),
             }),
-            h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: doGrant }, working ? "正在授权" : "授权")),
+            h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权"),
+            h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("succeed") }, "授权换任")),
           consentRows.length
             ? h("table", { className: "dshh-table" },
               h("colgroup", null, h("col", { style: { width: "62%" } }), h("col", { style: { width: "18%" } }), h("col", { style: { width: "20%" } })),
               h("thead", null, h("tr", null, h("th", null, "已授权会话"), h("th", null, "剩余"), h("th", null, "操作"))),
               h("tbody", null, consentRows.map((r, i) => h("tr", { key: i },
-                h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId)),
+                h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId) + (r.kind === "succeed" ? " · 换任" : " · 压缩")),
                 h("td", { className: "dshh-num" }, Math.round((r.leftMs || 0) / 1000) + " 秒"),
-                h("td", null, h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => doRevoke(r.sessionId) }, "撤销"))))))
+                h("td", null, h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => doRevoke(r.sessionId, r.kind) }, "撤销"))))))
             : h("div", { className: "dshh-muted" }, "当前无有效授权。"),
           csMsg ? h("div", { className: "dshh-ok" }, csMsg) : null)));
 

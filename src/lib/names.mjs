@@ -7,7 +7,7 @@ const PREFIX = 'ho';
 export const nameOf = (key) => PREFIX + '_' + key;
 
 /**
- * ho_* 16 个。合并过的家族（刻意保持旧名，参数里用 action 分流）：
+ * ho_* 18 个。合并过的家族（刻意保持旧名，参数里用 action 分流）：
  *   ho_pack     —— 打包 / 校验 / 预演 / 恢复（原 ho_pack_verify、ho_pack_restore、ho_pack_precheck）
  *   ho_sessions —— 清点 / 设定角色 / 建会话 / 出提示词 / 归档 / 解归档（原 ho_session_new、ho_prompt、ho_session_archive、ho_session_unarchive）
  *   ho_profile  —— 骨架读取 / 注册 / 校验 / 预设
@@ -16,7 +16,7 @@ const KEYS = [
   'brief', 'gate', 'sessions', 'phase', 'charter',
   'handover', 'checkpoint', 'snapshot', 'diag',
   'drift', 'changelog', 'tokens',
-  'pack', 'workspace', 'init', 'profile',
+  'pack', 'workspace', 'init', 'profile', 'office', 'succeed',
 ];
 
 export const NAMES = KEYS.reduce((acc, k) => { acc[k] = nameOf(k); return acc; }, {});

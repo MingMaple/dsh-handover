@@ -24,7 +24,7 @@ export function decide(input) {
     return { action: 'unknown', reason: '水位读不到：人工判断，不要盲目压缩' };
   }
   if (input.ratio >= hard) {
-    return { action: 'force_compact', reason: '已到硬顶（' + Math.round(hard * 100) + '%）：强制压缩兜底，哪怕任务中途' };
+    return { action: 'force_compact', reason: '已到硬顶（' + Math.round(hard * 100) + '%）：强制压缩，哪怕任务中途' };
   }
   if (input.ratio >= handover) {
     return { action: 'checkpoint', reason: '过交接线（' + Math.round(handover * 100) + '%）：写交接，随后压缩，再读交接续跑' };

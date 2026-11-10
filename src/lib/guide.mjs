@@ -32,7 +32,7 @@ export function buildGuide(cfg) {
     { when: '查阅规则', say: '把 Charter 第 7.2.3 节取出来', what: '按节返回规则正文，避免整篇读取（ho_charter；完整流程用 doc="runtime"）' },
     { when: '交接与压缩续跑', say: '先把交接文档写好，再压缩并继续', what: '写自己角色的交接、体检、登记压缩，并由助手选择压缩后去向：继续工作时用 resume=continue，任务已收尾时用 resume=wait（压缩后不唤醒）（ho_handover、ho_checkpoint）' },
     { when: '接近上下文上限', say: '查一下本会话的上下文水位', what: compact + '（ho_phase）' },
-    { when: '换任', say: '建立下一代全局会话', what: '建会话、唤醒并投递启动提示词；在任会话水位低于 ' + w.warn + ' 时拒绝新建（ho_sessions action=new）' },
+    { when: '换任', say: '让在任会话自己完成换任', what: '用户先发送 /allow-succeed 授权，在任会话随后校验交接、建接任会话并登记在任（ho_succeed）；全局仍可用 ho_sessions action=new 手动新建会话' },
     { when: '会话角色', say: '把 Demo1 设成项目角色，并让它整理自己的文件', what: '写角色表、当场收窄该会话的工具与提示、投递一次性整理指令（ho_sessions action=role / 本页会话角色）' },
     { when: '通知项目会话', say: '通知 Demo 更新交接文档', what: '投递一条消息；会话之间可直接对话，不必经全局转述；会消耗目标会话一整轮 token，应尽量少用（peer_send）' },
     { when: '全局前置提示词', say: '把这段设为全局前置提示词', what: '保存到本机；仅在你开启且内容非空时注入全部会话，关闭或留空时不注册提示段' },
@@ -44,6 +44,7 @@ export function buildGuide(cfg) {
     { when: '建立工作区', say: '把这个目录注册为工作区', what: '注册已存在的目录；删除只删注册，目录与会话日志均保留（ho_workspace）' },
     { when: '首次安装', say: '把某个目录建成全局根目录', what: '在该目录下建立整套全局文件体系，并注册为工作区（ho_init）' },
     { when: '自检', say: '检查插件当前状态', what: '服务可解析性、压缩调度器、压缩计数、本会话角色与工具集（ho_diag）' },
+    { when: '查在任', say: '现在 Mingent 是谁在任', what: '按全局、项目、杂项查现任会话的名字与会话 id（ho_office）；不起会话也可用命令行 node scripts/office.mjs 同名查询' },
   ],
   groups: [
     {
@@ -57,6 +58,7 @@ export function buildGuide(cfg) {
         ['ho_drift', '交接漂移体检：Δ 为当前轮与交接轮之差，大于 3 需刷新'],
         ['ho_diag', '插件自检：服务、调度器、压缩计数、角色判定与工具集'],
         ['ho_tokens', '会话 token 体检：轮数、步数、每步 token、最贵的单条返回'],
+        ['ho_office', '在任登记表：查全局、项目、杂项现在由哪个会话在任（名字与会话 id）'],
       ],
     },
     {
@@ -70,6 +72,7 @@ export function buildGuide(cfg) {
         ['ho_workspace', '工作区列表、创建、删除；删除只删注册'],
         ['ho_init', '首次安装：在指定目录下建立整套全局文件体系，可顺带注册工作区'],
         ['ho_profile', '项目或杂项骨架：读取、注册、校验、取预设'],
+        ['ho_succeed', '换任自服务：在任会话经用户授权后自行校验交接、建接任会话并登记在任'],
       ],
     },
     {

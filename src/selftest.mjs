@@ -10,6 +10,8 @@ import { pmGateTool } from './tools/ho_gate.mjs';
 import { pmSessionsTool } from './tools/ho_sessions.mjs';
 import { pmPhaseTool } from './tools/ho_phase.mjs';
 import { pmCharterTool } from './tools/ho_charter.mjs';
+import { pmOfficeTool } from './tools/ho_office.mjs';
+import { pmSucceedTool } from './tools/ho_succeed.mjs';
 import path from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -54,6 +56,13 @@ const env = {
   lockState: () => 'unknown',
 };
 
+/** 换任只读用例：只验授权判据，不带用户授权时应当返回「没有授权」，而不是抛异常。 */
+const envSucceed = Object.assign({}, env, {
+  selfId: () => 'session-selftest-succeed',
+  roleOf: () => ({ role: 'project', project: 'Demo', task: '', source: 'selftest' }),
+  handoverFor: () => ({ path: path.join(ws, '_Project_Meta', 'Demo', 'Handover.md'), reason: '' }),
+});
+
 const exec = null;
 const cases = [
   { t: pmBriefTool(env), a: {}, flag: "brief" },
@@ -61,6 +70,8 @@ const cases = [
   { t: pmSessionsTool(env), a: {}, flag: "sessions" },
   { t: pmPhaseTool(env), a: {}, flag: "phase" },
   { t: pmCharterTool(env), a: { doc: "charter", section: "8.1.1.4", maxLines: 30 }, flag: "charter" },
+  { t: pmOfficeTool(env), a: { query: "全局" }, flag: "office" },
+  { t: pmSucceedTool(envSucceed), a: {}, flag: "succeed", want: /没有授权/ },
 ];
 
 let failed = 0;
@@ -71,6 +82,10 @@ for (const c of cases) {
   try {
     const out = await c.t.execute(c.a, exec);
     console.log(out.text);
+    if (c.want && !c.want.test(String(out && out.text))) {
+      failed++;
+      console.log("FAILED: 输出不符合预期 " + c.want);
+    }
   } catch (e) {
     failed++;
     console.log("FAILED: " + (e && e.message ? e.message : String(e)));

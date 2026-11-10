@@ -9,7 +9,7 @@ export function hasCenter(p) {
 }
 
 /**
- * 没有 exec 时的兜底：配置 workspaceRoot → 标题含「全局」且带 _Control_Center 的工作区
+ * 没有 exec 时的备用做法：配置 workspaceRoot → 标题含「全局」且带 _Control_Center 的工作区
  * → 任一带 _Control_Center 的工作区 → 进程 cwd。
  */
 export function routeWorkspace(env) {

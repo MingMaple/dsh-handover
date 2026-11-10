@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 设置页数据与动作的唯一实现：HTTP 路由（旧通道）和 /api 载体（新通道）都调它。
  * 返回统一信封：{ ok:true, value } | { ok:false, error:{code,message,details}, http }。
  * http 只是给旧 HTTP 通道用的状态码提示，载体通道不用它。
@@ -240,8 +240,9 @@ export function createApi(env, info) {
       if (method === 'consent.grant') {
         const sid = resolveShortSid(env, p.session_id);
         if (!sid) return bad('bad-request', '缺少 session_id');
-        const g = grantConsent(sid, '设置页点击');
-        env.log('压缩授权：' + sid + '（5 分钟）');
+        const kind = p.kind === 'succeed' ? 'succeed' : 'compact';
+        const g = grantConsent(sid, kind === 'succeed' ? '设置页点击换任' : '设置页点击', kind);
+        env.log((kind === 'succeed' ? '换任' : '压缩') + '授权：' + sid + '（5 分钟）');
         invalidateStatus(env);
         return ok(g);
       }
@@ -250,7 +251,7 @@ export function createApi(env, info) {
 
       if (method === 'consent.revoke') {
         const sid = String(p.session_id || '').trim();
-        if (sid) consumedConsent(sid);
+        if (sid) consumedConsent(sid, p.kind === 'succeed' ? 'succeed' : 'compact');
         invalidateStatus(env);
         return ok({ revoked: sid });
       }
