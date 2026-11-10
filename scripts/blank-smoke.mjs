@@ -1019,6 +1019,71 @@ try {
 } catch (e) { newErr = String(e && e.message ? e.message : e); }
 ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会话缺工作区时应报错并列出可选工作区', newErr.slice(0, 160));
 
+// 回归锁（0.9.14）：① 新建杂项会话的启动提示读本任务交接，不退回全局交接；
+// ② 杂项换任的接任者落回本会话所在的注册工作区；③ 接任提示里的「全局 id」是现任全局，不是退休前任。
+{
+  const { registerHolder } = await import(DIST('lib/office.mjs'));
+  const storages = path.join(BLANK, '.dsh', 'storages');
+  fs.mkdirSync(storages, { recursive: true });
+  const miscWs = path.join(WS, '_Misc');
+  fs.writeFileSync(path.join(storages, 'workspace.json'), JSON.stringify({
+    tables: { workspaces: {
+      'ws-glob': { id: 'ws-glob', title: '全局', path: WS },
+      'ws-misc': { id: 'ws-misc', title: '_Misc', path: miscWs },
+    } },
+  }), 'utf8');
+  const seen = { creates: [], prompts: [] };
+  ctx.sessionController.create = async (a) => { seen.creates.push(a || {}); return { sessionId: 'session-made-' + seen.creates.length }; };
+  ctx.sessionController.rename = async () => { };
+  ctx.sessionController.prompt = async (a) => {
+    const part = a && Array.isArray(a.content) ? a.content[0] : null;
+    seen.prompts.push(String(part && part.text ? part.text : ''));
+    return { accepted: true };
+  };
+  const makerExec2 = { name: 'ho_sessions', arguments: {}, agent: { session: { header: { id: 'session-maker2', cwd: WS } } } };
+  const sessT = reg.tools.find((t) => t.name === 'ho_sessions');
+  {
+    let createdOut = '';
+    try {
+      const r = await sessT.execute({ action: 'new', confirm: true, title: '杂项2', kind: 'misc', role: 'misc', task: '抢名额', workspace: 'ws-misc' }, makerExec2);
+      createdOut = String((r && r.text) || '');
+    } catch (e) { createdOut = 'ERR ' + String(e && e.message ? e.message : e); }
+    const p = seen.prompts[seen.prompts.length - 1] || '';
+    ok(/已建会话/.test(createdOut), '新建杂项会话应成功', createdOut.slice(0, 200));
+    ok(/_Misc[\\/]tasks[\\/]抢名额[\\/]Handover\.md/.test(p), '新建杂项会话的启动提示应读本任务交接', p.slice(0, 200));
+    ok(p.indexOf('Global_Handover') === -1, '新建杂项会话的启动提示不得指向全局交接', p.slice(0, 200));
+  }
+  {
+    const { runSuccession } = await import(DIST('lib/succession.mjs'));
+    const { grantConsent } = await import(DIST('lib/consent.mjs'));
+    const miscHandover = path.join(miscWs, 'tasks', '抢名额', 'Handover.md');
+    fs.mkdirSync(path.dirname(miscHandover), { recursive: true });
+    fs.writeFileSync(miscHandover, '# 抢名额交接' + '\n\n## 下一步\n- 等用户指派下一步\n', 'utf8');
+    registerHolder(WS, { kind: 'global', name: '全局1', sessionId: 'session-global-cur', workspace: WS });
+    registerHolder(WS, { kind: 'misc', task: '抢名额', name: '杂项1', sessionId: 'session-misc-old', workspace: miscWs });
+    grantConsent('session-misc-old', 'blank-smoke', 'succeed');
+    const succOut = await runSuccession({
+      cfg: resolveConfig({ workspaceRoot: WS }),
+      roleOf: () => ({ role: 'misc', task: '抢名额', project: '' }),
+      selfId: () => 'session-misc-old',
+      selfCwd: () => miscWs,
+      handoverFor: () => ({ path: miscHandover, reason: '' }),
+      resolveWs: () => WS,
+      selfPct: () => 40,
+      registry: () => ({ list: () => [] }),
+      controller: () => ctx.sessionController,
+      writeRole: () => { },
+    }, null, {});
+    ok(/换任完成/.test(succOut), '杂项换任应能走通（授权、体检、建会话、登记、投递）', succOut.split('\n').join(' ').slice(0, 240));
+    const madeArgs = seen.creates[seen.creates.length - 1] || {};
+    ok(madeArgs.workspaceId === 'ws-misc', '杂项接任者应落回本会话所在的工作区', JSON.stringify(madeArgs));
+    const p = seen.prompts[seen.prompts.length - 1] || '';
+    ok(new RegExp('.{0,1}抢名额[\\\\/]Handover\\.md').test(p), '接任提示末尾应带本任务交接路径', p.slice(-320));
+    ok(p.indexOf('session-global-cur') !== -1, '接任提示的「全局 id」应是现任全局', p.slice(-320));
+    ok(p.indexOf('session-misc-old') === -1, '接任提示不得把退休前任当全局', p.slice(-320));
+  }
+}
+
 fs.rmSync(BLANK, { recursive: true, force: true });
 console.log('');
 if (fails.length) {

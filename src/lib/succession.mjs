@@ -12,7 +12,7 @@ import { lineageKeyOf, loadOffice, nextName, registerHolder, stampNow } from './
 import { checkConsent, consumedConsent } from './consent.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { sendPrompt } from './prompt.mjs';
-import { resolveWorkspaceFor, promptFor } from './session-ops.mjs';
+import { resolveWorkspaceFor, promptFor, workspaceIdOfPath, workspacePathOf } from './session-ops.mjs';
 import { watermark } from './facts.mjs';
 
 /** 交接里不得残留的占位符。 */
@@ -20,6 +20,14 @@ export const HANDOVER_PLACEHOLDERS = ['待填', 'TODO', '（建完后填）', '<
 
 function msgOf(e) {
   return String(e && e.message ? e.message : e);
+}
+
+/** 现任全局会话 id（登记表是唯一事实源）；没有记录或读不到时返回空串。 */
+function currentGlobalId(ws) {
+  try {
+    const lin = loadOffice(ws).lineages['全局'];
+    return lin && lin.current && lin.current.sessionId ? String(lin.current.sessionId) : '';
+  } catch { return ''; }
 }
 
 /**
@@ -165,18 +173,26 @@ export async function runSuccession(env, exec, opts) {
   // 5. 分配编号：登记表历史最大号加一，不采用会话自述。
   const name = nextName(store, key);
 
-  // 6. 确定工作区：与 ho_sessions(action="new") 同一套解析；杂项落到本会话所在工作区。
+  // 6. 确定工作区：与 ho_sessions(action="new") 同一套解析。
+  // 杂项接任者落回**本会话所在的注册工作区**（按会话 cwd 反查）；反查不到才退回工作区根。
   let workspaceId = '';
   try {
-    workspaceId = resolveWorkspaceFor(env, exec, kind, project, task, kind === 'misc' ? { workspace: ws } : {});
+    let wsOpt = {};
+    if (kind === 'misc') {
+      const selfCwd = typeof env.selfCwd === 'function' ? String(env.selfCwd(exec) || '') : '';
+      wsOpt = selfCwd && workspaceIdOfPath(env, selfCwd) ? { cwd: selfCwd } : { workspace: ws };
+    }
+    workspaceId = resolveWorkspaceFor(env, exec, kind, project, task, wsOpt);
   } catch (e) {
     return reject(msgOf(e));
   }
 
   // 7. 拼启动提示词：末尾追加交接路径与「先读交接、读毕报到」。
+  // 「全局 id」填**现任全局**：项目与杂项换任时，前任不是全局，不能顶替这个位置。
   let prompt = '';
   try {
-    const base = promptFor(env, { ws, kind, project, task, title: name, sessionId: '', globalSessionId: selfId, extra: '' });
+    const globalId = kind === 'global' ? selfId : (currentGlobalId(ws) || selfId);
+    const base = promptFor(env, { ws, kind, project, task, title: name, sessionId: '', globalSessionId: globalId, extra: '' });
     prompt = base + NL + NL + [
       '接任交接：' + handoverFile,
       '先读这份交接再动手；读毕向用户报告当前停在哪一步、交接列有哪些待办，然后等待用户指派任务。',
@@ -195,7 +211,7 @@ export async function runSuccession(env, exec, opts) {
   // 9. 登记在任：原在任者自动进历史，Registry.md 在役列同步。
   let reg = null;
   try {
-    reg = registerHolder(ws, { kind, project, task, name, sessionId, workspace: ws, note });
+    reg = registerHolder(ws, { kind, project, task, name, sessionId, workspace: workspacePathOf(env, workspaceId) || ws, note });
   } catch (e) {
     return [
       '会话已建 ' + sessionId + '（' + name + '），但登记在任失败：' + msgOf(e),

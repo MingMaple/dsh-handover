@@ -94,6 +94,28 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
     + '全局会话落在标题含「全局」的工作区；项目会话同时传 project 与该项目的工作区；杂项会话传该项目外的独立工作区。');
 }
 
+/**
+ * 某个目录是不是已注册工作区的根：是则返回 workspaceId，否则返回空串（不抛错）。
+ * 换任时用来让接任者落回本会话所在的那个工作区，而不是工作区根。
+ */
+export function workspaceIdOfPath(env, p) {
+  const want = normPath(p);
+  if (!want || want === '-') return '';
+  const hit = listWorkspaces(env).find((r) => {
+    const rp = normPath(String(r.path || ''));
+    return rp && rp !== '-' && rp === want;
+  });
+  return hit ? String(hit.id || '') : '';
+}
+
+/** workspaceId 对应的根路径；查不到返回空串（登记表的工作区一栏用它写成实际落点）。 */
+export function workspacePathOf(env, id) {
+  const key = String(id || '');
+  if (!key) return '';
+  const hit = listWorkspaces(env).find((r) => String(r.id || '') === key);
+  return hit && hit.path ? String(hit.path) : '';
+}
+
 /** 已注册工作区清单（插件服务优先，退化读 workspace.json）：新建会话时用来列出可选项。 */
 function listWorkspaces(env) {
   try {
@@ -197,16 +219,23 @@ export async function sessionNew(env, args, exec) {
   // 建会话即登记在任：全局手工建/换会话与自服务换任共用一张登记表，不让注册表漏记或与实况分叉。
   try {
     if (officeKind) {
-      const reg = registerHolder(ws, { kind: officeKind, project, task, name: title, sessionId, workspace: ws });
+      // 工作区一栏写**实际落点**（用户指定的那个工作区），不是调用者自己所在的工作区根。
+      const reg = registerHolder(ws, {
+        kind: officeKind, project, task, name: title, sessionId,
+        workspace: workspacePathOf(env, workspaceId) || ws,
+      });
       out.push('在任登记：' + reg.key + ' → ' + title + (reg.previous ? '（原 ' + reg.previous.name + ' 进历史）' : ''));
     }
   } catch (e) {
     out.push('在任登记失败：' + String(e && e.message ? e.message : e) + '（不影响会话本身）');
   }
   const meId = env.selfId(exec) || '（未知）';
-  // 交接路径按**接任者自身的角色**取用：项目换任读取项目交接，不再退回全局交接。
-  const hp = handoverPathFor(ws, finalRole === 'project' && project ? { role: 'project', project } : { role: 'global' });
-  const handover = env.cfg.handoverPath || (hp.path || '');
+  // 交接路径按**新会话自身的角色**取用：项目读项目交接、杂项读任务交接，都不退回全局交接。
+  // cfg.handoverPath 是「强制全局交接路径」的演练开关，只对全局角色生效。
+  const hp = handoverPathFor(ws, finalRole === 'project' && project ? { role: 'project', project }
+    : finalRole === 'misc' && task ? { role: 'misc', task } : { role: 'global' });
+  const handover = (finalRole === 'global' ? env.cfg.handoverPath : '') || hp.path
+    || (finalRole === 'misc' ? path.join(ws, '_Control_Center', 'rules', 'Misc_Task_Standard.md') : '');
   const text = args.message || [
     '先读交接：' + handover + '。',
     '读毕先向用户报告，不得自行开展作业：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。待用户指派后再动手。交接无待办时如实说明，不得编造任务。',
