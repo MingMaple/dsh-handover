@@ -584,6 +584,7 @@ ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务
 ok(secNorm.indexOf('可直接 peer') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
 ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
 ok(secNorm.indexOf('_Control_Center/standards/') !== -1, '项目提示段应给出通用规范的查找范围', secNorm.slice(-240));
+ok(secNorm.indexOf('把某某写成规范') !== -1 && secNorm.indexOf('本会话所在的工作区') !== -1 && secNorm.indexOf('写入通用规范库') !== -1 && secNorm.indexOf('报全局') !== -1, '项目提示段应写明未指明写本库、通用规范库报全局', secNorm.slice(-400));
 console.log('项目提示段 token 实测：' + budget.estimateTokens(calls.sections[0].text) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
 ok(calls.sections[0].text.indexOf('子智能体') === -1, '项目段不得携带子智能体派发纪律（不属于本插件）');
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
@@ -647,6 +648,7 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   ok(g0.indexOf('ho_backup') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
   ok(g0.indexOf('ho_charter(doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
   ok(g0.indexOf('_Control_Center/standards/') !== -1, '全局段应给出通用规范的查找范围', g0.slice(-240));
+  ok(g0.indexOf('把某某写成规范') !== -1 && g0.indexOf('写入通用规范库') !== -1 && g0.indexOf('本会话所在的工作区') !== -1, '全局段应写明规范的写入范围', g0.slice(-400));
   const rm = fs.readFileSync(path.join(dist, 'templates', 'Runtime_Manual.md'), 'utf8');
   ok(rm.indexOf('## 11. 首次安装') !== -1 && rm.indexOf('## 12. 提示词预算') !== -1, '手册应含首次安装与提示词预算两节');
   ok(rm.indexOf('续用优先') !== -1, '手册 §5 应含子智能体续用纪律');

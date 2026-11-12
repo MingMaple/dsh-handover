@@ -15,9 +15,18 @@ const RUNTIME_POINTER = '细节按节取：ho_charter(doc="runtime", section=…
 
 /**
  * 通用规范的位置与查找范围（三档角色共用，必须同一句）。
- * 规范按名字被引用，本库与全局规范库都在范围内；细节写在规范库的 README 里。
+ * 规范按名字被引用，本库（会话所在的工作区）与全局规范库都在范围内；细节写在规范库的 README 里。
  */
-const STANDARDS_POINTER = '通用规范在 _Control_Center/standards/（每条一个子目录）；当前用户提到「按某某规范进行」时，本库与该目录都算查找范围。';
+const STANDARDS_POINTER = '通用规范在 _Control_Center/standards/（每条一个子目录）；当前用户提到「按某某规范进行」时，本库（本会话所在的工作区）与该目录都算查找范围。';
+
+/**
+ * 写入范围（三档角色共用前一句）：未指明写本库；明确「写入通用规范库」一类要求才写规范库。
+ * 后一句按角色分叉：全局直接写，项目与杂项报全局。
+ */
+const STANDARDS_WRITE_PREFIX = '当前用户提到「把某某写成规范」时：未指明范围就写本库；';
+const STANDARDS_WRITE_TARGET = '说「写入通用规范库」「写成通用规范」「写成共用规范」的';
+const STANDARDS_WRITE_GLOBAL = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，写 _Control_Center/standards/。';
+const STANDARDS_WRITE_SCOPED = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，不得写 _Control_Center，报全局。';
 
 /**
  * 复用准则：全局、项目、杂项三处必须同一句。
@@ -52,6 +61,7 @@ export function globalManual(opts) {
     '五、按需取用',
     RUNTIME_POINTER,
     STANDARDS_POINTER,
+    STANDARDS_WRITE_GLOBAL,
   ];
   const dm = docmapBlock(o);
   if (dm.length) lines.push('', ...dm);
@@ -89,6 +99,7 @@ export function scopedManual(info, opts) {
     reuseRule(o.cfg),
     RUNTIME_POINTER,
     STANDARDS_POINTER,
+    STANDARDS_WRITE_SCOPED,
   ];
   const dm = docmapBlock(o);
   if (dm.length) lines.push('', ...dm);
