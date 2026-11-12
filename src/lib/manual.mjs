@@ -14,12 +14,18 @@ const NL = String.fromCharCode(10);
 const RUNTIME_POINTER = '细节按节取：ho_charter(doc="runtime", section=…)。';
 
 /**
+ * 通用规范的位置与查找范围（三档角色共用，必须同一句）。
+ * 规范按名字被引用，本库与全局规范库都在范围内；细节写在规范库的 README 里。
+ */
+const STANDARDS_POINTER = '通用规范在 _Control_Center/standards/（每条一个子目录）；当前用户提到「按某某规范进行」时，本库与该目录都算查找范围。';
+
+/**
  * 复用准则：全局、项目、杂项三处必须同一句。
  * 派活与新建会话前先查在任，低水位在任直接复用；确需另建才新建。
  */
 function reuseRule(cfg) {
   return '指派任务或新建会话前，先用 ho_office（空参数）查一次在任；同一类别已有在任且其水位低于 '
-    + watermark(cfg).warn + ' 时，直接用 peer（action="send"）复用，不新建；确需另建（原会话不可用、需并行、用户明确要求）时才新建。';
+    + watermark(cfg).warn + ' 时，直接用 peer（action="send"）复用，不新建；确需另建（原会话不可用、需并行、当前用户明确要求）时才新建。';
 }
 
 /** 全局会话的常驻段：五节骨架（身份、权限、节奏、交接、按需取用）。 */
@@ -33,18 +39,19 @@ export function globalManual(opts) {
     '',
     '二、权限',
     '可写 _Control_Center、_Project_Meta 与项目结构；Projects 及各项目库内文件只读，不得代写；项目内作业不代办。',
-    '新建会话与设定角色仅属全局；会话间可直接 peer（action="send"）；换任须用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed，不再请求全局。',
+    '新建会话与设定角色仅属全局；会话间可直接 peer（action="send"）；换任须当前用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed，不再请求全局。',
     reuseRule(o.cfg),
     '',
     '三、节奏',
     handoverRuleText(o.cfg),
-    '压缩须用户点「压缩授权」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。confirm 仅表意图，授权以点击为准。关键步骤传 at_risk=true 暂缓。',
+    '压缩须当前用户点「压缩授权」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。confirm 仅表意图，授权以点击为准。关键步骤传 at_risk=true 暂缓。',
     '',
     '四、交接',
     '交接：_Control_Center/records/Global_Handover.md。',
     '',
     '五、按需取用',
     RUNTIME_POINTER,
+    STANDARDS_POINTER,
   ];
   const dm = docmapBlock(o);
   if (dm.length) lines.push('', ...dm);
@@ -77,10 +84,11 @@ export function scopedManual(info, opts) {
     hp.path
       ? '交接：' + hp.path + '（ho_handover 默认）。'
       : '交接路径未解析（缺角色或项目名），请先在设置页设定角色。',
-    handoverRuleText(o.cfg) + '压缩须用户点「压缩授权」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
-    '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需用户决定、全局口径有误时向全局报告；任务完成不报全局。',
+    handoverRuleText(o.cfg) + '压缩须当前用户点「压缩授权」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
+    '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需当前用户决定、全局口径有误时向全局报告；任务完成不报全局。',
     reuseRule(o.cfg),
     RUNTIME_POINTER,
+    STANDARDS_POINTER,
   ];
   const dm = docmapBlock(o);
   if (dm.length) lines.push('', ...dm);
@@ -130,7 +138,7 @@ export function organizeMessageFor(info, opts) {
       '把结论写入 _Project_Meta/' + p + '/project.profile.json；字段格式见 ho_profile(action=presets)。',
       '写入后调用 ho_profile(action=register) 校验并登记；返回缺失项时按清单补齐。',
       '约束：仅可改动本库与 _Project_Meta/' + p + '/；不得改动 _Control_Center 及其他项目；移动较大文件前先执行 ho_backup(action="snapshot")。可用工具：ho_backup、ho_handover、ho_status、ho_checkpoint、ho_profile、peer（action="send"）。',
-      '完成后以一句话向用户说明「注册了哪些骨架项、仍缺哪些」，无需每轮回执。',
+      '完成后以一句话向当前用户说明「注册了哪些骨架项、仍缺哪些」，无需每轮回执。',
     ].join(NL);
   }
   if (role === 'misc') {
@@ -146,7 +154,7 @@ export function organizeMessageFor(info, opts) {
   }
   return [
     head,
-    '- _Control_Center/{records,rules,user,templates,tools} — 交接、规则、写作规范、模板、脚本。',
+    '- _Control_Center/{records,rules,standards,user,templates,tools} — 交接、规则、通用规范、写作规范、模板、脚本。',
     '- _Project_Meta/Registry.md 与各项目元数据目录。',
     '- Projects/、_Misc/tasks/、_Archives/、_Temp/ — 只维护结构，不代写项目库内文件。',
     '约束：项目库内文件由该项目会话自行整理；骨架由项目自己注册，缺则派发，不代写。',

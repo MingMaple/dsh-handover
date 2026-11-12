@@ -1,6 +1,6 @@
 /**
  * 打包、校验、预演、恢复的实现（原 ho_pack / ho_pack_verify / ho_pack_restore / ho_pack_precheck 的代码搬到这里）。
- * 对外只经 ho_backup(action=…) 暴露，少 3 份 schema 的固定开销。
+ * 对外只经 ho_backup(action=…) 暴露：四份旧入口合为一份 schema，省下三份的固定开销。
  * 共同口径：只报告绝对路径、不改写文件内容；恢复默认预演、覆盖前备份、从不删除目标文件。
  */
 import fs from 'node:fs';

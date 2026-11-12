@@ -7,7 +7,7 @@ export function pmSucceedTool(env) {
   return {
     name: nameOf('succeed'),
     description:
-      '换任：校验本会话交接，建接任会话并登记在任；须用户先授权（/allow-succeed）。',
+      '换任：校验本会话交接，建接任会话并登记在任；须当前用户先授权（/allow-succeed）。',
     parameters: {
       type: 'object',
       additionalProperties: false,

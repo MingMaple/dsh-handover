@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 命令行查在任登记表：`node scripts/office.mjs 全局 全局3 Mingent`
+ * 命令行查在任登记表：`node scripts/office.mjs 全局 全局3 Demo1`
  *
  * 与工具 ho_office 同一份实现、同一份记录（_Control_Center/records/Office.json），
  * 区别只是不起会话也能查。工作区根按 --root → DSH_OFFICE_ROOT → 从 cwd 向上找 _Control_Center 的顺序解析。
@@ -32,14 +32,14 @@ for (let i = 0; i < argv.length; i++) {
   if (a === '--all' || a === '-a') { all = true; continue; }
   if (a === '-h' || a === '--help') {
     console.log('用法：node scripts/office.mjs [查询…] [--all] [--json] [--root <工作区根>]');
-    console.log('示例：node scripts/office.mjs 全局 全局3 Mingent');
+    console.log('示例：node scripts/office.mjs 全局 全局3 Demo1');
     process.exit(0);
   }
   queries.push(a);
 }
 if (!root) root = walkUp(process.cwd());
 if (!root) {
-  console.error('找不到工作区根（没有 _Control_Center）：用 --root 指定，例如 --root E:\\_Project_Mate\\_Workspace');
+  console.error('找不到工作区根（没有 _Control_Center）：用 --root 指定，例如 --root <全局根绝对路径>');
   process.exit(2);
 }
 

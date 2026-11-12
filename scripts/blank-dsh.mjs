@@ -128,7 +128,7 @@ const calls = [
 ];
 for (const [tool, args] of calls) {
   const r = await run(tool, args, WS, 'session-blank-test', '空白验收');
-  const acceptable = !r.err || /找不到项目|日志找不到|没有可读会话|not found/i.test(r.err);
+  const acceptable = !r.err || /找不到项目|日志找不到|没有可读的会话历史|not found/i.test(r.err);
   ok(acceptable, tool + ' 可用', r.err);
 }
 

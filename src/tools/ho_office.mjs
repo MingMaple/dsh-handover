@@ -13,7 +13,7 @@ export function pmOfficeTool(env) {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', description: '要查的名字，如「全局」「全局3」「Mingent」「抢名额脚本」；多个用空格或逗号分隔；留空＝列出全部在任' },
+        query: { type: 'string', description: '要查的名字，如「全局」「全局3」「Demo1」「示例任务」；多个用空格或逗号分隔；留空＝列出全部在任' },
         json: { type: 'boolean', description: 'true 时输出机器可读 JSON（供脚本解析）' },
       },
     },

@@ -2,7 +2,7 @@
  * 工具名集中管理：ho_* 由 PREFIX 与 KEYS 生成，平级会话工具固定为 peer。
  * 工具文件一律用 nameOf、PEER_NAME 取名，index.mjs 启动时校验位置表，改名只需改这里。
  *
- * 0.9.15 起按「会话一次要做的一件事」合并（见 CHANGELOG）：
+ * 0.9.15 起按「会话一次要做的一件事」合并（见 docs/releases/0.9.15.md）：
  *   ho_status  —— 阶段、起始简报、自检、交接漂移、token 体检（原 ho_phase、ho_brief、ho_diag、ho_drift、ho_tokens）
  *   ho_backup  —— 快照与迁移包（原 ho_snapshot、ho_pack）
  *   ho_workspace —— 工作区动作，含首次建立的 init（原 ho_init）

@@ -85,7 +85,7 @@ export function nextName(store, key) {
 }
 
 /**
- * 名字 → 类别。用户给的多半是不确定的名字（全局3、全局、Mingent、赢了两次的旧叫法），
+ * 名字 → 类别。用户给的多半是不确定的名字（全局3、全局、Demo1、换了说法的旧叫法），
  * 按「类别名精确 → 去尾部编号 → 现任名 → 唯一子串」四步收敛；收敛不了就报候选，不瞎猜。
  */
 export function resolveOffice(store, query) {
@@ -183,22 +183,6 @@ export function registerHolder(ws, opts) {
   let registry = { changed: [], error: '' };
   try { registry = syncRegistry(ws, store); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
   return { key, previous, current: lin.current, registry };
-}
-
-/** 类别当前空缺（会话退役、项目暂停）。 */
-export function retireHolder(ws, key, note) {
-  const store = loadOffice(ws);
-  const lin = store.lineages[String(key || '')];
-  if (!lin) throw new Error('没有这条类别：' + key);
-  const previous = lin.current && lin.current.name ? { ...lin.current } : null;
-  if (previous) {
-    lin.history.push({ name: previous.name, sessionId: previous.sessionId, from: previous.since || '', to: stampNow(), note: note || previous.note || '' });
-  }
-  lin.current = null;
-  saveOffice(ws, store);
-  let registry = { changed: [], error: '' };
-  try { registry = syncRegistry(ws, store); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
-  return { key, previous, registry };
 }
 
 // ---------------------------------------------------------------- Registry.md 定点同步

@@ -3,7 +3,7 @@
  * 数据源与 peer-link 完全一致，不引入任何第三方依赖：
  *   ~/.dsh/storages/session_projcache/sessions/<session id>.json   水位 / 运行状态 / 项目名
  *   ~/.dsh/storages/workspace.json                                  工作区 id / 标题 / 路径
- *   ~/.dsh/sessions/<slug>/<session id>/session.v4.jsonl.zstd       会话日志（peer_peek 用）
+ *   ~/.dsh/sessions/<slug>/<session id>/session.v4.jsonl.zstd       会话日志（peer 的 peek 动作用）
  * 平级会话的判据：投影缓存里 **没有** record.rows.subagent.identity（子会话才有）。
  */
 import fs from 'node:fs';
@@ -159,7 +159,7 @@ export function stamp(ms) {
   return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-/** 一行式摘要（给 peer_list 用）。 */
+/** 一行式摘要（给 peer 的 list 动作用）。 */
 export function rowLine(sessionId, cache, fallback) {
   const pct = cache === null ? null : pressurePct(cache);
   const state = isBusy(cache) === true ? 'running' : fallback === undefined ? 'idle' : fallback;
@@ -171,14 +171,14 @@ export function rowLine(sessionId, cache, fallback) {
 
 /**
  * 会话清单：controller.list 的结果按 origin 过滤。
- * 冷会话在这一步就会被服务端从持久化里恢复成可寻址的行，所以 peer_list 本身不花 token。
+ * 冷会话在这一步就会被服务端从持久化里恢复成可寻址的行，所以 peer（action="list"）本身不花 token。
  */
 export async function sessionRows(controller, includeSubagents) {
   const value = await controller.list({}, new AbortController().signal);
   return value.items.filter((row) => includeSubagents === true || row.origin !== 'subagent');
 }
 
-// ---------------------------------------------------------------- 会话日志（peer_peek）
+// ---------------------------------------------------------------- 会话日志（peer 的 peek 动作）
 
 /** 解 zstd **多帧**日志并按行解析成事件数组；本 Node 构建没有 zstd 时返回 null。 */
 export function decodeSessionLog(file) {

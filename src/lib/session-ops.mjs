@@ -183,7 +183,7 @@ export async function sessionNew(env, args, exec) {
   const ws = env.resolveWs(exec);
   const controller = env.controller();
   // 换任（新建接班会话）先问用户。
-  if (args.confirm !== true) throw new Error('新建会话（换任）需要用户确认：先向用户说明要建接班会话并得到同意，再传 confirm=true');
+  if (args.confirm !== true) throw new Error('新建会话（换任）需要当前用户确认：先向当前用户说明要建接班会话并得到同意，再传 confirm=true');
   if (!controller) throw new Error('ctx.sessionController 不可用');
   // 名字要落成目录：先校验，别等会话建完、写角色表时才失败（那样会留下一个没有角色的会话）。
   if (args.project) assertProjectName(String(args.project));
@@ -238,10 +238,10 @@ export async function sessionNew(env, args, exec) {
     || (finalRole === 'misc' ? path.join(ws, '_Control_Center', 'rules', 'Misc_Task_Standard.md') : '');
   const text = args.message || [
     '先读交接：' + handover + '。',
-    '读毕先向用户报告，不得自行开展作业：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。待用户指派后再动手。交接无待办时如实说明，不得编造任务。',
+    '读毕先向当前用户报告，不得自行开展作业：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。待当前用户指派后再动手。交接无待办时如实说明，不得编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '全局会话 id：' : '创建者会话 id：') + meId,
-    '默认沉默：仅在三种时机各发一条 peer（action="send"）给全局：水位不低于 ' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer（action="send"），不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
+    '默认沉默：仅在三种时机各发一条 peer（action="send"）给全局：水位不低于 ' + watermark(env.cfg).warn + ' 且已写交接、需当前用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer（action="send"），不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
   ].join(NL);
   const r = await sendPrompt(env.controller(), sessionId, text, 'queue');
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');
@@ -292,7 +292,7 @@ export function promptFor(env, opts) {
   const roleText = kind === 'global'
     ? '第 ' + ordinal + ' 任全局（管理会话）'
     : kind === 'project'
-      ? '「' + project + '」项目的执行对话'
+      ? '「' + project + '」项目的执行会话'
       : kind === 'misc' ? '杂项任务会话' : '新机器接手会话';
   const scopeText = kind === 'project'
     ? '库根 Projects/' + project + ' 与 _Project_Meta/' + project
@@ -317,9 +317,9 @@ export function promptFor(env, opts) {
   if (kind === 'project' && project) {
     extraLines.push('库根：Projects/' + project + '/；元数据：_Project_Meta/' + project + '/；快照：_Temp/' + project + '/Snapshots/');
     extraLines.push('作业前读库根 SKILL.md；修改文档时另读 _Control_Center/rules/ 对应规范。');
-    extraLines.push('进入预警区后写交接；请用户在聊天框发送 /allow-succeed 授权，再由本会话调用 ho_succeed 完成换任，不向全局请求。');
+    extraLines.push('进入预警区后写交接；请当前用户在聊天框发送 /allow-succeed 授权，再由本会话调用 ho_succeed 完成换任，不向全局请求。');
   }
-  if (kind === 'misc') extraLines.push('标准见 rules/Misc_Task_Standard.md；换任须用户授权，再由本会话调用 ho_succeed。');
+  if (kind === 'misc') extraLines.push('标准见 rules/Misc_Task_Standard.md；换任须当前用户授权，再由本会话调用 ho_succeed。');
   if (kind === 'migration') extraLines.push('迁移口径见 rules/Migration_Rules.md；通过顶层闸门后再开始作业。');
   if (o.extra) extraLines.push(String(o.extra));
   return [body].concat(extraLines.length ? ['', ...extraLines] : []).join(NL);
@@ -405,7 +405,7 @@ export async function sessionOrder(env, args) {
   if (!sid) throw new Error("order 需要 session_id");
   if (order !== "handover" && order !== "compact") throw new Error("order 只能是 handover 或 compact");
   // 给别的会话下「交接、压缩」指令，也要先问用户。
-  if (args.confirm !== true) throw new Error("下交接、压缩指令需要用户确认：先说明会唤醒目标会话并让它交接或压缩，得到同意后传 confirm=true");
+  if (args.confirm !== true) throw new Error("下交接、压缩指令需要当前用户确认：先说明会唤醒目标会话并让它交接或压缩，得到同意后传 confirm=true");
   const extra = typeof args.extra === "string" ? args.extra.trim() : "";
   const hp = env.handoverForSid(sid);
   const info = env.infoOfSid(sid);
@@ -442,7 +442,7 @@ export async function sessionOrder(env, args) {
   const max = (env.cfg && env.cfg.maxCompactions) || 3;
   const n = used + 1;
   if (n > max) {
-    out.push("已压满 " + used + "/" + max + "：不再压缩。应执行 ho_succeed 自行换任（先请用户发送 /allow-succeed 授权）；全局会话自身也可用 ho_sessions(action=\"new\")。新会话读毕交接会先向你报告，等待指派。");
+    out.push("已压满 " + used + "/" + max + "：不再压缩。应执行 ho_succeed 自行换任（先请当前用户发送 /allow-succeed 授权）；全局会话自身也可用 ho_sessions(action=\"new\")。新会话读毕交接会先向你报告，等待指派。");
     return out.join(NL);
   }
   const recentSec = st && st.lastSummaryMs ? (Date.now() - st.lastSummaryMs) / 1000 : null;
@@ -454,15 +454,15 @@ export async function sessionOrder(env, args) {
   const cs = checkConsent(sid);
   if (!cs.ok) {
     out.push("拒绝排压缩：" + cs.reason + "。");
-    out.push("请用户到设置页的 dsh-handover 中，点「压缩授权」的「允许该会话压缩一次」（5 分钟内有效），再重下这条指令。");
+    out.push("请当前用户到设置页的 dsh-handover 中，点「压缩授权」的「允许该会话压缩一次」（5 分钟内有效），再重下这条指令。");
     return out.join(NL);
   }
   const resume = args.resume === "continue" ? "continue" : "wait";
   env.schedule(sid, n, { resume });
-  out.push("用户已授权（" + (cs.atText || '') + " 点击，剩 " + Math.round((cs.leftMs || 0) / 1000) + " 秒）。");
+  out.push("当前用户已授权（" + (cs.atText || '') + " 点击，剩 " + Math.round((cs.leftMs || 0) / 1000) + " 秒）。");
   out.push("已登记压缩（它自己第 " + n + "/" + max + " 次）：等它空闲后执行。");
   if (resume === "wait") {
-    out.push("去向：wait（缺省）—— 压缩后不再唤醒它，等用户派新任务，或由新会话接手。");
+    out.push("去向：wait（缺省）—— 压缩后不再唤醒它，等当前用户派新任务，或由新会话接手。");
   } else {
     out.push("去向：continue —— 压缩后它会自动收到**它自己的**续跑消息（带它自己的交接路径）。");
   }

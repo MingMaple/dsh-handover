@@ -62,7 +62,6 @@ function libraryRoots(ws) {
   return out;
 }
 
-/** 同步复核：返回 { libraries, total, missing, verdict, ok }。 */
 /** 插件内置的 Charter 骨架（dist/templates/Charter.skeleton.md）；工作区那份只是覆盖。 */
 function bundledCharter() {
   try {
@@ -73,6 +72,7 @@ function bundledCharter() {
   }
 }
 
+/** 同步复核：返回 { libraries, total, missing, verdict, ok }。 */
 export function syncCheck(ws) {
   const charter = charterPath(ws);
   // 口径：**插件自带的这套默认规则才是本体**，工作区里的同名文件是「本地化覆盖」。
@@ -123,7 +123,8 @@ export function syncCheck(ws) {
   };
 }
 
-export function renderSyncCheck(res) {  const out = [];
+export function renderSyncCheck(res) {
+  const out = [];
   if (res.error) { out.push(res.error + '：' + res.path); return out; }
   out.push('通用约束条同步复核  库数 ' + res.total + '  正文 ' + res.bodyLines + ' 行  来源 §8.1.1.4' + (res.builtin ? '（工作区没有 Workspace_Charter.md，用插件内置口径）' : ''));
   for (const r of res.libraries) {

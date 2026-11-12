@@ -114,7 +114,7 @@ export async function runSuccession(env, exec, opts) {
 
   // 2. 用户授权：AI 不能自行批准。
   const selfId = env.selfId(exec);
-  if (!selfId) return reject('拿不到当前会话 id，无法校验授权。');
+  if (!selfId) return reject('无法获取当前会话 id，无法校验授权。');
   const cs = checkConsent(selfId, 'succeed');
   if (!cs.ok) {
     return reject([
@@ -195,7 +195,7 @@ export async function runSuccession(env, exec, opts) {
     const base = promptFor(env, { ws, kind, project, task, title: name, sessionId: '', globalSessionId: globalId, extra: '' });
     prompt = base + NL + NL + [
       '接任交接：' + handoverFile,
-      '先读这份交接再动手；读毕向用户报告当前停在哪一步、交接列有哪些待办，然后等待用户指派任务。',
+      '先读这份交接再动手；读毕向当前用户报告当前停在哪一步、交接列有哪些待办，然后等待当前用户指派任务。',
     ].join(NL);
   } catch (e) {
     return reject('启动提示词生成失败：' + msgOf(e));
@@ -255,6 +255,6 @@ export async function runSuccession(env, exec, opts) {
     ? '，Registry.md 已同步在役列' : ''));
   out.push('启动提示词：' + (delivered ? '已投递' : '未送达：' + deliveryError + '。会话已建，可用 peer（action="send"）补投'));
   out.push('交接登记：' + appendNote);
-  out.push('本会话到此停止，等待用户在新会话中派任务。');
+  out.push('本会话到此停止，等待当前用户在新会话中派任务。');
   return out.join(NL);
 }

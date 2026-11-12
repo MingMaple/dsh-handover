@@ -1,4 +1,4 @@
-/** DSH 会话日志：定位 + 多帧 zstd 解码（与 handover_check.mjs 同一做法）。 */
+/** DSH 会话日志：定位 + 多帧 zstd 解码（坏帧跳过）。 */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

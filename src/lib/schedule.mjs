@@ -28,7 +28,6 @@ export function createScheduler(deps) {
   const timers = new Map();
   let disposed = false;
 
-  // 用全局定时器：cordis 的 ctx.setTimeout 绑定调用方 fiber，工具调用返回后可能被一并释放
   // 用全局定时器：cordis 的 ctx.setTimeout 绑定调用方 fiber，工具调用返回后可能被一并释放。
   function later(fn, ms) {
     return setTimeout(fn, ms);
@@ -182,7 +181,7 @@ export function createScheduler(deps) {
     pending.delete(sessionId);
     note("checkpoint failed " + sessionId + ": " + msg);
     try {
-      promptSelf(sessionId, "【dsh-handover】压缩未执行：" + msg + "。历史没有被压缩，交接已就绪；请把这条消息原样告诉用户，不要自行重试压缩。").catch(() => {});
+      promptSelf(sessionId, "【dsh-handover】压缩未执行：" + msg + "。历史没有被压缩，交接已就绪；请把这条消息原样告诉当前用户，不要自行重试压缩。").catch(() => {});
     } catch { /* ignore */ }
   }
 

@@ -64,7 +64,6 @@ window.__ModuleLoader__.load({
       document.head.appendChild(tag);
     }
 
-    /** 依次尝试候选地址取状态；全失败时抛出带全部原因的错。 */
     /** 带超时的 fetch（旧通道回退用；没有超时就会永远「读取中」）。 */
     async function fetchWithTimeout(url, opts, ms) {
       const ac = new AbortController();
@@ -76,6 +75,7 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 依次尝试候选地址取状态；全失败时抛出带全部原因的错。 */
     async function fetchStatus() {
       const reasons = [];
       for (const url of ENDPOINTS) {
@@ -267,7 +267,7 @@ window.__ModuleLoader__.load({
       const [globalMsg, setGlobalMsg] = React.useState("");
       const [globalBad, setGlobalBad] = React.useState(false);
       const [working, setWorking] = React.useState(false);
-      // 追加系统提示词
+      // 全局前置提示词
       const [extra, setExtra] = React.useState("");
       const [extraMsg, setExtraMsg] = React.useState("");
       const [extraBad, setExtraBad] = React.useState(false);
@@ -621,7 +621,7 @@ window.__ModuleLoader__.load({
       const consentRows = Array.isArray(data.consent) ? data.consent : [];
       sections.push(card("压缩授权",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "压缩须由你授权：点「允许」后，该会话可在 5 分钟内压缩一次，用后失效。也可在对话中发送 /allow-compact。"),
+          h("div", { className: "dshh-muted" }, "压缩须由你授权：点「允许」后，该会话可在 5 分钟内压缩一次，用后失效。也可在会话中发送 /allow-compact。"),
           h("div", { className: "dshh-pick" },
             byActivity.slice(0, 10).map((r, i) => h("button", {
               className: "dshh-btn",
@@ -631,7 +631,7 @@ window.__ModuleLoader__.load({
               title: r.title || r.sid,
               onClick: () => doGrantSid(r.sid, "compact"),
             }, "允许 " + shortSid(r.sid)))),
-          h("div", { className: "dshh-muted" }, "换任由在任会话自己执行，同样须由你授权：点「允许换任」后，该会话可在 5 分钟内换任一次。也可在对话中发送 /allow-succeed。"),
+          h("div", { className: "dshh-muted" }, "换任由在任会话自己执行，同样须由你授权：点「允许换任」后，该会话可在 5 分钟内换任一次。也可在会话中发送 /allow-succeed。"),
           h("div", { className: "dshh-pick" },
             byActivity.slice(0, 10).map((r, i) => h("button", {
               className: "dshh-btn",

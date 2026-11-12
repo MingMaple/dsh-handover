@@ -42,6 +42,7 @@ import { routeWorkspace } from './lib/workspace.mjs';
 import { stampTz } from './lib/brief.mjs';
 import { grantConsent, activeConsentsFor } from './lib/consent.mjs';
 import { docmapBlock } from './lib/docmap.mjs';
+import { moveStatus } from './lib/mover.mjs';
 
 export const name = 'dsh-handover';
 // 必需服务（名字已核对：dsh-agent→agents、dsh-compaction→compaction、dsh-api-session-controller→sessionController）。
@@ -545,7 +546,7 @@ export function apply(ctx, config) {
   }
 
   // ---------------- 会话守卫（Charter §7.2.4）：新建会话与设定角色仅属全局；
-  // 会话之间允许直接 peer（action=send）对话（不必经全局转述），directPeer=off 时退回「只能向全局报告」的旧口径。
+  // 会话之间允许直接 peer（action=send）通信（不必经全局转述），directPeer=off 时退回「只能向全局报告」的旧口径。
   if (cfg.wakeAuthority !== 'off' && typeof ctx.tools.guard === 'function') {
     try {
       ctx.tools.guard((exec) => {
@@ -567,7 +568,7 @@ export function apply(ctx, config) {
         };
         if (info.role === 'global') return mk(true, 'global/' + info.source);
         if (action === 'send') {
-          // 会话之间可直接对话；向全局报告也在此路。directPeer=off 才退回旧口径。
+          // 会话之间可直接通信；向全局报告也在此路。directPeer=off 才退回旧口径。
           const target = String(args.session_id || '');
           let t = null;
           try { t = target ? infoFor(target, {}) : null; } catch { t = null; }
@@ -703,7 +704,7 @@ export function apply(ctx, config) {
     const allowCommands = [
       {
         name: 'allow-compact',
-        description: '允许本会话压缩一次（用户授权，5 分钟有效；可带会话短号授权别的会话）',
+        description: '允许本会话压缩一次（当前用户授权，5 分钟有效；可带会话短号授权别的会话）',
         hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话',
         kind: 'compact',
         note: '聊天页命令 /allow-compact',
@@ -711,7 +712,7 @@ export function apply(ctx, config) {
       },
       {
         name: 'allow-succeed',
-        description: '允许本会话换任一次（用户授权，5 分钟有效；可带会话短号授权别的会话）',
+        description: '允许本会话换任一次（当前用户授权，5 分钟有效；可带会话短号授权别的会话）',
         hint: '可留空＝本会话；填 8 位短号或 session-id 则授权那个会话',
         kind: 'succeed',
         note: '聊天页命令 /allow-succeed',
@@ -728,7 +729,7 @@ export function apply(ctx, config) {
           handler: ({ agent, rawInput }) => {
             const arg = String(rawInput || '').trim();
             const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
-            if (!sid) return { kind: 'error', text: '拿不到会话 id：请写成 /' + cmd.name + ' session-xxxx' };
+            if (!sid) return { kind: 'error', text: '无法获取会话 id：请写成 /' + cmd.name + ' session-xxxx' };
             const g = grantConsent(sid, cmd.note, cmd.kind);
             // 授权一到就重装提示段：目标会话下一轮（哪怕现在空闲）就能看见那一行。
             try { env.refreshPromptFor(sid); } catch { /* 装配失败不影响授权本身 */ }

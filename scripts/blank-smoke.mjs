@@ -198,6 +198,23 @@ ok(fs.existsSync(path.join(root, '_Control_Center', 'rules', 'Workspace_Charter.
 ok(fs.existsSync(path.join(root, '_Control_Center', 'templates', 'Prompt_Templates.md')), '建全局根：提示词模板应在');
 ok(fs.existsSync(path.join(root, 'Projects')) && fs.existsSync(path.join(root, '_Project_Meta')), '建全局根：项目目录应在');
 
+// 通用规范库：init 要铺出目录与说明；既有工作区靠 scaffold 补齐，且不得覆盖已有内容。
+if (root) {
+  const standardsDir = path.join(root, '_Control_Center', 'standards');
+  const standardsReadme = path.join(standardsDir, 'README.md');
+  ok(fs.existsSync(standardsReadme), '建全局根：通用规范库的说明应在', standardsReadme);
+  const scafMod = await import(pathToFileURL(path.join(dist, 'lib', 'scaffold.mjs')).href);
+  const keep = '# 本库自己的说明' + '\n';
+  fs.writeFileSync(standardsReadme, keep, 'utf8');
+  fs.rmSync(path.join(root, '_Control_Center', 'tools'), { recursive: true, force: true });
+  const sc1 = scafMod.ensureScaffold(root);
+  ok(sc1.ok && sc1.created.indexOf('_Control_Center/tools') !== -1, 'scaffold 应补齐缺失的目录', JSON.stringify(sc1.created));
+  ok(fs.readFileSync(standardsReadme, 'utf8') === keep, 'scaffold 不得覆盖已有文件');
+  const sc2 = scafMod.ensureScaffold(root);
+  ok(sc2.ok && sc2.created.length === 0 && sc2.written.length === 0, 'scaffold 二次执行应无改动', JSON.stringify([sc2.created.length, sc2.written.length]));
+  ok(scafMod.ensureScaffold(path.join(BLANK, 'nowhere-at-all')).ok === false, 'scaffold 对不存在的根应报错');
+}
+
 // cwd 已失效（旧路径被删）时，根解析必须退回登记表，不能在幽灵路径上重建 _Control_Center
 if (root) {
   const regDir0 = path.join(BLANK, '.dsh', 'storages');
@@ -285,7 +302,7 @@ const { resolveConfig } = await import(DIST('lib/config.mjs'));
 const WS = path.join(BLANK, 'ws');
 fs.mkdirSync(path.join(WS, '_Control_Center'), { recursive: true });
 fs.mkdirSync(path.join(WS, 'Projects', 'Demo', 'Demo库'), { recursive: true });
-fs.mkdirSync(path.join(WS, '_Misc', 'tasks', '抢名额'), { recursive: true });
+fs.mkdirSync(path.join(WS, '_Misc', 'tasks', '示例任务'), { recursive: true });
 
 // ---------- 在任复用：工具层前置校验（任何写入之前返回） ----------
 {
@@ -337,11 +354,11 @@ const rTitle = resolveRole({ sessionId: 'session-t1', title: '全局9' });
 ok(rTitle.role === 'global' && rTitle.source === 'title', '角色判定：标题含「全局」→ global', JSON.stringify(rTitle));
 const rCwd = resolveRole({ sessionId: 'session-t2', title: 'Demo1', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库') });
 ok(rCwd.role === 'project' && rCwd.project === 'Demo', '角色判定：cwd 在 Projects/<名>/ → project', JSON.stringify(rCwd));
-const rMisc = resolveRole({ sessionId: 'session-t3', title: '杂项1', cwd: path.join(WS, '_Misc', 'tasks', '抢名额') });
-ok(rMisc.role === 'misc' && rMisc.task === '抢名额', '角色判定：cwd 在 _Misc/tasks/<任务>/ → misc', JSON.stringify(rMisc));
-const rPrompt = resolveRole({ sessionId: 'session-t4', title: '', firstPrompt: '先看 ' + path.join(WS, 'Projects', 'Study', 'Study库') + ' 里的内容' });
-ok(rPrompt.role === 'project' && rPrompt.project === 'Study', '角色判定：首条提示里的 Projects/<名> → project', JSON.stringify(rPrompt));
-const rPlain = resolveRole({ sessionId: 'session-t5', title: '随便', cwd: '/tmp' });
+const rMisc = resolveRole({ sessionId: 'session-t3', title: '杂项1', cwd: path.join(WS, '_Misc', 'tasks', '示例任务') });
+ok(rMisc.role === 'misc' && rMisc.task === '示例任务', '角色判定：cwd 在 _Misc/tasks/<任务>/ → misc', JSON.stringify(rMisc));
+const rPrompt = resolveRole({ sessionId: 'session-t4', title: '', firstPrompt: '先看 ' + path.join(WS, 'Projects', 'Demo2', 'Demo2库') + ' 里的内容' });
+ok(rPrompt.role === 'project' && rPrompt.project === 'Demo2', '角色判定：首条提示里的 Projects/<名> → project', JSON.stringify(rPrompt));
+const rPlain = resolveRole({ sessionId: 'session-t5', title: '未命名', cwd: '/tmp' });
 ok(rPlain.role === 'plain', '角色判定：都不中 → plain（普通会话）', JSON.stringify(rPlain));
 
 writeRole({}, 'session-t6', { role: 'misc', task: 'X', source: 'user' });
@@ -351,7 +368,7 @@ ok(readRoles({}).sessions['session-t6'] && readRoles({}).sessions['session-t6'].
 
 // 回归锁：首条提示里的 `Projects/**` 通配曾被当成项目名 `**、_Project_Meta`，
 // 于是交接路径、备份目录、归档目录全落在这个 Windows 非法名字上（实测四类报错）。
-const rGlob = resolveRole({ sessionId: 'session-glob-prompt', title: 'Android AI Agent 3', cwd: 'C:/Users/x/.dsh/profiles/desktop', firstPrompt: '- 动 _Control_Center/**、Projects/**、_Project_Meta/** 前先问用户。' });
+const rGlob = resolveRole({ sessionId: 'session-glob-prompt', title: '普通会话', cwd: 'C:/Users/x/.dsh/profiles/desktop', firstPrompt: '- 动 _Control_Center/**、Projects/**、_Project_Meta/** 前先问用户。' });
 ok(rGlob.role === 'plain', '首条提示里的 Projects/** 通配不得被当成项目名', JSON.stringify(rGlob));
 const hpBad = handoverPathFor(WS, { role: 'project', project: '**、_Project_Meta' });
 ok(hpBad.path === null && /不合法/.test(String(hpBad.reason || '')), '非法项目名不得拼出交接路径', JSON.stringify(hpBad));
@@ -366,8 +383,8 @@ const hpG = handoverPathFor(WS, { role: 'global' });
 ok(/Global_Handover\.md$/.test(hpG.path), '全局交接路径', hpG.path);
 const hpP = handoverPathFor(WS, { role: 'project', project: 'Demo' });
 ok(/_Project_Meta/.test(hpP.path) && /Demo/.test(hpP.path) && /Handover\.md$/.test(hpP.path), '项目交接路径应落 _Project_Meta/<项目>/Handover.md', hpP.path);
-const hpM = handoverPathFor(WS, { role: 'misc', task: '抢名额' });
-ok(/_Misc/.test(hpM.path) && /抢名额/.test(hpM.path) && /Handover\.md$/.test(hpM.path), '杂项交接路径应落 _Misc/tasks/<任务>/Handover.md', hpM.path);
+const hpM = handoverPathFor(WS, { role: 'misc', task: '示例任务' });
+ok(/_Misc/.test(hpM.path) && /示例任务/.test(hpM.path) && /Handover\.md$/.test(hpM.path), '杂项交接路径应落 _Misc/tasks/<任务>/Handover.md', hpM.path);
 const hpU = handoverPathFor(WS, { role: 'plain' });
 ok(hpU.path === null && !!hpU.reason, '普通会话不得给出交接路径（不退回全局）', JSON.stringify(hpU));
 
@@ -521,8 +538,8 @@ ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办�
   const globName = io.archiveFileName('E:/ws/_Control_Center/records/Global_Handover.md', stamp);
   ok(globName === 'Global_Handover_' + stamp + '.md', '全局归档名应为 Global_Handover_<时间>.md', globName);
   const ad = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
-  const miscDir = ad.archiveDirFor(WS, { role: 'misc', task: '抢名额' }).replace(/\\/g, '/');
-  ok(miscDir.endsWith('_Misc/tasks/抢名额/_archive'), '杂项归档目录应在任务目录内（_archive）', miscDir);
+  const miscDir = ad.archiveDirFor(WS, { role: 'misc', task: '示例任务' }).replace(/\\/g, '/');
+  ok(miscDir.endsWith('_Misc/tasks/示例任务/_archive'), '杂项归档目录应在任务目录内（_archive）', miscDir);
   const handTool = reg.tools.find((t) => t.name === 'ho_handover');
   ok(!!handTool, '应注册 ho_handover');
   if (handTool) {
@@ -566,6 +583,7 @@ ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明
 ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务达成');
 ok(secNorm.indexOf('可直接 peer') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
 ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
+ok(secNorm.indexOf('_Control_Center/standards/') !== -1, '项目提示段应给出通用规范的查找范围', secNorm.slice(-240));
 console.log('项目提示段 token 实测：' + budget.estimateTokens(calls.sections[0].text) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
 ok(calls.sections[0].text.indexOf('子智能体') === -1, '项目段不得携带子智能体派发纪律（不属于本插件）');
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
@@ -628,6 +646,7 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   const g0 = String(gCalls.sections[0].text);
   ok(g0.indexOf('ho_backup') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
   ok(g0.indexOf('ho_charter(doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
+  ok(g0.indexOf('_Control_Center/standards/') !== -1, '全局段应给出通用规范的查找范围', g0.slice(-240));
   const rm = fs.readFileSync(path.join(dist, 'templates', 'Runtime_Manual.md'), 'utf8');
   ok(rm.indexOf('## 11. 首次安装') !== -1 && rm.indexOf('## 12. 提示词预算') !== -1, '手册应含首次安装与提示词预算两节');
   ok(rm.indexOf('续用优先') !== -1, '手册 §5 应含子智能体续用纪律');
@@ -655,14 +674,14 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
     ok(uiHits.length === 0, '界面文案应一律使用标准书面语（词表与符号扫描）', fmt(uiHits));
     ok(docHits.length === 0, '文档文案应一律使用标准书面语（词表与符号扫描）', fmt(docHits));
   }
-  ok(opsSrc.indexOf('不得自行开展作业') !== -1 && opsSrc.indexOf('待用户指派') !== -1, '启动提示词应先报告再待指派');
+  ok(opsSrc.indexOf('不得自行开展作业') !== -1 && opsSrc.indexOf('待当前用户指派') !== -1, '启动提示词应先报告再待指派');
 }
 
 // 按步路径（0.2.2 起）：创建即按角色登记提示段；工具可见性由每步条件算，不再调用 restrict。
 const unrCalls = { restrict: 0, section: null };
 const unrAgent = {
   id: 'session-unr',
-  session: { header: { id: 'session-unr', title: '随便', cwd: '/tmp/x' } },
+  session: { header: { id: 'session-unr', title: '未命名', cwd: '/tmp/x' } },
   ctx: {
     tools: { restrict: () => { unrCalls.restrict++; return () => { }; } },
     systemPrompt: { section: (o) => { unrCalls.section = o; return () => { }; } },
@@ -733,7 +752,7 @@ const oBad = await orderCall({ action: 'order', order: 'wave', session_id: 'sess
 ok(/只能是 handover 或 compact/.test(oBad), 'order 取值应受限', oBad);
 // 交接／压缩指令必须先问用户
 const oNoConfirm = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole' });
-ok(/需要用户确认/.test(oNoConfirm), 'order 未确认应拒绝', oNoConfirm);
+ok(/需要当前用户确认/.test(oNoConfirm), 'order 未确认应拒绝', oNoConfirm);
 const oUnr = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole', confirm: true });
 ok(/没有交接路径/.test(oUnr), '未设角色的会话不能下交接指令（避免退回全局交接）', oUnr);
 const oCold = await orderCall({ action: 'order', order: 'compact', session_id: 'session-r1', confirm: true });
@@ -759,7 +778,7 @@ if (typeof reg.guardFn === 'function') {
   ok(gPeer === undefined, '会话之间可直接对话，不必经全局转述', String(gPeer));
   const gNew = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Demo库' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(typeof gNew === 'string' && /仅属全局/.test(gNew), '项目会话不得建平级会话', String(gNew));
-  const gMisc = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '抢名额'), '杂项1'));
+  const gMisc = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '示例任务'), '杂项1'));
   ok(gMisc === undefined, '杂项会话自建 Misc 换任应放行', String(gMisc));
 }
 
@@ -799,19 +818,19 @@ const FIXTURE = {
   guide: payload ? payload.guide : { intro: ['说明'], situations: [{ when: 'w', say: 's', what: 'x' }], groups: [{ title: 'g', tools: [['ho_x', 'y']] }], rules: ['r'] },
   extraPrompt: '',
   extraPromptEnabled: false,
-  gate: { ok: true, verdict: '全部落位。', total: 1, bodyLines: 24, libraries: [{ name: 'Mine', ok: true, titleOk: true, waterOk: true, missing: 0, lines: 24 }] },
-  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Mine', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], fail: 0 },
+  gate: { ok: true, verdict: '全部落位。', total: 1, bodyLines: 24, libraries: [{ name: 'Demo1', ok: true, titleOk: true, waterOk: true, missing: 0, lines: 24 }] },
+  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], fail: 0 },
   sessions: {
     rows: [
-      { sid: 'session-y', project: 'Mine', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', project: 'Study', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-y', project: 'Demo1', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-l', project: 'Demo2', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
     ],
     all: [
       { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', pct: 40, state: 'idle', active: true, seen: '2026-11-07 21:00 +0800' },
-      { sid: 'session-y', title: 'Mine1', role: 'project', roleLabel: '项目', source: 'store', project: 'Mine', task: '', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', title: 'Study1', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Study', task: '', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
-    notify: [{ sid: 'session-y', project: 'Mine' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
+    notify: [{ sid: 'session-y', project: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
     verdict: '2 个会话已进预警区（≥32%），应先收齐交接再换会话',
   },
   consent: [{ sessionId: 'session-y', leftMs: 120000 }],
@@ -915,9 +934,9 @@ ok(migrateDetail && migrateDetail.type === 'details' && migrateDetail.props.open
 ok(text.indexOf('缺 ## 1. 正在做的事') !== -1 && text.indexOf('强制项') === -1, '交接体检的问题列不应带括注说明');
 
 // 会话水位只列项目会话，并给出本轮需通知。
-ok(text.indexOf('Mine') !== -1 && text.indexOf('34.6%') !== -1, '会话水位应列出项目会话与水位');
+ok(text.indexOf('Demo1') !== -1 && text.indexOf('34.6%') !== -1, '会话水位应列出项目会话与水位');
 ok(text.indexOf('本轮需通知') !== -1, '水位段应给出本轮需通知');
-ok(text.indexOf('Study1') !== -1, '角色表应列出平级会话');
+ok(text.indexOf('Demo2') !== -1, '角色表应列出平级会话');
 
 // 版式约束：无进度条、无图形结论符号。
 ok(treeJson.indexOf('dshh-bar') === -1, '不得使用进度条');
@@ -1099,26 +1118,26 @@ ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会�
   {
     let createdOut = '';
     try {
-      const r = await sessT.execute({ action: 'new', confirm: true, title: '杂项2', kind: 'misc', role: 'misc', task: '抢名额', workspace: 'ws-misc' }, makerExec2);
+      const r = await sessT.execute({ action: 'new', confirm: true, title: '杂项2', kind: 'misc', role: 'misc', task: '示例任务', workspace: 'ws-misc' }, makerExec2);
       createdOut = String((r && r.text) || '');
     } catch (e) { createdOut = 'ERR ' + String(e && e.message ? e.message : e); }
     const p = seen.prompts[seen.prompts.length - 1] || '';
     ok(/已建会话/.test(createdOut), '新建杂项会话应成功', createdOut.slice(0, 200));
-    ok(/_Misc[\\/]tasks[\\/]抢名额[\\/]Handover\.md/.test(p), '新建杂项会话的启动提示应读本任务交接', p.slice(0, 200));
+    ok(/_Misc[\\/]tasks[\\/]示例任务[\\/]Handover\.md/.test(p), '新建杂项会话的启动提示应读本任务交接', p.slice(0, 200));
     ok(p.indexOf('Global_Handover') === -1, '新建杂项会话的启动提示不得指向全局交接', p.slice(0, 200));
   }
   {
     const { runSuccession } = await import(DIST('lib/succession.mjs'));
     const { grantConsent } = await import(DIST('lib/consent.mjs'));
-    const miscHandover = path.join(miscWs, 'tasks', '抢名额', 'Handover.md');
+    const miscHandover = path.join(miscWs, 'tasks', '示例任务', 'Handover.md');
     fs.mkdirSync(path.dirname(miscHandover), { recursive: true });
-    fs.writeFileSync(miscHandover, '# 抢名额交接' + '\n\n## 下一步\n- 等用户指派下一步\n', 'utf8');
+    fs.writeFileSync(miscHandover, '# 示例任务交接' + '\n\n## 下一步\n- 等用户指派下一步\n', 'utf8');
     registerHolder(WS, { kind: 'global', name: '全局1', sessionId: 'session-global-cur', workspace: WS });
-    registerHolder(WS, { kind: 'misc', task: '抢名额', name: '杂项1', sessionId: 'session-misc-old', workspace: miscWs });
+    registerHolder(WS, { kind: 'misc', task: '示例任务', name: '杂项1', sessionId: 'session-misc-old', workspace: miscWs });
     grantConsent('session-misc-old', 'blank-smoke', 'succeed');
     const succOut = await runSuccession({
       cfg: resolveConfig({ workspaceRoot: WS }),
-      roleOf: () => ({ role: 'misc', task: '抢名额', project: '' }),
+      roleOf: () => ({ role: 'misc', task: '示例任务', project: '' }),
       selfId: () => 'session-misc-old',
       selfCwd: () => miscWs,
       handoverFor: () => ({ path: miscHandover, reason: '' }),
@@ -1132,7 +1151,7 @@ ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会�
     const madeArgs = seen.creates[seen.creates.length - 1] || {};
     ok(madeArgs.workspaceId === 'ws-misc', '杂项接任者应落回本会话所在的工作区', JSON.stringify(madeArgs));
     const p = seen.prompts[seen.prompts.length - 1] || '';
-    ok(new RegExp('.{0,1}抢名额[\\\\/]Handover\\.md').test(p), '接任提示末尾应带本任务交接路径', p.slice(-320));
+    ok(new RegExp('.{0,1}示例任务[\\\\/]Handover\\.md').test(p), '接任提示末尾应带本任务交接路径', p.slice(-320));
     ok(p.indexOf('session-global-cur') !== -1, '接任提示的「全局 id」应是现任全局', p.slice(-320));
     ok(p.indexOf('session-misc-old') === -1, '接任提示不得把退休前任当全局', p.slice(-320));
   }

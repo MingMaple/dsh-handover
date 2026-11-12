@@ -96,7 +96,7 @@ export function checkConsent(sessionId, kind) {
     return {
       ok: false,
       kind: k,
-      reason: k === 'succeed' ? '用户还没有授权换任（聊天页命令 /allow-succeed）' : '用户还没有在设置页点「允许压缩」',
+      reason: k === 'succeed' ? '当前用户还没有授权换任（聊天页命令 /allow-succeed）' : '当前用户还没有在设置页点「允许压缩」',
     };
   }
   return { ok: true, kind: k, until: hit.until, leftMs: hit.until - now, atText: hit.atText || '' };
@@ -160,7 +160,7 @@ function untilText(ms) {
 
 /** 提示段用：每种有效授权一行，极短；无授权返回空数组（不占位）。 */
 export function consentPromptLines(rows) {
-  return (rows || []).map((r) => '用户已授权' + KIND_LABEL[r.kind] + '，至 ' + untilText(r.until) + '（一次性，用后失效）。');
+  return (rows || []).map((r) => '当前用户已授权' + KIND_LABEL[r.kind] + '，至 ' + untilText(r.until) + '（一次性，用后失效）。');
 }
 
 /** ho_status 用：一行状态，压缩与换任各说一句，未授权的写「无授权」。 */

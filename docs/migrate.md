@@ -21,7 +21,7 @@ ho_workspace(action="move-probe", to="<目标父目录>")
 ## 2. 复制并校验
 
 ```text
-ho_workspace(action="move")
+ho_workspace(action="move", to="<目标父目录>")
 ```
 
 复制到新位置，两边各算一遍逐文件 sha256 清单并比对。不一致时不生成切换脚本，报告差异文件。
@@ -32,7 +32,7 @@ ho_workspace(action="move")
 ho_workspace(action="move-switch")
 ```
 
-生成并派出后台助手，等你完全退出 DSH 后自动完成：旧目录改名为 `<旧>.old-<时间戳>`，再在原位置建 junction 指向新位置，并校验指向。日志写在 `~/.dsh/storages/dsh-handover.move.log`。
+生成并派出后台助手，待插件使用者完全退出 DSH 后自动完成：旧目录改名为 `<旧>.old-<时间戳>`，再在原位置建 junction 指向新位置，并校验指向。日志写在 `~/.dsh/storages/dsh-handover.move.log`。
 
 也可以双击生成的 `dsh-handover.move.cmd`。切换后原路径成为链接，工作区登记、profile 与会话工作目录都无需修改。
 

@@ -157,7 +157,7 @@ function diagText(env, state, exec) {
   }
   out.push('工作区    ' + ws + (wsOk
     ? '  已接入'
-    : '  — 未接入（未找到 _Control_Center）：让用户走设置页「首次安装」，或本会话直接 ho_workspace(action="init", parent="<目录>", register=true)'));
+    : '  — 未接入（未找到 _Control_Center）：让当前用户走设置页「首次安装」，或本会话直接 ho_workspace(action="init", parent="<目录>", register=true)'));
   try {
     const mv = typeof env.moveInfo === 'function' ? env.moveInfo() : null;
     if (mv) out.push('迁移      ' + mv.phase + ' · ' + mv.src + (mv.dst ? '  →  ' + mv.dst : ''));

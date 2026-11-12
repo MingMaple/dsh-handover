@@ -18,17 +18,17 @@ export function pmCheckpointTool(env) {
       properties: {
         handover_text: { type: 'string', description: '要写入的交接正文；不给则要求磁盘上已有合格交接' },
         handover_path: { type: 'string', description: '覆盖交接路径（演练用）' },
-        resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向：continue（默认）按交接 §2 继续；wait 表示本轮任务已收尾，压缩后不唤醒，等用户派新任务' },
+        resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向：continue（默认）按交接 §2 继续；wait 表示本轮任务已收尾，压缩后不唤醒，等当前用户派新任务' },
         at_risk: { type: 'boolean', description: '当前处在关键步骤：为 true 时，水位在提醒线～交接线之间只提醒、不压缩（过交接线仍会压）' },
         force: { type: 'boolean', description: '忽略关键步骤判定，直接排压缩' },
-        confirm: { type: 'boolean', description: '判定为「可压缩」后须经用户同意才传 true；还需用户在设置页点「允许压缩」（5 分钟一次性授权），否则不排压缩' },
+        confirm: { type: 'boolean', description: '判定为「可压缩」后须经当前用户同意才传 true；还需当前用户在设置页点「允许压缩」（5 分钟一次性授权），否则不排压缩' },
       },
     },
     output: textOutput(),
     async execute(args, exec) {
       const ws = env.resolveWs(exec);
       const meId = env.selfId(exec);
-      if (!meId) throw new Error("拿不到本会话 id，无法调度压缩");
+      if (!meId) throw new Error("无法获取本会话 id，无法调度压缩");
       const info = env.roleOf(exec);
       const target = args.handover_path
         ? { path: args.handover_path, kind: info.role === 'project' ? 'project' : info.role === 'misc' ? 'misc' : 'global' }
@@ -46,6 +46,7 @@ export function pmCheckpointTool(env) {
       const self = env.selfPct(meId);
       const ratio = self === null ? null : self / 100;
       const out = [];
+      const ratioText = ratio === null ? '读不到' : (Math.round(ratio * 1000) / 10).toFixed(1) + '%';
       const recentSec = st && st.lastSummaryMs ? (Date.now() - st.lastSummaryMs) / 1000 : null;
       if (recentSec !== null && recentSec < 120 && args.force !== true) {
         out.push("拒绝排压缩：" + Math.round(recentSec) + " 秒前刚完成一次压缩（日志里有 compaction/summary），避免重复排程。");
@@ -69,15 +70,15 @@ export function pmCheckpointTool(env) {
         return { text: out.join(NL) };
       }
       if (adv.action === "continue" && args.force !== true) {
-        out.push("水位未到线（" + (ratio === null ? "读不到" : (Math.round(ratio * 1000) / 10).toFixed(1) + "%") + "）：不压。");
+        out.push("水位未到线（" + ratioText + "）：不压。");
         out.push("需要强制演练可加 force=true。");
         return { text: out.join(NL) };
       }
       // 判断逻辑不动；只有判定可以压缩之后，才停下来问用户。
       if (args.confirm !== true) {
         out.push('判定：可以压缩（' + adv.reason + '）。');
-        out.push('水位 ' + (ratio === null ? '读不到' : (Math.round(ratio * 1000) / 10).toFixed(1) + '%') + '，已压缩 ' + count.used + '/3。');
-        out.push('压缩会丢历史并自动续跑 —— 先问用户「要压缩吗？」，回答同意后再调 ho_checkpoint(confirm=true)；不同意就保持原样。');
+        out.push('水位 ' + ratioText + '，已压缩 ' + count.used + '/3。');
+        out.push('压缩会丢历史并自动续跑 —— 先问当前用户「要压缩吗？」，回答同意后再调 ho_checkpoint(confirm=true)；不同意就保持原样。');
         return { text: out.join(NL) };
       }
       let wrote = null;
@@ -106,7 +107,7 @@ export function pmCheckpointTool(env) {
       if (!cs.ok) {
         out.push('交接已写好，但**没有排压缩**：' + cs.reason + '。');
         out.push('授权方式（任选其一）：① 在聊天框发送 /allow-compact（最快，仅授权本会话）；② 在设置页的 dsh-handover 中点击「压缩授权」一次。授权有效期 5 分钟，其后须再调用 ho_checkpoint(confirm=true)。');
-        out.push('如此设限的原因：压缩会丢弃历史，而参数由 AI 自行填写——惟有用户在设置页当面点击的那一次，方视为同意。');
+        out.push('如此设限的原因：压缩会丢弃历史，而参数由 AI 自行填写——惟有当前用户在设置页当面点击的那一次，方视为同意。');
         return { text: out.join(NL) };
       }
       // 成本提示：低于交接线强行压缩会白付一次摘要，且本轮前缀缓存失效。
@@ -118,7 +119,7 @@ export function pmCheckpointTool(env) {
       const n = count.used + 1;
       const resume = args.resume === 'wait' ? 'wait' : 'continue';
       env.schedule(meId, n, { resume });
-      out.push('用户已授权（' + cs.atText + ' 点击，剩 ' + Math.round(cs.leftMs / 1000) + ' 秒）。');
+      out.push('当前用户已授权（' + cs.atText + ' 点击，剩 ' + Math.round(cs.leftMs / 1000) + ' 秒）。');
       out.push("已登记压缩（第 " + n + "/" + env.cfg.maxCompactions + " 次）。本回合结束后执行。");
       if (resume === 'wait') {
         out.push("去向：wait —— 压缩完成后不会唤醒本会话，等你派新任务。");

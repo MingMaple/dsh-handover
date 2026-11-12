@@ -3,7 +3,7 @@
  *   list 会话一览（只读缓存，不激活任何会话）
  *   status 单会话详情
  *   send 投一条消息（唯一会消耗对方 token 的动作）
- *   peek 读取目标会话近期对话（内容进本会话上下文）
+ *   peek 读取目标会话近期会话历史（内容进本会话上下文）
  *   rename 只改显示标题
  *   new 新建平级会话
  * 原 peer_list、peer_status、peer_send、peer_peek、peer_rename、peer_new 合并于此。
@@ -102,7 +102,7 @@ async function peekText(args) {
   if (events === null) return 'this Node build has no zstd support; cannot read the session log';
   const items = conversation(events, limit);
   const head = 'session ' + sid + '  |  最近 ' + String(items.length) + ' 条  |  ' + file;
-  if (items.length === 0) return head + NL + '(没有可读的对话内容)';
+  if (items.length === 0) return head + NL + '(没有可读的会话历史)';
   const body = items.map((it) => {
     const one = it.text.replace(/\s+/g, ' ').trim();
     const cut = one.length > 400 ? one.slice(0, 400) + ' …' : one;
@@ -171,7 +171,7 @@ export function pmPeerTool(env) {
   return {
     name: PEER_NAME,
     description:
-      '平级会话：action=list 一览、status 详情、send 投消息（耗对方 token）、peek 读近期对话（耗本会话 token）、rename 改标题、new 新建。list、peek、rename 与 new 仅全局会话可用。',
+      '平级会话：action=list 一览、status 详情、send 投消息（耗对方 token）、peek 读近期会话历史（耗本会话 token）、rename 改标题、new 新建。list、peek、rename 与 new 仅全局会话可用。',
     parameters: {
       type: 'object',
       additionalProperties: false,

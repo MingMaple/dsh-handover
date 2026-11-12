@@ -5,7 +5,7 @@ import path from 'node:path';
 import { textOutput } from '../lib/output.mjs';
 import { NL } from '../lib/text.mjs';
 import { workspaceRows } from '../lib/registry.mjs';
-import { createGlobalWorkspace } from '../lib/scaffold.mjs';
+import { createGlobalWorkspace, ensureScaffold } from '../lib/scaffold.mjs';
 import { probeMove, startMove, moveStatus, cleanupOld, stageSwitch, repairLink, stageRetarget } from '../lib/mover.mjs';
 import { currentRoot } from '../lib/api.mjs';
 
@@ -37,7 +37,7 @@ export function pmWorkspaceTool(env) {
   return {
     name: nameOf('workspace'),
     description:
-      '工作区：init 首次建全局体系、list、create、delete、move-* 搬整个全局根目录。删除只删注册。',
+      '工作区：init 首次建全局体系、scaffold 补齐缺失目录与说明、list、create、delete、move-* 搬整个全局根目录。删除只删注册。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -45,8 +45,8 @@ export function pmWorkspaceTool(env) {
       properties: {
         action: {
           type: 'string',
-          enum: ['init', 'list', 'create', 'delete', 'move-probe', 'move', 'move-switch', 'move-status', 'move-retarget', 'move-repair', 'move-cleanup'],
-          description: 'init / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup',
+          enum: ['init', 'scaffold', 'list', 'create', 'delete', 'move-probe', 'move', 'move-switch', 'move-status', 'move-retarget', 'move-repair', 'move-cleanup'],
+          description: 'init / scaffold / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup',
         },
         parent: { type: 'string', description: 'init 用：目标父目录绝对路径（不存在会创建）；全局根建在它里面' },
         name: { type: 'string', description: 'init 用：全局根目录名，默认 _Workspace' },
@@ -113,6 +113,23 @@ export function pmWorkspaceTool(env) {
           out.push('  新建一个标题含「全局」的会话，闸门、交接体检、会话水位即接入。');
         }
         out.push('（也可以在设置页的 dsh-handover 中完成「首次安装」，效果相同。）');
+        return { text: out.join(NL) };
+      }
+
+      if (action === 'scaffold') {
+        const root = currentRoot(env);
+        if (!root) throw new Error('未找到全局根（工作区未接入）');
+        const r = ensureScaffold(root);
+        if (!r.ok) {
+          out.push('未补齐：' + r.error);
+          out.push('根目录：' + root);
+          return { text: out.join(NL) };
+        }
+        out.push('已核对文件体系：' + root);
+        out.push('  新建目录 ' + r.created.length + ' 个：' + (r.created.length ? r.created.join('、') : '（无缺失）'));
+        out.push('  新建文件 ' + r.written.length + ' 个：' + (r.written.length ? r.written.join('、') : '（无缺失）'));
+        out.push('  已存在未覆盖 ' + r.skipped.length + ' 个' + (r.skipped.length ? '：' + r.skipped.join('、') : ''));
+        out.push('只新建、不覆盖、不删：已有文件的内容一字未改。');
         return { text: out.join(NL) };
       }
 
@@ -266,7 +283,7 @@ export function pmWorkspaceTool(env) {
         return { text: out.join(NL) };
       }
 
-      throw new Error('action 只能是 list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup');
+      throw new Error('action 只能是 init / scaffold / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup');
     },
   };
 }

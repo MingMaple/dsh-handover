@@ -2,7 +2,6 @@
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
-import path from 'node:path';
 import { scanSessions } from '../lib/sessions.mjs';
 import { syncCheck } from '../lib/gates.mjs';
 import { stamp } from '../lib/brief.mjs';
@@ -85,7 +84,7 @@ export function pmSessionsTool(env) {
         sessionId: { type: 'string', description: 'prompt：新会话自己的 id' },
         globalSessionId: { type: 'string', description: 'prompt：现任全局 id' },
         extra: { type: 'string', description: 'prompt 附加一句；order 时作为「全局附加」拼进指令' },
-        confirm: { type: 'boolean', description: 'new、order 需要用户明确同意后传 true；否则只报错、不做任何事' },
+        confirm: { type: 'boolean', description: 'new、order 需要当前用户明确同意后传 true；否则只报错、不做任何事' },
       },
     },
     output: textOutput(),

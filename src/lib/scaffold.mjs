@@ -20,6 +20,7 @@ const DEFAULT_ROOT_NAME = '_Workspace';
 const DIRS = [
   '_Control_Center/records',
   '_Control_Center/rules',
+  '_Control_Center/standards',
   '_Control_Center/templates',
   '_Control_Center/tools',
   '_Control_Center/user',
@@ -35,6 +36,8 @@ const FILES = [
   ['_Control_Center/records/Global_Changelog.md', 'Changelog.skeleton.md'],
   ['_Control_Center/rules/Workspace_Charter.md', 'Charter.skeleton.md'],
   ['_Control_Center/templates/Prompt_Templates.md', 'Prompt_Templates.md'],
+  // 通用规范：一条规范一个子目录，各角色会话都可读，只有全局写。这里先铺说明，规范正文由会话按需建立。
+  ['_Control_Center/standards/README.md', 'standards/README.md'],
   // 规则类：工作区没有这份时，ho_charter 会退回同名内置版本；这里先铺一份可改的默认口径。
   ['_Control_Center/rules/Handover_Rules.md', 'rules/Handover_Rules.md'],
   ['_Control_Center/rules/Migration_Rules.md', 'rules/Migration_Rules.md'],
@@ -60,6 +63,41 @@ function normalizeParent(input) {
     catch (e) { return { error: '建不出这个目录：' + abs + '（' + String(e && e.message ? e.message : e) + '）', path: abs }; }
   }
   return { parent: abs, createdParent: !st };
+}
+
+/**
+ * 在既有的全局根上补齐缺失的目录与说明文件：只新建，不覆盖，不删任何东西。
+ * 用途：插件新增了目录（例如通用规范库）后，已部署的工作区靠它一次补齐。
+ */
+export function ensureScaffold(root) {
+  const abs = String(root || '');
+  let st = null;
+  try { st = fs.statSync(abs); } catch { st = null; }
+  if (!st || !st.isDirectory()) return { ok: false, error: '全局根不存在或不是目录：' + (abs || '（空）') };
+
+  const created = [];
+  const written = [];
+  const skipped = [];
+  for (const d of DIRS) {
+    const p = path.join(abs, d.split('/').join(path.sep));
+    if (!fs.existsSync(p)) created.push(d);
+    try {
+      fs.mkdirSync(p, { recursive: true });
+    } catch (e) {
+      return { ok: false, error: '建目录失败：' + d + '（' + String(e && e.message ? e.message : e) + '）', created, written, skipped };
+    }
+  }
+  for (const [rel, tpl] of FILES) {
+    const dst = path.join(abs, rel.split('/').join(path.sep));
+    if (fs.existsSync(dst)) { skipped.push(rel); continue; }
+    try {
+      fs.writeFileSync(dst, template(tpl), 'utf8');
+      written.push(rel);
+    } catch (e) {
+      return { ok: false, error: '写文件失败（' + rel + '）：' + (e && e.message ? e.message : e), created, written, skipped };
+    }
+  }
+  return { ok: true, created, written, skipped };
 }
 
 /**
@@ -89,30 +127,14 @@ export function createGlobalWorkspace(parentInput, opts) {
     existed = true;
   }
 
-  const created = [];
   try {
     fs.mkdirSync(root, { recursive: true });
-    for (const d of DIRS) {
-      const p = path.join(root, d.split('/').join(path.sep));
-      fs.mkdirSync(p, { recursive: true });
-      created.push(d);
-    }
   } catch (e) {
     return { ok: false, root, error: '建目录失败：' + (e && e.message ? e.message : e) };
   }
 
-  const written = [];
-  const skipped = [];
-  for (const [rel, tpl] of FILES) {
-    const dst = path.join(root, rel.split('/').join(path.sep));
-    if (fs.existsSync(dst)) { skipped.push(rel); continue; }
-    try {
-      fs.writeFileSync(dst, template(tpl), 'utf8');
-      written.push(rel);
-    } catch (e) {
-      return { ok: false, root, created, written, error: '写文件失败（' + rel + '）：' + (e && e.message ? e.message : e) };
-    }
-  }
-
-  return { ok: true, root, existed, created, written, skipped };
+  // 铺目录与说明文件走同一套清单：init 与 scaffold 两处不得各写一份。
+  const sc = ensureScaffold(root);
+  if (!sc.ok) return { ok: false, root, created: sc.created, written: sc.written, error: sc.error };
+  return { ok: true, root, existed, created: sc.created, written: sc.written, skipped: sc.skipped };
 }
