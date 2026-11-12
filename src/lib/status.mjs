@@ -1,11 +1,9 @@
-﻿/**
+/**
  * 设置页用的状态快照（只读）：插件自身状态 ＋ 闸门 ＋ 交接体检 ＋ 会话水位 ＋ 最近一次守卫判定。
  * 全部读本地文件，不唤醒任何会话、不花任何会话的 token。
  * 任何一段出错都只让该段带 error 字段，不让整页 500。
  */
-import fs from 'node:fs';
 import path from 'node:path';
-import { isDir } from './text.mjs';
 import { syncCheck } from './gates.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
 import { scanSessions } from './sessions.mjs';
@@ -15,20 +13,35 @@ import { buildGuide, SETUP_STEPS } from './guide.mjs';
 import { readRoles, resolveRole, ROLE_LABEL, sessionMeta } from './role.mjs';
 import { listConsent } from './consent.mjs';
 import { listProfiles } from './profile.mjs';
+import { loadOffice, readRegistryProjects } from './office.mjs';
 
 function guard(fn, fallback) {
   try { return fn(); } catch (e) { return { ...fallback, error: String(e && e.message ? e.message : e) }; }
 }
 
-/** 项目交接体检：_Project_Meta/<项目>/Handover.md。 */
+/**
+ * 在任会话集合：Office.json 每条血脉的现任 sessionId。
+ * 读不到登记表时返回空集，调用方据此退化为「不过滤」，不把页面清空。
+ */
+function onDutySet(ws) {
+  const set = new Set();
+  try {
+    const office = loadOffice(ws);
+    for (const key of Object.keys(office.lineages || {})) {
+      const cur = office.lineages[key] && office.lineages[key].current;
+      if (cur && cur.sessionId) set.add(String(cur.sessionId));
+    }
+  } catch { /* 无登记表：按空集处理 */ }
+  return set;
+}
+
+/** 项目交接体检：只查 Registry.md 已登记的项目，未登记的旧目录不在此列。 */
 function lintProjects(ws) {
   const out = [];
-  let dirs = [];
-  try { dirs = fs.readdirSync(path.join(ws, '_Project_Meta')).sort(); } catch { return out; }
-  for (const name of dirs) {
-    const dir = path.join(ws, '_Project_Meta', name);
-    try { if (!isDir(dir)) continue; } catch { continue; }
-    const r = lintProject(path.join(dir, 'Handover.md'));
+  let names = [];
+  try { names = readRegistryProjects(ws); } catch { return out; }
+  for (const name of names) {
+    const r = lintProject(path.join(ws, '_Project_Meta', name, 'Handover.md'));
     out.push({ name, verdict: r.verdict, reasons: Array.isArray(r.reasons) ? r.reasons.slice(0, 5) : [] });
   }
   return out;
@@ -39,6 +52,8 @@ export function buildStatus(env, extra) {
   const ws = routeWorkspace(env);
   const found = hasCenter(ws);
   const warn = Math.round((env.cfg.warnRatio || 0.32) * 100);
+  const duty = onDutySet(ws);
+  const onDuty = (sid) => (duty.size ? duty.has(String(sid || '')) : true);
   const out = {
     generatedAt: stampTz(Date.now()),
     plugin: {
@@ -68,7 +83,7 @@ export function buildStatus(env, extra) {
       }
       return map;
     }, {}),
-    consent: guard(() => listConsent(), []),
+    consent: guard(() => listConsent().map((r) => ({ ...r, onduty: onDuty(r.sessionId) })), []),
     profiles: guard(() => listProfiles(ws), []),
     guide: guard(() => buildGuide(env.cfg), { intro: [], situations: [], groups: [], rules: [] }),
     gate: null,
@@ -140,21 +155,23 @@ export function buildStatus(env, extra) {
         pct: r.pct,
         state: r.state,
         active: r.mtime >= scan.cutoffMs,
+        onduty: onDuty(r.sid),
         seen: stampTz(r.mtime),
       };
     });
     return {
-      rows: scan.rows.slice(0, 60).map((r) => {
+      rows: scan.rows.filter((r) => onDuty(r.sid)).slice(0, 60).map((r) => {
         const meta = sessionMeta(r.sid);
         const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
         return {
           sid: r.sid, project: r.project, pct: r.pct, state: r.state,
           role: info.role, roleLabel: ROLE_LABEL[info.role] || info.role,
-          active: r.mtime >= scan.cutoffMs, seen: stampTz(r.mtime),
+          active: r.mtime >= scan.cutoffMs, onduty: onDuty(r.sid), seen: stampTz(r.mtime),
         };
       }),
       all,
-      notify: scan.notify.map((r) => ({ sid: r.sid, project: r.project })),
+      notify: scan.notify.filter((r) => onDuty(r.sid)).map((r) => ({ sid: r.sid, project: r.project })),
+      onduty: duty.size,
       hot: scan.hot.length,
       unknown: scan.unknown.length,
       cutoff: stampTz(scan.cutoffMs),
@@ -171,7 +188,5 @@ export function buildStatus(env, extra) {
     return all.filter((r) => r && r.role === 'global').length;
   }, 0);
 
-  if (out.gate && !out.gate.ok && !out.gate.error) out.notes.push('通用约束条闸门未过：向对应项目会话派发，全局不代写项目库内文件。');
-  if (out.handover && out.handover.fail) out.notes.push(out.handover.fail + ' 个项目交接体检不合格，交接前必须先补。');
   return out;
 }

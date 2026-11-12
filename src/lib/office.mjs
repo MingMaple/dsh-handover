@@ -185,6 +185,30 @@ export function registerHolder(ws, opts) {
   return { key, previous, current: lin.current, registry };
 }
 
+/**
+ * 读 Registry.md「项目清单」里的项目名（按表内顺序）。
+ * 只认那一张表：表头、分隔行与空行一律跳过；读不到文件时返回空数组。
+ * 设置页的交接体检以它为准，避免把未登记的旧目录当成项目。
+ */
+export function readRegistryProjects(ws) {
+  const file = path.join(String(ws || ''), '_Project_Meta', 'Registry.md');
+  let text = '';
+  try { text = readUtf8(file); } catch { return []; }
+  text = String(text).replace(/^\uFEFF/, '');
+  const names = [];
+  let inTable = false;
+  for (const line of text.split(NL)) {
+    if (line.startsWith('## ')) { inTable = line.indexOf('项目清单') !== -1; continue; }
+    if (!inTable || !line.startsWith('|')) continue;
+    const cells = splitCells(line);
+    if (cells.length < 4) continue;
+    const name = String(cells[1] || '').trim();
+    if (!name || name === '项目名' || /^[-:\s]+$/.test(name)) continue;
+    names.push(name);
+  }
+  return names;
+}
+
 // ---------------------------------------------------------------- Registry.md 定点同步
 
 function splitCells(line) {

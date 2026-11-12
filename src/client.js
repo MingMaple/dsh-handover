@@ -557,7 +557,7 @@ window.__ModuleLoader__.load({
       const head = h("div", { className: "dshh-head" },
         h("h2", { className: "dshh-title" }, "dsh-handover"),
         h("button", { className: "dshh-btn", onClick: load, disabled: busy, type: "button" }, busy ? (data ? "正在刷新" : "正在读取") : "刷新"),
-        h("span", { className: "dshh-muted" }, "数据通道 " + (channel || carrierKind()) + (diag.lastError ? "；上次失败 " + diag.lastError.slice(0, 90) : "")),
+        diag.lastError ? h("span", { className: "dshh-bad" }, "读取失败（通道 " + (channel || carrierKind()) + "）：" + diag.lastError.slice(0, 90)) : null,
         data ? h("span", { className: "dshh-muted" }, "读数时间 " + data.generatedAt) : null);
 
       if (err && !data) {
@@ -590,10 +590,12 @@ window.__ModuleLoader__.load({
       if (notReady) {
         const msg = setupMsg ? h("div", { className: setupBad ? "dshh-bad" : "dshh-ok" }, setupMsg) : null;
         const steps = (setup && setup.steps) || [];
+        const notes = Array.isArray(data.notes) ? data.notes : [];
         sections.push(card("首次安装",
           h("div", null,
-            h("div", { className: "dshh-muted" }, "插件已加载，工具与本页可用；闸门、交接体检与会话水位在接入工作区后显示。"),
+            h("div", { className: "dshh-muted" }, "本页与工具已可用；接入工作区后显示闸门、交接体检与会话水位。"),
             h("ol", { className: "dshh-list" }, steps.map((s, i) => h("li", { key: i }, s))),
+            notes.length ? h("ul", { className: "dshh-list" }, notes.map((n, i) => h("li", { key: i }, n))) : null,
             h("input", {
               className: "dshh-input",
               type: "text",
@@ -617,50 +619,57 @@ window.__ModuleLoader__.load({
             globalMsg ? h("div", { className: globalBad ? "dshh-bad" : "dshh-ok" }, globalMsg) : null)));
       }
 
-      // 二、压缩与换任授权：唯一合法的「用户同意」入口，置顶。
-      const consentRows = Array.isArray(data.consent) ? data.consent : [];
-      sections.push(card("压缩授权",
-        h("div", null,
-          h("div", { className: "dshh-muted" }, "压缩须由你授权：点「允许」后，该会话可在 5 分钟内压缩一次，用后失效。也可在会话中发送 /allow-compact。"),
-          h("div", { className: "dshh-pick" },
-            byActivity.slice(0, 10).map((r, i) => h("button", {
-              className: "dshh-btn",
-              type: "button",
-              key: i,
-              disabled: working,
-              title: r.title || r.sid,
-              onClick: () => doGrantSid(r.sid, "compact"),
-            }, "允许 " + shortSid(r.sid)))),
-          h("div", { className: "dshh-muted" }, "换任由在任会话自己执行，同样须由你授权：点「允许换任」后，该会话可在 5 分钟内换任一次。也可在会话中发送 /allow-succeed。"),
-          h("div", { className: "dshh-pick" },
-            byActivity.slice(0, 10).map((r, i) => h("button", {
-              className: "dshh-btn",
-              type: "button",
-              key: i,
-              disabled: working,
-              title: r.title || r.sid,
-              onClick: () => doGrantSid(r.sid, "succeed"),
-            }, "允许换任 " + shortSid(r.sid)))),
-          h("div", { className: "dshh-row" },
-            h("input", {
-              className: "dshh-inputSm",
-              type: "text",
-              value: csSid,
-              placeholder: "或输入会话 id 或 8 位短号",
-              onChange: (e) => setCsSid(e.target.value),
-            }),
-            h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权"),
-            h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("succeed") }, "授权换任")),
-          consentRows.length
-            ? h("table", { className: "dshh-table" },
-              h("colgroup", null, h("col", { style: { width: "62%" } }), h("col", { style: { width: "18%" } }), h("col", { style: { width: "20%" } })),
-              h("thead", null, h("tr", null, h("th", null, "已授权会话"), h("th", null, "剩余"), h("th", null, "操作"))),
-              h("tbody", null, consentRows.map((r, i) => h("tr", { key: i },
-                h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId) + (r.kind === "succeed" ? " · 换任" : " · 压缩")),
-                h("td", { className: "dshh-num" }, Math.round((r.leftMs || 0) / 1000) + " 秒"),
-                h("td", null, h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => doRevoke(r.sessionId, r.kind) }, "撤销"))))))
-            : h("div", { className: "dshh-muted" }, "当前无有效授权。"),
-          csMsg ? h("div", { className: "dshh-ok" }, csMsg) : null)));
+      // 二、授权：唯一合法的「用户同意」入口，置顶；只列在任会话，超过 5 个折叠。
+      const consentRows = (Array.isArray(data.consent) ? data.consent : []).filter((r) => r.onduty !== false);
+      const dutyRows = byActivity.filter((r) => r.onduty !== false);
+      const grantRow = (kind) => (r, i) => h("tr", { key: i },
+        h("td", null, r.title || "（无标题）"),
+        h("td", { className: "dshh-code dshh-num" }, shortSid(r.sid)),
+        h("td", null, h("button", {
+          className: "dshh-btn",
+          type: "button",
+          disabled: working,
+          title: r.sid,
+          onClick: () => doGrantSid(r.sid, kind),
+        }, kind === "succeed" ? "授权换任" : "授权压缩")));
+      const grantTable = (kind) => h(Folded, {
+        rows: dutyRows,
+        pageSize: 5,
+        cols: ["会话", "短号", "操作"],
+        widths: ["58%", "12%", "30%"],
+        render: grantRow(kind),
+      });
+      const authKids = [];
+      if (dutyRows.length) {
+        authKids.push(h("div", { className: "dshh-muted" }, "点「授权压缩」后，该会话 5 分钟内可压缩一次，用后失效；也可在会话中发送 /allow-compact。"));
+        authKids.push(grantTable("compact"));
+        authKids.push(h("div", { className: "dshh-muted" }, "换任同样须你授权：5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
+        authKids.push(grantTable("succeed"));
+      } else {
+        authKids.push(h("div", { className: "dshh-muted" }, "暂无可点选的在任会话；可在下方直接填会话 id 授权。"));
+      }
+      authKids.push(h("div", { className: "dshh-row" },
+        h("input", {
+          className: "dshh-inputSm",
+          type: "text",
+          value: csSid,
+          placeholder: "或输入会话 id 或 8 位短号",
+          onChange: (e) => setCsSid(e.target.value),
+        }),
+        h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权压缩"),
+        h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("succeed") }, "授权换任")));
+      if (consentRows.length) {
+        authKids.push(h("div", { className: "dshh-ok" }, "有授权"));
+        authKids.push(h("table", { className: "dshh-table" },
+          h("colgroup", null, h("col", { style: { width: "62%" } }), h("col", { style: { width: "18%" } }), h("col", { style: { width: "20%" } })),
+          h("thead", null, h("tr", null, h("th", null, "已授权会话"), h("th", null, "剩余"), h("th", null, "操作"))),
+          h("tbody", null, consentRows.map((r, i) => h("tr", { key: i },
+            h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId) + (r.kind === "succeed" ? " · 换任" : " · 压缩")),
+            h("td", { className: "dshh-num" }, Math.round((r.leftMs || 0) / 1000) + " 秒"),
+            h("td", null, h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => doRevoke(r.sessionId, r.kind) }, "撤销")))))));
+      }
+      if (csMsg) authKids.push(h("div", { className: "dshh-ok" }, csMsg));
+      sections.push(card("授权", h("div", null, authKids)));
 
       // 三、移动全局根目录：常态折叠为一行状态。
       {
@@ -675,7 +684,7 @@ window.__ModuleLoader__.load({
         const attention = !!(st && (st.linkBroken || st.srcExists === false || st.phase === "verified" || st.phase === "partial" || (st.retarget && st.retarget.needed) || (st.phase === "switched" && (st.olds || []).length)));
         const stateText = st ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（" + st.dst + "）" : "") : "正在读取迁移状态";
         const kids = [];
-        kids.push(h("div", { className: "dshh-muted" }, "复制并校验通过后才能切换；切换只改名与建立链接，不改动文件内容。"));
+        kids.push(h("div", { className: "dshh-muted" }, "切换只改名与建链接，不改动文件内容。"));
         if (st && st.phase && st.phase.indexOf("switched") === 0) {
           kids.push(h("div", { className: "dshh-muted" }, "原路径现为链接，请勿删除；若已删除，用「重建链接」恢复。"));
         }
@@ -698,7 +707,7 @@ window.__ModuleLoader__.load({
             h("li", null, "回到本页，状态应为「已切换，原路径为链接」。")));
           kids.push(h("div", { className: "dshh-row" },
             h("button", { className: "dshh-btn", type: "button", disabled: mvBusy, onClick: doSwitch }, mvBusy ? "正在准备" : "准备切换（退出 DSH 后自动完成）")));
-          kids.push(h("div", { className: "dshh-muted" }, "日志末行出现「切换完成」即为成功；失败会写明原因且不改动文件，可重试。助手未运行时手工执行：" + ((st.script && st.script.helper) || "")));
+          kids.push(h("div", { className: "dshh-muted" }, "助手未运行时手工执行：" + ((st.script && st.script.helper) || "")));
         }
         if (st && st.retarget && st.retarget.needed) {
           kids.push(h("div", { className: "dshh-warn" }, "DSH 登记仍指向旧路径：" + st.retarget.total + " 处，涉及 " + st.retarget.files.length + " 个文件。"));
@@ -792,7 +801,7 @@ window.__ModuleLoader__.load({
       };
       sections.push(card("会话角色",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "选定角色后点「设置角色」，当场生效；按钮随即变为「通知该会话」，再点一次即向它发送整理指令并唤醒一轮。"),
+          h("div", { className: "dshh-muted" }, "点「设置角色」当场生效；按钮转为「通知该会话」后，再点一次会投递整理指令并唤醒它一轮。"),
           byActivity.length
             ? h(Folded, {
               rows: byActivity,
@@ -807,7 +816,7 @@ window.__ModuleLoader__.load({
       // 五、全局前置提示词：默认折叠，只显示已保存字数。
       sections.push(card("全局前置提示词",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "只注入你填写的内容，不含插件约束；对全部会话生效，位置在工具说明之前。留空保存即不注册提示段。"),
+          h("div", { className: "dshh-muted" }, "只注入你填写的内容，不含插件约束；对全部会话生效，留空保存即不注册提示段。"),
           h("details", null,
             h("summary", { className: "dshh-sum" }, "已保存 " + (extra ? extra.length : 0) + " 字符，点击编辑"),
             h("textarea", {
@@ -822,9 +831,9 @@ window.__ModuleLoader__.load({
               h("span", { className: "dshh-muted" }, extra.length + " 字符")),
             extraMsg ? h("div", { className: extraBad ? "dshh-bad" : "dshh-ok" }, extraMsg) : null))));
 
-      // 六、会话水位：只读数据区从这里开始。
+      // 六、会话水位：只读数据区从这里开始；只列在任的项目会话。
       if (ss) {
-        const byRecent = (ss.rows || []).slice().sort((a, b) => String(b.seen || "").localeCompare(String(a.seen || "")));
+        const byRecent = (ss.rows || []).filter((r) => r.onduty !== false).slice().sort((a, b) => String(b.seen || "").localeCompare(String(a.seen || "")));
         const waterRow = (r, i) => h("tr", { key: i },
           h("td", null, r.project),
           h("td", { className: "dshh-code dshh-num" }, shortSid(r.sid)),
@@ -846,7 +855,7 @@ window.__ModuleLoader__.load({
                 widths: ["22%", "13%", "9%", "9%", "9%", "38%"],
                 render: waterRow,
               })
-              : h("div", { className: "dshh-muted" }, "暂无可显示的项目会话。"))));
+              : h("div", { className: "dshh-muted" }, "暂无可显示的在任项目会话。"))));
       }
 
       // 七、通用约束条闸门
@@ -879,9 +888,11 @@ window.__ModuleLoader__.load({
           h("div", null,
             h("div", null, "全局 Global_Handover.md：", ho.global.verdict === "通过" ? verdict("通过", true) : verdict(ho.global.verdict, false),
               (ho.global.reasons || []).length ? h("span", { className: "dshh-muted" }, (ho.global.reasons || []).map(cleanReason).filter(Boolean).join("；")) : null),
-            h("table", { className: "dshh-table" },
-              h("thead", null, h("tr", null, h("th", null, "项目"), h("th", null, "结论"), h("th", null, "问题"))),
-              h("tbody", null, prows)))));
+            prows.length
+              ? h("table", { className: "dshh-table" },
+                h("thead", null, h("tr", null, h("th", null, "项目"), h("th", null, "结论"), h("th", null, "问题"))),
+                h("tbody", null, prows))
+              : h("div", { className: "dshh-muted" }, "暂无已登记项目。"))));
       }
 
       // 九、插件信息
@@ -890,26 +901,21 @@ window.__ModuleLoader__.load({
         ["工具数", String(p.tools)],
         ["压缩调度器", p.scheduler],
         ["注入项", (p.inject || []).join("、")],
-        ["初始化", (p.initErrors && p.initErrors.length) ? h("span", { className: "dshh-bad" }, p.initErrors.join("；")) : verdict("无错误", true)],
+        ["初始化", (p.initErrors && p.initErrors.length) ? h("span", { className: "dshh-bad" }, p.initErrors.join("；")) : verdict("正常", true)],
         ["工作区", ws.found ? h("span", { className: "dshh-code" }, ws.root) : verdict("未接入（未找到 _Control_Center）", false)],
       ])));
 
-      // 十、会话间通信守卫
+      // 十、最近一次会话间通信判定：只有存在判定时才出现。
       const g = data.guardLast;
-      sections.push(card("会话间通信守卫",
-        g
-          ? kv([
-            ["结论", g.allow ? verdict("允许", true) : verdict("拒绝", false)],
-            ["依据", g.source + (g.title ? "；会话标题 " + g.title : "")],
-            ["会话", h("span", { className: "dshh-code" }, g.sid || "-")],
-          ])
-          : h("div", { className: "dshh-muted" }, "本进程尚未收到会话间通信请求，暂无判定。")));
-
-      if ((data.notes || []).length) {
-        sections.push(card("待处理", h("ul", { className: "dshh-list" }, data.notes.map((n, i) => h("li", { key: i }, n)))));
+      if (g) {
+        sections.push(card("最近一次会话间通信判定", kv([
+          ["结论", g.allow ? verdict("允许", true) : verdict("拒绝", false)],
+          ["依据", g.source + (g.title ? "；会话标题 " + g.title : "")],
+          ["会话", h("span", { className: "dshh-code" }, g.sid || "-")],
+        ])));
       }
 
-      // 末、使用说明：参考性质，放最后，默认折叠。
+      // 末、工具明细与使用说明：参考性质，放最后，默认折叠。
       const gd = data.guide;
       if (gd) {
         const sit = (gd.situations || []).map((r, i) => h("tr", { key: i },
@@ -921,16 +927,22 @@ window.__ModuleLoader__.load({
           h("table", { className: "dshh-table" }, h("tbody", null, (gr.tools || []).map((t, j) => h("tr", { key: j },
             h("td", { className: "dshh-code" }, t[0]),
             h("td", { className: "dshh-muted" }, t[1])))))));
+        const toolCount = (gd.groups || []).reduce((a, gr) => a + ((gr.tools || []).length), 0);
+        if (toolCount) {
+          sections.push(card("工具明细",
+            h("details", null,
+              h("summary", { className: "dshh-sum" }, "共 " + toolCount + " 个工具，点击展开"),
+              h("div", { className: "dshh-wrap" }, groups))));
+        }
         sections.push(card("使用说明",
           h("details", null,
-            h("summary", { className: "dshh-sum" }, "交互方式、常见请求、工具清单与约定"),
+            h("summary", { className: "dshh-sum" }, "交互方式、常见请求与约定"),
             h("div", { className: "dshh-wrap" },
               (gd.intro || []).map((t, i) => h("div", { key: i }, t)),
               h("div", { className: "dshh-sub" }, "常见请求与对应动作"),
               h("table", { className: "dshh-table" },
                 h("thead", null, h("tr", null, h("th", null, "时机"), h("th", null, "可以这样说"), h("th", null, "插件会执行的动作"))),
                 h("tbody", null, sit)),
-              groups,
               h("div", { className: "dshh-sub" }, "约定"),
               h("ul", { className: "dshh-list" }, (gd.rules || []).map((t, i) => h("li", { key: i }, t)))))));
       }

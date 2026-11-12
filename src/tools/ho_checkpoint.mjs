@@ -21,7 +21,7 @@ export function pmCheckpointTool(env) {
         resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向：continue（默认）按交接 §2 继续；wait 表示本轮任务已收尾，压缩后不唤醒，等当前用户派新任务' },
         at_risk: { type: 'boolean', description: '当前处在关键步骤：为 true 时，水位在提醒线～交接线之间只提醒、不压缩（过交接线仍会压）' },
         force: { type: 'boolean', description: '忽略关键步骤判定，直接排压缩' },
-        confirm: { type: 'boolean', description: '判定为「可压缩」后须经当前用户同意才传 true；还需当前用户在设置页点「允许压缩」（5 分钟一次性授权），否则不排压缩' },
+        confirm: { type: 'boolean', description: '判定为「可压缩」后须经当前用户同意才传 true；还需当前用户在设置页点「授权压缩」（5 分钟一次性授权），否则不排压缩' },
       },
     },
     output: textOutput(),

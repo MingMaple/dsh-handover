@@ -121,7 +121,7 @@ export async function runSuccession(env, exec, opts) {
       cs.reason + '。',
       '授权方式（任选其一）：',
       '  ① 在聊天框发送 /allow-succeed（最快，仅授权本会话）；',
-      '  ② 在设置页的 dsh-handover 中点击「换任授权」的「允许换任」。',
+      '  ② 在设置页的 dsh-handover 中，点「授权」里的「授权换任」。',
       '授权有效期 5 分钟，用后失效。',
     ].join(NL));
   }

@@ -153,7 +153,7 @@ if (payload) {
   ok(payload.workspace && payload.workspace.found === false, '空白 HOME 下应判定为没找到工作区', JSON.stringify(payload.workspace));
   ok(Array.isArray(payload.notes) && payload.notes.length > 0, '没找到工作区时应给中文提示');
   ok(payload.guide && Array.isArray(payload.guide.situations) && payload.guide.situations.length >= 8, 'payload 应带「怎么用」的时机表');
-  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 14, '使用说明里应列全 14 个工具', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
+  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 14, '工具明细里应列全 14 个工具', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
   ok(payload.plugin.initErrors && payload.plugin.initErrors.length === 0, '初始化错误应为空', JSON.stringify(payload.plugin.initErrors));
 }
 ok((await call('GET', '/dsh-handover/nope.json')).code === 404, '未知路径应 404');
@@ -807,7 +807,7 @@ const plainRows = [];
 for (let i = 0; i < 10; i++) {
   plainRows.push({
     sid: 'session-p' + i, title: '旧会话' + i, role: 'plain', roleLabel: '普通', source: 'none',
-    project: '', task: '', pct: i + 1, state: 'idle', active: false, seen: '2026-10-21 20:19 +0800',
+    project: '', task: '', pct: i + 1, state: 'idle', active: false, onduty: false, seen: '2026-10-21 20:19 +0800',
   });
 }
 
@@ -824,18 +824,18 @@ const FIXTURE = {
   handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], fail: 0 },
   sessions: {
     rows: [
-      { sid: 'session-y', project: 'Demo1', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', project: 'Demo2', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-y', project: 'Demo1', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-l', project: 'Demo2', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ],
     all: [
-      { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', pct: 40, state: 'idle', active: true, seen: '2026-11-07 21:00 +0800' },
-      { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', pct: 34.6, state: 'idle', active: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', pct: 50, state: 'idle', active: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
+      { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
     notify: [{ sid: 'session-y', project: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
     verdict: '2 个会话已进预警区（≥32%），应先收齐交接再换会话',
   },
-  consent: [{ sessionId: 'session-y', leftMs: 120000 }],
+  consent: [{ sessionId: 'session-y', leftMs: 120000, kind: 'compact', onduty: true }],
   notes: [],
 };
 globalThis.fetch = async () => ({ ok: true, json: async () => FIXTURE });
@@ -892,29 +892,35 @@ function textOf(node, out = []) {
 }
 const text = textOf(tree).join(' ');
 const treeJson = JSON.stringify(tree);
-for (const want of ['dsh-handover', '刷新', '读数', '压缩授权', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '使用说明']) {
+for (const want of ['dsh-handover', '刷新', '读数', '授权', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '工具明细', '使用说明']) {
   ok(text.indexOf(want) !== -1, '成体视图应出现「' + want + '」');
 }
 
 // 回到重构前的版式——常用区直接展开，只折叠低频项；授权可直接点。
 const sections = tree.kids.filter((k) => k && k.type === 'section');
 const cardTitles = sections.map((sec) => textOf(sec.kids[0]).join(''));
-const wantOrder = ['压缩授权', '移动全局根目录', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '插件', '会话间通信守卫', '使用说明'];
-ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、守卫、说明', JSON.stringify(cardTitles));
+const wantOrder = ['授权', '移动全局根目录', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '插件', '最近一次会话间通信判定', '工具明细', '使用说明'];
+ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、判定、说明', JSON.stringify(cardTitles));
 
 const folds = treeJson.split('"details"').length - 1;
-ok(folds === 3, '只折叠低频项（迁移、前置提示词、使用说明），常用区直接展开', String(folds));
+ok(folds === 4, '只折叠低频项（迁移、前置提示词、工具明细、使用说明），常用区直接展开', String(folds));
 
-// 压缩授权：给出可点击的会话按钮，用户不必手填 id。
-const allowBtns = [];
+// 授权：只列在任会话，两组各一列按钮，用户不必手填 id。
+const grantBtns = [];
 (function walk(n) {
   if (!n || typeof n !== 'object') return;
   if (Array.isArray(n)) { n.forEach(walk); return; }
-  if (n.type === 'button' && textOf(n).join('').indexOf('允许 ') === 0) allowBtns.push(textOf(n).join(''));
+  if (typeof n.type === 'function') { walk(n.type(n.props || {})); return; }
+  if (n.type === 'button') {
+    const label = textOf(n).join('');
+    if (label === '授权压缩' || label === '授权换任') grantBtns.push(label);
+  }
   (n.kids || []).forEach(walk);
 })(tree);
-ok(allowBtns.length >= 3, '压缩授权应提供可点击的会话按钮', JSON.stringify(allowBtns.slice(0, 5)));
-ok(text.indexOf('允许 y') !== -1, '授权按钮须带会话短号');
+ok(grantBtns.filter((x) => x === '授权压缩').length === 3, '授权压缩：两张在任会话按钮＋输入行按钮', JSON.stringify(grantBtns));
+ok(grantBtns.filter((x) => x === '授权换任').length === 3, '授权换任：两张在任会话按钮＋输入行按钮', JSON.stringify(grantBtns));
+ok(text.indexOf('有授权') !== -1, '有有效授权时应显示「有授权」');
+ok(text.indexOf('当前无有效授权') === -1, '不再显示无授权占位');
 
 // 角色下拉含普通，不再回退到空值。
 ok(text.indexOf('普通') !== -1, '角色下拉应含普通选项');
@@ -965,7 +971,7 @@ ok(titles3[0] === '首次安装', '未接入工作区时首次安装置顶', JSO
 const text3 = textOf(tree3).join(' ');
 ok(text3.indexOf('一键部署') !== -1, '未接入时应能一键部署（建体系＋注册工作区＋建全局会话）');
 ok(text3.indexOf('仅建立文件体系') !== -1, '未接入时仍可只建立文件体系');
-ok(text3.indexOf('待处理') !== -1, '未接入时应显示待处理项');
+ok(text3.indexOf('未找到 _Control_Center') !== -1, '未接入工作区时应给出中文提示');
 
 // 已接入但没有全局会话：给出补建入口，且排在常规卡片之前。
 const READY_NO_GLOBAL = Object.assign({}, FIXTURE, { globalSessions: 0 });
