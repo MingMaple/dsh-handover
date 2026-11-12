@@ -4,7 +4,7 @@ import { nameOf } from '../lib/names.mjs';
 import fs from 'node:fs';
 import { textOutput } from '../lib/output.mjs';
 import { NL } from '../lib/text.mjs';
-import { syncCheck, renderSyncCheck } from '../lib/gates.mjs';
+import { syncCheck, renderSyncCheck, docmapReport, renderDocmapCheck } from '../lib/gates.mjs';
 import { lintGlobal, lintProject, renderLintGlobal, renderLintProject } from '../lib/lint.mjs';
 import { SETUP_STEPS } from '../lib/guide.mjs';
 
@@ -53,6 +53,7 @@ export function pmGateTool(env) {
         }
         out.push(renderSyncCheck(g).join(NL));
         out.push(renderLintProject(null, lintAllProjects(ws)).join(NL));
+        out.push(renderDocmapCheck(docmapReport(ws)).join(NL));
       } else if (scope === "project") {
         const name = args.project;
         if (!name) throw new Error("scope=project 时必须给 project 参数");

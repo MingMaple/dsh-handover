@@ -1,6 +1,6 @@
 /**
  * 空白 DSH 验收：证明「移到一个没有任何旧全局文件的空 DSH 上，插件所有功能 100% 可用」。
- * 做法：临时 HOME（无 ~/.dsh 状态）→ 只靠 dist/ 自带的东西跑完 24 个工具 + 迁移四件。
+ * 做法：临时 HOME（无 ~/.dsh 状态）→ 只靠 dist/ 自带的东西跑完 14 个工具 + 迁移四件。
  * 额外覆盖：7-Zip 不存在（强制 format=tar）、工作区规则文件被删光（必须退回内置模板）。
  * 用法：node scripts/blank-dsh.mjs
  */
@@ -58,10 +58,10 @@ const ctx = {
 apply(ctx, { packFormat: 'tar' });   // 强制内置归档器：模拟一台没有 7-Zip 的机器
 
 section('装配');
-ok(reg.tools.length === 24, '注册 24 个工具', String(reg.tools.length));
+ok(reg.tools.length === 14, '注册 14 个工具', String(reg.tools.length));
 ok(reg.tools.every((t) => t && t.name && t.description && typeof t.execute === 'function'), '每个工具都有 name／description／execute');
 const names = reg.tools.map((t) => t.name).sort();
-ok(names.indexOf('ho_pack') !== -1 && names.indexOf('peer_send') !== -1, '关键工具都在');
+ok(names.indexOf('ho_backup') !== -1 && names.indexOf('peer') !== -1 && names.indexOf('ho_docmap') !== -1, '关键工具都在');
 
 const byName = new Map(reg.tools.map((t) => [t.name, t]));
 function execFor(cwd, id, title) {
@@ -79,8 +79,8 @@ async function run(tool, args, cwd, id, title) {
 }
 
 section('首次安装（只用插件自带模板）');
-const init = await run('ho_init', { parent: WORK, name: '_Workspace', register: false });
-ok(!init.err, 'ho_init 不抛错', init.err);
+const init = await run('ho_workspace', { action: 'init', parent: WORK, name: '_Workspace', register: false }, WORK, 'session-blank-test', '空白验收');
+ok(!init.err, 'ho_workspace(action=init) 不抛错', init.err);
 const WS = path.join(WORK, '_Workspace');
 ok(fs.existsSync(WS), '全局根已建', WS);
 for (const rel of [
@@ -96,28 +96,34 @@ for (const rel of [
   ok(fs.existsSync(path.join(WS, rel)), '铺好 ' + rel);
 }
 
-section('24 个工具在空白工作区逐个跑');
+{
+  const { writeRole } = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
+  writeRole({}, 'session-blank-test', { role: 'global' });
+}
+
+section('14 个工具在空白工作区逐个跑');
 const calls = [
-  ['ho_diag', {}],
-  ['ho_brief', {}],
+  ['ho_status', { view: 'diag' }],
+  ['ho_status', { view: 'brief' }],
+  ['ho_status', { view: 'phase' }],
+  ['ho_status', { view: 'drift' }],
+  ['ho_status', { view: 'tokens', sessions: ['session-blank-test'] }],
   ['ho_gate', { scope: 'all' }],
   ['ho_sessions', { action: 'list' }],
-  ['ho_phase', {}],
   ['ho_charter', { doc: 'runtime' }],
   ['ho_charter', { doc: 'charter', section: '10' }],
   ['ho_handover', { action: 'read' }],
   ['ho_handover', { action: 'write', text: '# 全局交接\n\n## 0 身份与寻址\n- 本文件：_Control_Center/records/Global_Handover.md\n\n## 1 正在做的事\n空白验收\n\n## 2 下一步\n- 无\n\n## 3 等用户拍板\n- 无\n\n## 4 用户要求逐条落位\n- 无\n\n## 5 坑点与禁区\n- 无\n\n## 6 关键路径\n- 无\n\n## 7 会话 id\n- session-blank-test\n' }],
   ['ho_checkpoint', { at_risk: true }],
-  ['ho_snapshot', { project: 'NoSuchProject' }],
-  ['ho_drift', {}],
+  ['ho_backup', { action: 'snapshot', project: 'NoSuchProject' }],
+  ['ho_backup', { action: 'check', items: ['global'] }],
   ['ho_changelog', { summary: '空白验收写入一行' }],
-  ['ho_tokens', { sessions: ['session-blank-test'] }],
-  ['ho_pack', { action: 'check', items: ['global'] }],
   ['ho_workspace', { action: 'list' }],
-  ['peer_list', {}],
-  ['peer_status', { session_id: 'session-blank-test' }],
-  ['peer_peek', { session_id: 'session-blank-test', limit: 2 }],
-  ['peer_rename', { session_id: 'session-blank-test', title: '空白验收' }],
+  ['ho_docmap', { action: 'read' }],
+  ['peer', { action: 'list' }],
+  ['peer', { action: 'status', session_id: 'session-blank-test' }],
+  ['peer', { action: 'peek', session_id: 'session-blank-test', limit: 2 }],
+  ['peer', { action: 'rename', session_id: 'session-blank-test', title: '空白验收' }],
   ['ho_succeed', {}],
 ];
 for (const [tool, args] of calls) {
@@ -166,17 +172,17 @@ fs.writeFileSync(path.join(WS, 'Projects', 'Demo', 'Demo库', 'RULES.md'), '# De
 fs.mkdirSync(path.join(WS, '_Project_Meta', 'Demo'), { recursive: true });
 fs.writeFileSync(path.join(WS, '_Project_Meta', 'Demo', 'Handover.md'), '# Demo 交接\n\n## 1 正在做的事\n- 空\n\n## 2 下一步\n- 空\n\n## 3 坑点\n- 空\n', 'utf8');
 const packOut = path.join(ROOT, 'packs');
-const packed = await run('ho_pack', { action: 'pack', kind: 'project', name: 'Demo', out: packOut, format: 'tar' }, WS, 'session-blank-test', '空白验收');
+const packed = await run('ho_backup', { action: 'pack', kind: 'project', name: 'Demo', out: packOut, format: 'tar' }, WS, 'session-blank-test', '空白验收');
 ok(!packed.err, 'pack 打包成功', packed.err);
 const pkg = fs.existsSync(packOut) ? fs.readdirSync(packOut).filter((f) => f.endsWith('.tar.gz')) : [];
 ok(pkg.length === 1, '产出 1 个 .tar.gz', pkg.join(','));
 if (pkg.length === 1) {
   const packPath = path.join(packOut, pkg[0]);
-  const ver = await run('ho_pack', { action: 'verify', pack: packPath }, WS, 'session-blank-test', '空白验收');
+  const ver = await run('ho_backup', { action: 'verify', pack: packPath }, WS, 'session-blank-test', '空白验收');
   ok(!ver.err && /一致/.test(ver.text), 'verify 校包可跑', ver.err);
-  const dry = await run('ho_pack', { action: 'restore', pack: packPath, target: path.join(ROOT, 'target'), dry_run: true }, WS, 'session-blank-test', '空白验收');
+  const dry = await run('ho_backup', { action: 'restore', pack: packPath, target: path.join(ROOT, 'target'), dry_run: true }, WS, 'session-blank-test', '空白验收');
   ok(!dry.err && /预演/.test(dry.text), 'restore 预演不写盘', dry.err);
-  const applied = await run('ho_pack', { action: 'restore', pack: packPath, target: path.join(ROOT, 'target'), apply: true }, WS, 'session-blank-test', '空白验收');
+  const applied = await run('ho_backup', { action: 'restore', pack: packPath, target: path.join(ROOT, 'target'), apply: true }, WS, 'session-blank-test', '空白验收');
   ok(!applied.err, 'restore 写入成功', applied.err);
   const restored = path.join(ROOT, 'target', 'Projects', 'Demo', 'Demo库', 'RULES.md');
   ok(fs.existsSync(restored), '恢复出来的文件在（相对路径正确）', restored);
@@ -200,5 +206,5 @@ if (fails.length) {
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 }
-console.log('BLANK-DSH OK（空白 DSH 上 24 工具 + 迁移四件全部可用）');
+console.log('BLANK-DSH OK（空白 DSH 上 14 工具 + 迁移四件全部可用）');
 

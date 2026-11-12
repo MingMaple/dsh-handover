@@ -121,3 +121,56 @@ export function listConsent() {
   })).filter((r) => r.leftMs > 0);
   return rows.sort((a, b) => a.sessionId.localeCompare(b.sessionId, 'zh') || a.kind.localeCompare(b.kind));
 }
+
+/**
+ * 某会话当前有效的授权（只读，不清过期条目）。
+ * 提示段与 ho_status 共用：授权一旦写入，下一轮重建提示段时就能看见；过期自然消失。
+ */
+export function activeConsentsFor(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid) return [];
+  const all = readAll();
+  const now = Date.now();
+  const rows = [];
+  for (const key of Object.keys(all)) {
+    const entry = all[key];
+    if (!entry || !entry.until || entry.until <= now) continue;
+    if (sidOfKey(key) !== sid) continue;
+    rows.push({
+      kind: kindOfEntry(key, entry),
+      until: entry.until,
+      leftMs: entry.until - now,
+      atText: entry.atText || '',
+      note: entry.note || '',
+    });
+  }
+  return rows.sort((a, b) => a.kind.localeCompare(b.kind));
+}
+
+const KIND_LABEL = { compact: '压缩', succeed: '换任' };
+
+function untilText(ms) {
+  const d = new Date(ms);
+  const off = -d.getTimezoneOffset();
+  const pad = (n) => String(n).padStart(2, '0');
+  const a = Math.abs(off);
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' '
+    + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ' ' + (off >= 0 ? '+' : '-') + pad(Math.floor(a / 60)) + pad(a % 60);
+}
+
+/** 提示段用：每种有效授权一行，极短；无授权返回空数组（不占位）。 */
+export function consentPromptLines(rows) {
+  return (rows || []).map((r) => '用户已授权' + KIND_LABEL[r.kind] + '，至 ' + untilText(r.until) + '（一次性，用后失效）。');
+}
+
+/** ho_status 用：一行状态，压缩与换任各说一句，未授权的写「无授权」。 */
+export function formatConsentLine(rows) {
+  const hit = new Map((rows || []).map((r) => [r.kind, r]));
+  const parts = CONSENT_KINDS.map((k) => {
+    const r = hit.get(k);
+    if (!r) return KIND_LABEL[k] + ' 无授权';
+    const min = Math.max(1, Math.ceil(r.leftMs / 60000));
+    return KIND_LABEL[k] + ' 剩余 ' + min + ' 分钟（至 ' + untilText(r.until) + '，一次性）';
+  });
+  return parts.join('；');
+}

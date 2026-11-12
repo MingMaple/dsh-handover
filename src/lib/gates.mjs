@@ -4,6 +4,7 @@ import { readUtf8, isFile, isDir } from './text.mjs';
 import fs from 'node:fs';
 import { charterPath, canonicalBlock, TITLE_KEY, WATER_KEY } from './charter.mjs';
 import { readProfile, listProfiles } from './profile.mjs';
+import { checkDocmaps } from './docmap.mjs';
 
 /**
  * 读 Registry.md 的「形态」列 → { 项目名: 形态 }。
@@ -122,8 +123,7 @@ export function syncCheck(ws) {
   };
 }
 
-export function renderSyncCheck(res) {
-  const out = [];
+export function renderSyncCheck(res) {  const out = [];
   if (res.error) { out.push(res.error + '：' + res.path); return out; }
   out.push('通用约束条同步复核  库数 ' + res.total + '  正文 ' + res.bodyLines + ' 行  来源 §8.1.1.4' + (res.builtin ? '（工作区没有 Workspace_Charter.md，用插件内置口径）' : ''));
   for (const r of res.libraries) {
@@ -144,5 +144,28 @@ export function renderSyncCheck(res) {
   }
   out.push('');
   out.push('判定：' + res.verdict);
+  return out;
+}
+
+/** 文档定位 map：只检查表内路径是否仍然存在（不判字数、不判内容）。 */
+export function docmapReport(ws) {
+  return checkDocmaps(ws);
+}
+
+export function renderDocmapCheck(res) {
+  const out = [];
+  out.push('文档定位 map  目录 ' + res.dir);
+  if (!res.rows.length) {
+    out.push('  还没有任何 map（空 map 不注入提示段，属正常）');
+    out.push('判定：无需检查');
+    return out;
+  }
+  for (const r of res.rows) {
+    out.push('  ' + r.name + '  ' + r.label + '  ' + r.entries + ' 条  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
+    for (const b of r.bad.slice(0, 3)) out.push('        失效：' + b.path + ' —— ' + b.problem);
+  }
+  out.push('判定：' + (res.missing === 0
+    ? '全部落位。'
+    : res.missing + ' 条路径失效 —— 由该类别在任会话用 ho_docmap(action="write") 更新。'));
   return out;
 }

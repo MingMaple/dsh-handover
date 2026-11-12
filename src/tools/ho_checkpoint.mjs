@@ -54,7 +54,7 @@ export function pmCheckpointTool(env) {
       }
       if (count.lock === "open") {
         out.push("拒绝排压缩：检测到未闭合的压缩锁（compaction/start 无配对 end）。");
-        out.push("处理：等当前压缩结束后用 ho_phase 复查；若长时间不动，说明上次压缩崩在中间。");
+        out.push("处理：等当前压缩结束后用 ho_status 复查；若长时间不动，说明上次压缩崩在中间。");
         return { text: out.join(NL) };
       }
       const adv = decide({ ratio, compactionsUsed: count.used, cfg: env.cfg, lockState: count.lock });
@@ -123,7 +123,7 @@ export function pmCheckpointTool(env) {
       if (resume === 'wait') {
         out.push("去向：wait —— 压缩完成后不会唤醒本会话，等你派新任务。");
       } else {
-        out.push("去向：continue —— 压缩完成后自动收到续跑消息；若 60 秒内没有续跑消息，用 ho_phase 看状态。");
+        out.push("去向：continue —— 压缩完成后自动收到续跑消息；若 60 秒内没有续跑消息，用 ho_status 看状态。");
       }
       out.push("压缩期间不要结束会话。");
       return { text: out.join(NL) };

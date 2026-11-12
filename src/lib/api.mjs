@@ -242,6 +242,8 @@ export function createApi(env, info) {
         if (!sid) return bad('bad-request', '缺少 session_id');
         const kind = p.kind === 'succeed' ? 'succeed' : 'compact';
         const g = grantConsent(sid, kind === 'succeed' ? '设置页点击换任' : '设置页点击', kind);
+        // 授权一到就重装目标会话的提示段：空闲会话下一轮即可看见，不必等它自己去查。
+        if (typeof env.refreshPromptFor === 'function') { try { env.refreshPromptFor(sid); } catch { /* ignore */ } }
         env.log((kind === 'succeed' ? '换任' : '压缩') + '授权：' + sid + '（5 分钟）');
         invalidateStatus(env);
         return ok(g);

@@ -215,7 +215,7 @@ export async function runSuccession(env, exec, opts) {
   } catch (e) {
     return [
       '会话已建 ' + sessionId + '（' + name + '），但登记在任失败：' + msgOf(e),
-      '启动提示词尚未投递；先修好登记表，再用 peer_send 通知它。',
+      '启动提示词尚未投递；先修好登记表，再用 peer（action="send"）通知它。',
     ].join(NL);
   }
 
@@ -253,7 +253,7 @@ export async function runSuccession(env, exec, opts) {
   out.push('换任完成：' + name + '（' + sessionId + '）');
   out.push('在任登记：' + key + (reg && reg.registry && reg.registry.changed && reg.registry.changed.length
     ? '，Registry.md 已同步在役列' : ''));
-  out.push('启动提示词：' + (delivered ? '已投递' : '未送达：' + deliveryError + '。会话已建，可用 peer_send 补投'));
+  out.push('启动提示词：' + (delivered ? '已投递' : '未送达：' + deliveryError + '。会话已建，可用 peer（action="send"）补投'));
   out.push('交接登记：' + appendNote);
   out.push('本会话到此停止，等待用户在新会话中派任务。');
   return out.join(NL);

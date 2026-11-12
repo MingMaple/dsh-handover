@@ -6,6 +6,7 @@
  */
 import { handoverPathFor, scopeLabel } from './role.mjs';
 import { handoverRuleText, watermark } from './facts.mjs';
+import { consentPromptLines } from './consent.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -18,7 +19,7 @@ const RUNTIME_POINTER = '细节按节取：ho_charter(doc="runtime", section=…
  */
 function reuseRule(cfg) {
   return '指派任务或新建会话前，先用 ho_office（空参数）查一次在任；同一类别已有在任且其水位低于 '
-    + watermark(cfg).warn + ' 时，直接用 peer_send 复用，不新建；确需另建（原会话不可用、需并行、用户明确要求）时才新建。';
+    + watermark(cfg).warn + ' 时，直接用 peer（action="send"）复用，不新建；确需另建（原会话不可用、需并行、用户明确要求）时才新建。';
 }
 
 /** 全局会话的常驻段：五节骨架（身份、权限、节奏、交接、按需取用）。 */
@@ -32,7 +33,7 @@ export function globalManual(opts) {
     '',
     '二、权限',
     '可写 _Control_Center、_Project_Meta 与项目结构；Projects 及各项目库内文件只读，不得代写；项目内作业不代办。',
-    '新建会话与设定角色仅属全局；会话间可直接 peer_send；换任须用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed，不再请求全局。',
+    '新建会话与设定角色仅属全局；会话间可直接 peer（action="send"）；换任须用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed，不再请求全局。',
     reuseRule(o.cfg),
     '',
     '三、节奏',
@@ -45,6 +46,10 @@ export function globalManual(opts) {
     '五、按需取用',
     RUNTIME_POINTER,
   ];
+  const dm = docmapBlock(o);
+  if (dm.length) lines.push('', ...dm);
+  const cs = consentBlock(o);
+  if (cs.length) lines.push('', ...cs);
   const mv = moveLine(o);
   if (mv) lines.push(mv);
   return lines.join(NL);
@@ -73,10 +78,14 @@ export function scopedManual(info, opts) {
       ? '交接：' + hp.path + '（ho_handover 默认）。'
       : '交接路径未解析（缺角色或项目名），请先在设置页设定角色。',
     handoverRuleText(o.cfg) + '压缩须用户点「压缩授权」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
-    '会话间可直接 peer_send；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需用户决定、全局口径有误时向全局报告；任务完成不报全局。',
+    '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需用户决定、全局口径有误时向全局报告；任务完成不报全局。',
     reuseRule(o.cfg),
     RUNTIME_POINTER,
   ];
+  const dm = docmapBlock(o);
+  if (dm.length) lines.push('', ...dm);
+  const cs = consentBlock(o);
+  if (cs.length) lines.push('', ...cs);
   const mv = moveLine(o);
   if (mv) lines.push(mv);
   return lines.join(NL);
@@ -87,6 +96,17 @@ function moveLine(opts) {
   const mv = opts && opts.move;
   if (!mv || mv.phase !== 'switched') return '';
   return '已迁移至 ' + (mv.dst || '?') + '；' + (mv.src || '?') + ' 现为链接，勿再手工迁移。';
+}
+
+/** 文档定位（docmap）注入：空 map 不占位。 */
+function docmapBlock(opts) {
+  const m = opts && opts.docmap;
+  return m ? [m] : [];
+}
+
+/** 用户已授权的提示行：每种有效授权一行，无授权不占位。 */
+function consentBlock(opts) {
+  try { return consentPromptLines(opts && opts.consents); } catch { return []; }
 }
 
 export function manualFor(info, opts) {
@@ -109,7 +129,7 @@ export function organizeMessageFor(info, opts) {
       '先通读本库，确定本项目的骨架：代码与文档主体、必需文件、临时与归档位置。构建型、动画型等项目不必套用插件类项目的文档集。',
       '把结论写入 _Project_Meta/' + p + '/project.profile.json；字段格式见 ho_profile(action=presets)。',
       '写入后调用 ho_profile(action=register) 校验并登记；返回缺失项时按清单补齐。',
-      '约束：仅可改动本库与 _Project_Meta/' + p + '/；不得改动 _Control_Center 及其他项目；移动较大文件前先执行 ho_snapshot。可用工具：ho_snapshot、ho_handover、ho_phase、ho_checkpoint、ho_profile、peer_send。',
+      '约束：仅可改动本库与 _Project_Meta/' + p + '/；不得改动 _Control_Center 及其他项目；移动较大文件前先执行 ho_backup(action="snapshot")。可用工具：ho_backup、ho_handover、ho_status、ho_checkpoint、ho_profile、peer（action="send"）。',
       '完成后以一句话向用户说明「注册了哪些骨架项、仍缺哪些」，无需每轮回执。',
     ].join(NL);
   }
@@ -120,7 +140,7 @@ export function organizeMessageFor(info, opts) {
       '先通读本任务目录，确定本任务的骨架：工作文件、规则文件、交接、快照与归档位置。',
       '把结论写入 _Misc/tasks/' + t + '/task.profile.json；字段格式见 ho_profile(action=presets)。',
       '写入后调用 ho_profile(action=register) 校验并登记。',
-      '约束：仅可改动 _Misc/tasks/' + t + '/、_Temp/_Misc/' + t + '/、_Archives/_Misc/' + t + '/；_Control_Center、Projects 与其他任务不得写入。工具：ho_snapshot、ho_handover、ho_phase、ho_checkpoint、ho_profile、peer_send。',
+      '约束：仅可改动 _Misc/tasks/' + t + '/、_Temp/_Misc/' + t + '/、_Archives/_Misc/' + t + '/；_Control_Center、Projects 与其他任务不得写入。工具：ho_backup、ho_handover、ho_status、ho_checkpoint、ho_profile、peer（action="send"）。',
       '完成后以一句话说明改动即可。',
     ].join(NL);
   }

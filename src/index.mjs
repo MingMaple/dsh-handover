@@ -1,7 +1,7 @@
 /**
  * dsh-handover —— 全局运行期插件。
  * 判据进代码、流程进工具；规则正文留磁盘，需要时用 ho_charter 取节（完整流程 doc="runtime"）。
- * 按会话角色载入工具与提示段：全局 24 个工具、项目 11、杂项 11、普通 0。
+ * 按会话角色载入工具与提示段：全局 14 个工具、项目 11、杂项 10、普通 0。
  * 源码不热加载：改完要重启 DSH。
  */
 import fs from 'node:fs';
@@ -11,35 +11,25 @@ import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, pressurePct } from './lib/sessions.mjs';
 import { createScheduler } from './lib/schedule.mjs';
 import { compactionStateOf, stalePressureNote } from './lib/events.mjs';
-import { pmBriefTool } from './tools/ho_brief.mjs';
+import { pmStatusTool } from './tools/ho_status.mjs';
 import { pmGateTool } from './tools/ho_gate.mjs';
 import { pmSessionsTool } from './tools/ho_sessions.mjs';
-import { pmPhaseTool } from './tools/ho_phase.mjs';
 import { pmCharterTool } from './tools/ho_charter.mjs';
 import { pmHandoverTool } from './tools/ho_handover.mjs';
 import { pmCheckpointTool } from './tools/ho_checkpoint.mjs';
-import { pmSnapshotTool } from './tools/ho_snapshot.mjs';
-import { pmDiagTool } from './tools/ho_diag.mjs';
-import { pmDriftTool } from './tools/ho_drift.mjs';
 import { pmChangelogTool } from './tools/ho_changelog.mjs';
-import { pmTokensTool } from './tools/ho_tokens.mjs';
-import { pmPackTool } from './tools/ho_pack.mjs';
+import { pmBackupTool } from './tools/ho_backup.mjs';
 import { pmWorkspaceTool } from './tools/ho_workspace.mjs';
-import { pmInitTool } from './tools/ho_init.mjs';
 import { pmProfileTool } from './tools/ho_profile.mjs';
 import { pmOfficeTool } from './tools/ho_office.mjs';
 import { pmSucceedTool } from './tools/ho_succeed.mjs';
-import { pmPeerListTool } from './tools/peer_list.mjs';
-import { pmPeerStatusTool } from './tools/peer_status.mjs';
-import { pmPeerSendTool } from './tools/peer_send.mjs';
-import { pmPeerNewTool } from './tools/peer_new.mjs';
-import { pmPeerRenameTool } from './tools/peer_rename.mjs';
-import { pmPeerPeekTool } from './tools/peer_peek.mjs';
+import { pmDocmapTool } from './tools/ho_docmap.mjs';
+import { pmPeerTool } from './tools/peer.mjs';
 import { resolveRegistry } from './lib/registry.mjs';
 import { registerStatusRoute } from './lib/webroute.mjs';
 import { createApi, statusSnapshot } from './lib/api.mjs';
 import { registerRpcCarrier } from './lib/rpc-carrier.mjs';
-import { NAMES } from './lib/names.mjs';
+import { NAMES, PEER_NAME } from './lib/names.mjs';
 import { readExtraPrompt, writeExtraPrompt, EXTRA_PROMPT_ORDER, EXTRA_PROMPT_SECTION } from './lib/extra-prompt.mjs';
 import {
   ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
@@ -50,12 +40,13 @@ import { sendPrompt } from './lib/prompt.mjs';
 import { resolveShortSid } from './lib/api.mjs';
 import { routeWorkspace } from './lib/workspace.mjs';
 import { stampTz } from './lib/brief.mjs';
-import { grantConsent } from './lib/consent.mjs';
+import { grantConsent, activeConsentsFor } from './lib/consent.mjs';
+import { docmapBlock } from './lib/docmap.mjs';
 
 export const name = 'dsh-handover';
 // 必需服务（名字已核对：dsh-agent→agents、dsh-compaction→compaction、dsh-api-session-controller→sessionController）。
 // 只 inject 一定存在的服务：多写一个不存在的名字，cordis 会让整个插件静默不激活。
-// agents / compaction 用运行时解析（ctx[name] → ctx.get(name)），无法获取由 ho_diag 报出来、ho_checkpoint 明确报错。
+// agents / compaction 用运行时解析（ctx[name] → ctx.get(name)），无法获取由 ho_status（view="diag"）报出来、ho_checkpoint 明确报错。
 export const inject = ['tools', 'systemPrompt', 'sessionController'];
 
 /** 自身包信息：dist 里读 ./package.json，源码树里退回 ../package.json。 */
@@ -110,6 +101,7 @@ export function apply(ctx, config) {
   // 更早的内核忽略注册选项，只能退回 agent 作用域的 restrict；两条路径按能力二选一，不并行。
   const perStep = (() => { try { return !!(ctx.tools && typeof ctx.tools.resolve === 'function'); } catch { return false; } })();
   const sectionDispose = new Map();       // sessionId → 撤销提示段
+  const consentSig = new Map();           // sessionId → 上次装配时的授权签名（授权出现或过期时重装）
   const legacyRestrict = new Map();       // sessionId → 撤销限制（仅无按步解析的内核）
   const appliedRole = new Map();          // sessionId → 上次装配的角色
   const roleCache = new Map();            // sessionId → { at, info }（每步过滤用，短 TTL）
@@ -153,7 +145,7 @@ export function apply(ctx, config) {
       scheduler.request(sessionId, Object.assign({ n, consent: 'checked' }, opts || {})).catch(() => {});
     },
     registry() { return resolveRegistry(ctx); },
-    /** 迁移感知：根目录是否已搬到别处（旧路径变 junction）。给提示段与 ho_diag 用。 */
+    /** 迁移感知：根目录是否已搬到别处（旧路径变 junction）。给提示段与 ho_status（view="diag"）用。 */
     moveInfo() {
       try {
         const src = cfg.workspaceRoot || walkUpToWorkspace(process.cwd());
@@ -202,7 +194,7 @@ export function apply(ctx, config) {
     staleNote(exec) {
       try { return stalePressureNote(this.selfId(exec)); } catch { return ''; }
     },
-    /** 自身版本：从 dist/package.json 读，设置页与 ho_diag 共用同一值。 */
+    /** 自身版本：从 dist/package.json 读，设置页与 ho_status（view="diag"）共用同一值。 */
     version() {
       try { return pkgInfo().version; } catch { return '?'; }
     },
@@ -288,7 +280,7 @@ export function apply(ctx, config) {
     return saved;
   };
 
-  /** 当前生效的裁剪机制，供 ho_diag 报出。 */
+  /** 当前生效的裁剪机制，供 ho_status（view="diag"）报出。 */
   function roleMode() {
     if (cfg.roleGating === 'off') return '关闭（roleGating=off，所有会话可见全部工具）';
     return perStep
@@ -337,7 +329,11 @@ export function apply(ctx, config) {
     let text = '';
     try {
       const ws = workspaceForAgent(agent);
-      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null });
+      // 文档定位与授权状态都是「按会话现算」的：写盘后重装一次即可生效，不另开注入点。
+      const docmap = docmapBlock(ws, info);
+      const consents = activeConsentsFor(sid);
+      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null, docmap, consents });
+      consentSig.set(sid, consents.map((r) => r.kind + ':' + r.until).join('|'));
     } catch (e) {
       initErrors.push('角色提示段：' + msgOf(e));
       return;
@@ -432,6 +428,18 @@ export function apply(ctx, config) {
     } catch { return false; }
   };
 
+  /** 重装某会话的提示段：文档定位写盘后、授权到达后各调一次；不唤醒、不投消息。 */
+  env.refreshPromptFor = (sid) => {
+    try {
+      const id = String(sid || '');
+      if (!id) return false;
+      const a = agentOf(id);
+      if (!a) return false;
+      applyRoleTo(a);
+      return true;
+    } catch { return false; }
+  };
+
   // ---------------- 调度器（续跑文案要按角色取交接路径）
   // 注意：调度器拿到的是会话 id 字符串，不是 exec；这里用按 id 解析的版本，直接读角色表与磁盘。
   const schedDeps = { ctx, cfg, logger: (ctx.logger || null), roleOf: null, handoverFor: null };
@@ -472,7 +480,7 @@ export function apply(ctx, config) {
   };
   try { applyExtraPrompt(readExtraPrompt()); } catch (e) { initErrors.push('全局前置提示词：' + msgOf(e)); }
 
-  // ---------------- 工具注册（18 个 ho_* + 6 个 peer_*）
+  // ---------------- 工具注册（13 个 ho_* + 1 个 peer）
   // 0.2.2 起工具按「步」解析：可用工具集合每一步重算。子会话排除与角色过滤都在这里一次做完，
   // 不再另用 agent 作用域 restrict —— 两套机制并行时，换角色要么等到重启、要么互相覆盖。
   const roleToolsets = new Map(ROLES.map((r) => [r, new Set(toolsetFor(r).allow)]));
@@ -498,26 +506,21 @@ export function apply(ctx, config) {
     };
   }
   const tools = [
-    pmBriefTool(env),
+    pmStatusTool(env, { schedulerReady: () => scheduler !== null, schedulerError: () => schedulerError }),
     pmGateTool(env),
     pmSessionsTool(env),
-    pmPhaseTool(env),
     pmCharterTool(env),
     pmHandoverTool(env),
     pmCheckpointTool(env),
-    pmSnapshotTool(env),
-    pmDiagTool(env, { schedulerReady: () => scheduler !== null, schedulerError: () => schedulerError }),
-    pmDriftTool(env),
     pmChangelogTool(env),
-    pmTokensTool(env),
-    pmPackTool(env),
+    pmBackupTool(env),
     pmWorkspaceTool(env),
-    pmInitTool(env),
     pmProfileTool(env),
     pmOfficeTool(env),
     pmSucceedTool(env),
+    pmDocmapTool(env),
   ];
-  const keys = ['brief', 'gate', 'sessions', 'phase', 'charter', 'handover', 'checkpoint', 'snapshot', 'diag', 'drift', 'changelog', 'tokens', 'pack', 'workspace', 'init', 'profile', 'office', 'succeed'];
+  const keys = ['status', 'gate', 'sessions', 'charter', 'handover', 'checkpoint', 'changelog', 'backup', 'workspace', 'profile', 'office', 'succeed', 'docmap'];
   for (let i = 0; i < tools.length; i++) {
     const key = keys[i];
     try {
@@ -531,42 +534,39 @@ export function apply(ctx, config) {
     }
   }
 
-  const peerTools = [
-    pmPeerListTool(env),
-    pmPeerStatusTool(env),
-    pmPeerSendTool(env),
-    pmPeerNewTool(env),
-    pmPeerRenameTool(env),
-    pmPeerPeekTool(env),
-  ];
+  const peerTools = [pmPeerTool(env)];
   for (const t of peerTools) {
     try {
       ctx.tools.register(t, { when: visibleTo(t && t.name ? String(t.name) : '') });
       if (t && t.name) registered.add(t.name);
     } catch (e) {
-      initErrors.push((t && t.name ? String(t.name) : 'peer_?') + '：' + msgOf(e));
+      initErrors.push((t && t.name ? String(t.name) : 'peer') + '：' + msgOf(e));
     }
   }
 
   // ---------------- 会话守卫（Charter §7.2.4）：新建会话与设定角色仅属全局；
-  // 会话之间允许直接 peer_send（不必经全局转述），directPeer=off 时退回「只能向全局报告」的旧口径。
+  // 会话之间允许直接 peer（action=send）对话（不必经全局转述），directPeer=off 时退回「只能向全局报告」的旧口径。
   if (cfg.wakeAuthority !== 'off' && typeof ctx.tools.guard === 'function') {
     try {
       ctx.tools.guard((exec) => {
         const nm = exec && exec.name;
-        if (nm !== 'peer_send' && nm !== 'peer_new') return undefined;
+        if (nm !== PEER_NAME) return undefined;
+        let args = (exec && exec.arguments) || {};
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+        const action = String(args.action || '');
+        // list／status／peek／rename 的权限由工具内部按角色判，这里只管两件有外部影响的事。
+        if (action !== 'send' && action !== 'new') return undefined;
         const sid = env.selfId(exec) || '';
-        const args = (exec && exec.arguments) || {};
         let info;
         try { info = env.roleOf(exec); } catch { info = { role: 'plain', source: 'error' }; }
         const mk = (allow, why) => {
           guardLast = { sid, allow, source: why, title: titleOf(sid) };
           if (allow) return undefined;
-          if (nm === 'peer_new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项落到 Misc 除外）。';
+          if (action === 'new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项落到 Misc 除外）。';
           return '会话间通信受限（directPeer=off）：非全局会话只能向现任全局报告，不得唤醒其他会话。';
         };
         if (info.role === 'global') return mk(true, 'global/' + info.source);
-        if (nm === 'peer_send') {
+        if (action === 'send') {
           // 会话之间可直接对话；向全局报告也在此路。directPeer=off 才退回旧口径。
           const target = String(args.session_id || '');
           let t = null;
@@ -575,7 +575,7 @@ export function apply(ctx, config) {
           if (cfg.directPeer !== 'off') return mk(true, 'direct/' + info.role + ' → ' + (t ? t.role : 'unknown'));
           return mk(false, info.source + '/' + info.role + ' → ' + (t ? t.role : 'unknown'));
         }
-        // peer_new：只有杂项可以落到 Misc
+        // action=new：只有杂项可以落到 Misc
         const target = String(args.workspace || args.cwd || '').toLowerCase();
         if (info.role === 'misc' && target.indexOf('misc') !== -1) return mk(true, 'misc/' + info.source);
         return mk(false, info.source + '/' + info.role);
@@ -629,7 +629,10 @@ export function apply(ctx, config) {
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
           const info = infoFor(sid, scopedMetaOf(h, sid));
-          if (appliedRole.get(sid) === info.role) return;
+          // 角色没变也要看授权签名：用户刚从设置页或斜杠命令授权时，下一轮就该看见那一行。
+          let sig = '';
+          try { sig = activeConsentsFor(sid).map((r) => r.kind + ':' + r.until).join('|'); } catch { sig = ''; }
+          if (appliedRole.get(sid) === info.role && consentSig.get(sid) === sig) return;
           env.log('开轮前换装：' + sid + ' · 已装 ' + (appliedRole.get(sid) || '-') + ' · 目标 ' + info.role);
           applyRoleTo(agent, info);
         } catch (e) { env.log('开轮前装配失败：' + msgOf(e)); }
@@ -727,6 +730,8 @@ export function apply(ctx, config) {
             const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
             if (!sid) return { kind: 'error', text: '拿不到会话 id：请写成 /' + cmd.name + ' session-xxxx' };
             const g = grantConsent(sid, cmd.note, cmd.kind);
+            // 授权一到就重装提示段：目标会话下一轮（哪怕现在空闲）就能看见那一行。
+            try { env.refreshPromptFor(sid); } catch { /* 装配失败不影响授权本身 */ }
             try { env.log(cmd.action + '授权（命令）：' + sid); } catch { /* ignore */ }
             return { kind: 'success', text: '已允许 ' + sid + ' 在 ' + g.minutes + ' 分钟内' + cmd.action + '一次（用掉即失效）。' };
           },

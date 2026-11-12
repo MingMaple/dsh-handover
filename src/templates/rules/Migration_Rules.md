@@ -1,6 +1,6 @@
 # 迁移规范（插件自带默认口径）
 
-> 迁移靠 `ho_pack` 四件套：`check` → `pack` → `verify` → `restore`。
+> 迁移靠 `ho_backup` 四件套：`check` → `pack` → `verify` → `restore`。
 
 ## 1. 前置检查 `action="check"`
 

@@ -1,6 +1,6 @@
 /**
  * 打包、校验、预演、恢复的实现（原 ho_pack / ho_pack_verify / ho_pack_restore / ho_pack_precheck 的代码搬到这里）。
- * 对外只经 ho_pack(action=…) 暴露，少 3 份 schema 的固定开销。
+ * 对外只经 ho_backup(action=…) 暴露，少 3 份 schema 的固定开销。
  * 共同口径：只报告绝对路径、不改写文件内容；恢复默认预演、覆盖前备份、从不删除目标文件。
  */
 import fs from 'node:fs';
@@ -205,7 +205,7 @@ export function packNow(env, args, exec) {
   fs.writeFileSync(path.join(stagingRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
   fs.writeFileSync(path.join(stagingRoot, 'CHECKSUMS.sha256'), files.map((f) => f.sha256 + '  ' + f.path).join(NL) + NL, 'utf8');
   const absLines = renderAbsoluteRefs(abs, { title: '绝对路径体检（包内）', max: 200 });
-  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包里有 ' + abs.totalHits + ' 处写死的绝对路径，插件**只报告、不改写**文件内容——迁移后需由人或项目会话自己改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若是别的系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行、编码都要项目会话自己核一遍。', '', '## 目标环境前置（先做这两件，再做恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按它恢复状态。', '', '## 恢复', '', 'ho_pack(action="restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身**不迁移**：连续性只靠交接文档。'].join(NL);
+  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包里有 ' + abs.totalHits + ' 处写死的绝对路径，插件**只报告、不改写**文件内容——迁移后需由人或项目会话自己改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若是别的系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行、编码都要项目会话自己核一遍。', '', '## 目标环境前置（先做这两件，再做恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按它恢复状态。', '', '## 恢复', '', 'ho_backup(action="restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身**不迁移**：连续性只靠交接文档。'].join(NL);
   fs.writeFileSync(path.join(stagingRoot, 'MIGRATION.md'), md, 'utf8');
   const outDir = args.out || path.join(ws, '_Archives', '_Global', 'Backups');
   fs.mkdirSync(outDir, { recursive: true });

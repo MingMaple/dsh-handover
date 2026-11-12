@@ -8,7 +8,7 @@
 你是<角色>，由全局管理对话创建并交接。
 第一条要读的：<绝对路径>（读毕再开始作业）。| 项目→ _Project_Meta/<项目名>/Handover.md；全局→ records/Global_Handover.md；杂项首任→ rules/Misc_Task_Standard.md
 不得每轮回执，也不发送「收到」「已完成」一类确认；全局只看文件末态。
-你的 session id：<本会话 id>。确需向全局发消息时，以 `peer_send` 发至 <全局 id>。| 不得据 peer_list 推测 id
+你的 session id：<本会话 id>。确需向全局发消息时，以 `peer`（action="send"）发至 <全局 id>。| 不得据 `peer`（action="list"）推测 id
 水位：≥32% 应先写毕交接、再通知全局，并提醒用户换会话；>35% 不得新开任务。
 边界：只读写 <范围>。删除或覆盖前须先留快照，**删除须经用户确认**。对用户可见一律中文（含工具 description 字段）。
 时间一律**带时区偏移**书写（如 2026-10-21 07:58 +0800），不写「今天、几点」这种会漂移的说法；本机时区 Asia/Shanghai（+08:00），历史记录里的 +00:00 与新记录按**绝对时刻**比较。
@@ -37,7 +37,7 @@
 库根：Projects/<项目名>/<项目名>库/ ；元数据：_Project_Meta/<项目名>/ ；快照：_Temp/<项目名>/Snapshots/ ；版本冻结：_Archives/<项目名>/Backups/
 开始作业前应先读：_Project_Meta/<项目名>/Handover.md → 库根 SKILL.md →（修改文档时）_Control_Center/rules/ 下对应规范。
 两件必查：库内 RULES.md 里必须有「运行期省 token」与「上下文水位自查」两条；缺者应照 Workspace_Charter.md 原文补上（唯一来源，不得自行改动数字）。
-换任自办，规则见插件注入的提示段；**不得自行调用 peer_new**，也不向全局请求换任。
+换任自办，规则见插件注入的提示段；**不得自行调用 `peer`（action="new"）**，也不向全局请求换任。
 ```
 
 ### 2.3 杂项（只在首任时由全局发，此后自理）

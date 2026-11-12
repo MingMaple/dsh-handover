@@ -8,19 +8,22 @@ import path from 'node:path';
 import { readJsonDir, pick, isSafeName, assertSafeName } from './text.mjs';
 import { projCacheDir, isSubagent } from './sessions.mjs';
 import { globalWorkspaceSessionIds } from './registry.mjs';
-import { TOOL_NAMES, PEER_NAMES, nameOf, peerNameOf } from './names.mjs';
+import { TOOL_NAMES, PEER_NAME, nameOf } from './names.mjs';
 import { stampTz } from './brief.mjs';
 
 export const ROLES = ['global', 'project', 'misc', 'plain'];
 export const ROLE_LABEL = { global: '全局', project: '项目', misc: '杂项', plain: '普通' };
 
-export const ALL_TOOL_NAMES = TOOL_NAMES.concat(PEER_NAMES);
+export const ALL_TOOL_NAMES = TOOL_NAMES.concat([PEER_NAME]);
 
-/** 角色 → 可见工具（其余一律 deny）。改这张表就是改成本结构。 */
+/**
+ * 角色 → 可见工具（其余一律 deny）。改这张表就是改成本结构。
+ * 合并后一个工具内含多个动作，动作级权限在工具内部再判一次（见 tools/peer.mjs）。
+ */
 const ROLE_TOOLS = {
   global: ALL_TOOL_NAMES.slice(),
-  project: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('gate'), nameOf('snapshot'), nameOf('profile'), nameOf('office'), nameOf('succeed'), peerNameOf('send'), peerNameOf('status')],
-  misc: [nameOf('phase'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('snapshot'), nameOf('profile'), nameOf('office'), nameOf('succeed'), peerNameOf('send'), peerNameOf('status'), peerNameOf('new')],
+  project: [nameOf('status'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('gate'), nameOf('backup'), nameOf('profile'), nameOf('office'), nameOf('succeed'), nameOf('docmap'), PEER_NAME],
+  misc: [nameOf('status'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('backup'), nameOf('profile'), nameOf('office'), nameOf('succeed'), nameOf('docmap'), PEER_NAME],
   plain: [],
 };
 

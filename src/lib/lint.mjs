@@ -111,8 +111,8 @@ export function lintProject(file) {
   if (!body) gap.push("缺 ## 1. 正在做的事 一节（2026-10-12 起的强制项，本项目还没补）");
   else {
     const core = body.filter((l) => l.trim() !== '' && !l.trim().startsWith('>'));
+    // 只判「有没有实质内容」；不设字数下限（2026-11-11 口径：交接类文档不设体积上限）。
     if (core.length === 0) bad.push("正在做的事 是空节（或只有引用块说明），没写实质内容");
-    else if (core.join('').trim().length < 30) bad.push('正在做的事 内容过短，像是应付');
   }
   const nxt = sectionLines(text, '下一步') || sectionLines(text, '待办');
   if (!nxt) bad.push("缺「下一步待办」一节");

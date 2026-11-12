@@ -27,7 +27,7 @@ export async function newSessionIn(env, opts) {
   if (!sessionId) return { error: 'create 没有返回 sessionId' };
   const title = String(o.title || '');
   if (title) {
-    try { if (typeof controller.rename === 'function') await controller.rename({ sessionId, title }); } catch { /* 改名失败可事后 peer_rename */ }
+    try { if (typeof controller.rename === 'function') await controller.rename({ sessionId, title }); } catch { /* 改名失败可事后用 peer（action="rename"） */ }
   }
   const role = String(o.role || '');
   if (role && role !== 'plain' && typeof env.writeRole === 'function') {

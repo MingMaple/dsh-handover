@@ -1,6 +1,6 @@
 /**
  * 空白环境冒烟：不依赖任何真实工作区，验「装上就能跑」。
- * 1) 宿主半在假 ctx 上 apply：24 个工具、手册段、状态路由（200/404/405/HEAD）、只读工具不抛
+ * 1) 宿主半在假 ctx 上 apply：14 个工具、手册段、状态路由（200/404/405/HEAD）、只读工具不抛
  * 2) 浏览器半在假 window/React 上装载：bundle 外形、settings.section 注册、成体视图能渲染
  * 用法：node scripts/blank-smoke.mjs [--dist <dist 目录>]
  */
@@ -42,7 +42,7 @@ const ctx = {
 };
 apply(ctx, {});
 
-ok(reg.tools.length === 24, '工具数应为 24', String(reg.tools.length));
+ok(reg.tools.length === 14, '工具数应为 14', String(reg.tools.length));
 ok(reg.sections.length === 0, '未开启全局前置提示词时不得注册提示段', String(reg.sections.length));
 ok(reg.tools.filter((t) => !t || !t.name || !t.description || !t.execute).length === 0, '每个工具都要有 name/description/execute');
 // 上下文成本实测：工具描述是每次请求都要付的固定开销。参考值只用于展示，不作为通过条件。
@@ -52,11 +52,11 @@ const budget = await import(pathToFileURL(path.join(dist, 'lib', 'facts.mjs')).h
   const widest = rows.slice().sort((a, b) => b.n - a.n)[0];
   console.log('工具描述 token 实测：最宽 ' + widest.name + ' ' + widest.n + '（参考值 ' + budget.TOKEN_BUDGET.toolDescTokens + '，不判失败）');
 }
-ok(reg.tools.filter((t) => t.name.startsWith('ho_')).length === 18, 'ho_* 应为 18 个', String(reg.tools.filter((t) => t.name.startsWith('ho_')).length));
-ok(reg.tools.filter((t) => t.name.startsWith('peer_')).length === 6, 'peer_* 应为 6 个');
+ok(reg.tools.filter((t) => t.name.startsWith('ho_')).length === 13, 'ho_* 应为 13 个', String(reg.tools.filter((t) => t.name.startsWith('ho_')).length));
+ok(reg.tools.filter((t) => t.name === 'peer').length === 1, '平级会话工具应合并为一个 peer');
 // 每步条件启用：内核 0.2.2 起工具按「步」解析，子会话在解析工具表这一步就要被排除，
-// 否则它的首轮提示词会带着 24 个用不了的 schema（每步白付约 2.5k token）。
-ok((reg.toolOpts || []).length === 24 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '24 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
+// 否则它的首轮提示词会带着 14 个用不了的 schema（每步白付约 1.5k token）。
+ok((reg.toolOpts || []).length === 14 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '14 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
 
 /** 取某个工具的每步启用条件（0.2.2 起工具按步解析）。 */
 const gateFor = (name) => {
@@ -66,7 +66,7 @@ const gateFor = (name) => {
 
 {
   // 每步条件同时承担子会话排除与角色过滤：调用方每步重算工具表，换角色下一轮即生效。
-  const gate = gateFor('ho_brief');
+  const gate = gateFor('ho_status');
   ok(typeof gate === 'function', '每步启用条件应可调用');
   if (typeof gate === 'function') {
     ok(gate({}) === true, '没有 agent 的调用应放行（命令行与演练路径）');
@@ -75,10 +75,10 @@ const gateFor = (name) => {
     ok(gate({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '未登记角色的会话按普通处理（0 个插件工具）');
     const roleMod = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
     roleMod.writeRole({}, 'session-boss', { role: 'global' });
-    ok(gate({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_brief');
-    const gatePlain = gateFor('ho_phase');
-    ok(typeof gatePlain === 'function' && gatePlain({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_phase');
-    ok(gatePlain({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '普通角色不可见 ho_phase');
+    ok(gate({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_status');
+    const gatePlain = gateFor('ho_office');
+    ok(typeof gatePlain === 'function' && gatePlain({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_office');
+    ok(gatePlain({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '普通角色不可见 ho_office');
   }
 }
 // 可选注入多了 connection（/api 载体）。两个都必须是**可选**的，否则旧宿主整插件不激活。
@@ -149,11 +149,11 @@ let payload = null;
 try { payload = JSON.parse(r1.body); } catch (e) { fails.push('返回不是 JSON：' + e.message); }
 if (payload) {
   ok(payload.plugin.version && payload.plugin.version !== '?', '应报出版本号', String(payload.plugin.version));
-  ok(payload.plugin.tools === 24, 'payload 工具数应为 24', String(payload.plugin.tools));
+  ok(payload.plugin.tools === 14, 'payload 工具数应为 14', String(payload.plugin.tools));
   ok(payload.workspace && payload.workspace.found === false, '空白 HOME 下应判定为没找到工作区', JSON.stringify(payload.workspace));
   ok(Array.isArray(payload.notes) && payload.notes.length > 0, '没找到工作区时应给中文提示');
   ok(payload.guide && Array.isArray(payload.guide.situations) && payload.guide.situations.length >= 8, 'payload 应带「怎么用」的时机表');
-  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 24, '使用说明里应列全 24 个工具', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
+  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 14, '使用说明里应列全 14 个工具', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
   ok(payload.plugin.initErrors && payload.plugin.initErrors.length === 0, '初始化错误应为空', JSON.stringify(payload.plugin.initErrors));
 }
 ok((await call('GET', '/dsh-handover/nope.json')).code === 404, '未知路径应 404');
@@ -252,18 +252,18 @@ ok(e3.code === 200 && e3.json && e3.json.ok && e3.json.chars === 0 && e3.json.en
 const s4 = await postJson('/dsh-handover/register', { path: root || PARENT });
 ok(s4.code === 501 && s4.json && s4.json.ok === false && String(s4.json.hint || '').indexOf(root || PARENT) !== -1, '无 workspaceRegistry 时应回退给「手工粘贴路径」的提示', JSON.stringify(s4.json));
 
-const initTool = reg.tools.find((t) => t.name === 'ho_init');
-ok(!!initTool, '应注册 ho_init（首次安装工具）');
+const initTool = reg.tools.find((t) => t.name === 'ho_workspace');
+ok(!!initTool, '应注册 ho_workspace（含首次安装 action=init）');
 if (initTool) {
   const PARENT2 = path.join(BLANK, 'mother2');
   fs.mkdirSync(PARENT2, { recursive: true });
-  const ri = await initTool.execute({ parent: PARENT2 }, null);
-  ok(/已建立全局文件体系/.test(ri.text), 'ho_init 应建树并报出路径', ri.text.split('\n')[0]);
-  const ri2 = await initTool.execute({ parent: PARENT2 }, null);
-  ok(/未建立/.test(ri2.text), 'ho_init 对非空目标应拒绝且不改动', ri2.text.split('\n')[0]);
+  const ri = await initTool.execute({ action: 'init', parent: PARENT2 }, null);
+  ok(/已建立全局文件体系/.test(ri.text), 'ho_workspace(action=init) 应建树并报出路径', ri.text.split('\n')[0]);
+  const ri2 = await initTool.execute({ action: 'init', parent: PARENT2 }, null);
+  ok(/未建立/.test(ri2.text), 'ho_workspace(action=init) 对非空目标应拒绝且不改动', ri2.text.split('\n')[0]);
 }
 
-const readonly = ['ho_diag', 'ho_phase', 'ho_brief', 'ho_sessions', 'ho_gate', 'ho_charter', 'ho_drift', 'ho_workspace'];
+const readonly = ['ho_status', 'ho_sessions', 'ho_gate', 'ho_charter', 'ho_workspace'];
 for (const t of reg.tools) {
   if (readonly.indexOf(t.name) === -1) continue;
   try {
@@ -305,7 +305,7 @@ fs.mkdirSync(path.join(WS, '_Misc', 'tasks', '抢名额'), { recursive: true });
     } catch (e) { return String(e && e.message ? e.message : e); }
   };
   const lowErr = await newErr({});
-  ok(/已有在任会话 Demo1/.test(lowErr) && /session-hold/.test(lowErr) && /peer_send/.test(lowErr) && /force=true/.test(lowErr), '项目类别有低水位在任时应拒绝新建并给出复用建议', lowErr);
+  ok(/已有在任会话 Demo1/.test(lowErr) && /session-hold/.test(lowErr) && /peer/.test(lowErr) && /force=true/.test(lowErr), '项目类别有低水位在任时应拒绝新建并给出复用建议', lowErr);
   const forcedErr = await newErr({ force: true });
   ok(forcedErr.indexOf('已有在任会话') === -1, 'force=true 应越过复用判据', forcedErr);
 
@@ -372,18 +372,72 @@ const hpU = handoverPathFor(WS, { role: 'plain' });
 ok(hpU.path === null && !!hpU.reason, '普通会话不得给出交接路径（不退回全局）', JSON.stringify(hpU));
 
 const tsG = toolsetFor('global');
-ok(tsG.allow.length === 24 && tsG.deny.length === 0, '全局应可见全部 24 个工具', JSON.stringify([tsG.allow.length, tsG.deny.length]));
+ok(tsG.allow.length === 14 && tsG.deny.length === 0, '全局应可见全部 14 个工具', JSON.stringify([tsG.allow.length, tsG.deny.length]));
 const tsP = toolsetFor('project');
 ok(tsP.allow.length === 11, '项目角色应可见 11 个工具', String(tsP.allow.length));
 ok(tsP.allow.indexOf('ho_handover') !== -1 && tsP.allow.indexOf('ho_checkpoint') !== -1, '项目角色必须能写自己的交接与压缩');
-ok(tsP.allow.indexOf('ho_pack') === -1 && tsP.allow.indexOf('ho_sessions') === -1, '项目角色不该看见全局管理工具');
+ok(tsP.allow.indexOf('ho_sessions') === -1 && tsP.allow.indexOf('ho_changelog') === -1, '项目角色不该看见全局管理工具');
 ok(tsP.deny.indexOf('ho_handover') === -1 && tsP.deny.indexOf('run_code') === -1, 'deny 名单不得含保留名或本角色已允许的工具');
 const tsM = toolsetFor('misc');
-ok(tsM.allow.length === 11 && tsM.allow.indexOf('peer_new') !== -1 && tsM.allow.indexOf('ho_gate') === -1, '杂项角色：11 个，含 peer_new、不含 ho_gate', String(tsM.allow.length));
+ok(tsM.allow.length === 10 && tsM.allow.indexOf('peer') !== -1 && tsM.allow.indexOf('ho_gate') === -1, '杂项角色：10 个，含 peer、不含 ho_gate', String(tsM.allow.length));
 const tsU = toolsetFor('plain');
-ok(tsU.allow.length === 0 && tsU.deny.length === 24, '普通会话不载入任何插件工具', JSON.stringify([tsU.allow.length, tsU.deny.length]));
+ok(tsU.allow.length === 0 && tsU.deny.length === 14, '普通会话不载入任何插件工具', JSON.stringify([tsU.allow.length, tsU.deny.length]));
 const rSub = resolveRole({ sessionId: 'session-sub', title: 'Demo1', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), subagent: true });
 ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普通处理，不按 cwd 判项目', JSON.stringify(rSub));
+
+// ---------- 文档定位（docmap）与授权提示：写入权限、路径校验、空 map、注入 ----------
+{
+  const { pmDocmapTool } = await import(DIST('tools/ho_docmap.mjs'));
+  const { registerHolder } = await import(DIST('lib/office.mjs'));
+  const { docmapBlock, docmapRelPath, readDocmap } = await import(DIST('lib/docmap.mjs'));
+  const manDm = await import(DIST('lib/manual.mjs'));
+  const { grantConsent, consumedConsent, activeConsentsFor, consentPromptLines } = await import(DIST('lib/consent.mjs'));
+
+  const dmInfo = { role: 'project', project: 'Demo', task: '' };
+  const dmEnv = {
+    cfg: resolveConfig({ workspaceRoot: WS }),
+    resolveWs: () => WS,
+    selfId: (exec) => (exec && exec.agent && exec.agent.session ? exec.agent.session.header.id : null),
+    roleOf: () => dmInfo,
+    refreshPromptFor: () => true,
+  };
+  const dmExec = (sid) => ({ agent: { session: { header: { id: sid, cwd: path.join(WS, 'Projects', 'Demo', 'Demo库') } } } });
+  fs.writeFileSync(path.join(WS, 'Projects', 'Demo', 'README.md'), 'x', 'utf8');
+  registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-dm', workspace: WS });
+  const dm = pmDocmapTool(dmEnv);
+  const wroteDm = await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: '项目简介', when: '动手前' }] }, dmExec('session-dm'));
+  ok(/已写入/.test(wroteDm.text), 'docmap：在任者写自己的 map 应成功', wroteDm.text.split('\n')[0]);
+  const readBack = readDocmap(WS, dmInfo);
+  ok(readBack.exists && readBack.entries.length === 1 && readBack.entries[0].path === 'Projects/Demo/README.md', 'docmap：写盘后可解析回一条', JSON.stringify(readBack.entries));
+  const dmBlock = docmapBlock(WS, dmInfo);
+  ok(/文档定位/.test(dmBlock) && /Projects\/Demo\/README\.md/.test(dmBlock) && /动手前/.test(dmBlock), 'docmap：注入块含路径与时机', dmBlock);
+  const injectedDm = manDm.scopedManual(dmInfo, { ws: WS, docmap: dmBlock });
+  ok(injectedDm.indexOf('文档定位') !== -1 && injectedDm.split('文档定位').length === 2, 'docmap：注入段只出现一次', String(injectedDm.split('文档定位').length - 1));
+  let missErr = '';
+  try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/nope.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { missErr = String(e && e.message ? e.message : e); }
+  ok(/未写入/.test(missErr) && /nope\.md/.test(missErr), 'docmap：路径不存在应整条拒绝并点名', missErr);
+  ok(readDocmap(WS, dmInfo).entries.length === 1, 'docmap：拒绝后原 map 不得被改');
+  registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: 'session-dm2', workspace: WS });
+  let oldErr = '';
+  try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { oldErr = String(e && e.message ? e.message : e); }
+  ok(/只有在任者可以写/.test(oldErr), 'docmap：已交出的旧会话只读', oldErr);
+  const emptyDm = await dm.execute({ action: 'write', entries: [] }, dmExec('session-dm2'));
+  ok(/空 map/.test(emptyDm.text), 'docmap：空 entries 应写明不注入', emptyDm.text);
+  ok(docmapBlock(WS, dmInfo) === '', 'docmap：空 map 注入块为空串');
+  ok(docmapRelPath(dmInfo).replace(/\\/g, '/') === '_Control_Center/records/docmap/project-Demo.md', 'docmap：文件路径按血脉命名', docmapRelPath(dmInfo));
+
+  grantConsent('session-dm2', 'blank-smoke', 'compact');
+  const actDm = activeConsentsFor('session-dm2');
+  const consentLines = consentPromptLines(actDm);
+  ok(actDm.length === 1 && consentLines.length === 1 && /用户已授权压缩/.test(consentLines[0]), '授权：有效期内应生成一行提示', JSON.stringify(consentLines));
+  ok(activeConsentsFor('session-other').length === 0, '授权：别的会话看不到', JSON.stringify(activeConsentsFor('session-other')));
+  const withConsent = manDm.scopedManual(dmInfo, { ws: WS, docmap: '', consents: actDm });
+  ok(withConsent.indexOf('用户已授权压缩') !== -1, '授权：提示段应带那一行', withConsent.slice(-160));
+  consumedConsent('session-dm2', 'compact');
+  ok(consentPromptLines(activeConsentsFor('session-dm2')).length === 0, '授权：用掉后提示消失（不占位）');
+  const afterUse = manDm.scopedManual(dmInfo, { ws: WS, docmap: '', consents: activeConsentsFor('session-dm2') });
+  ok(afterUse.indexOf('已授权') === -1, '授权：用掉后提示段不再有该行');
+}
 
 // ---------- 骨架档案：预设、默认骨架、注册、校验 ----------
 const prof = await import(DIST('lib/profile.mjs'));
@@ -499,18 +553,18 @@ const projAgent = {
 };
 for (const cb of listeners) cb({ agent: projAgent, source: 'fresh' });
 ok(calls.restrict.length === 0, '按步路径不用 restrict 收窄工具', String(calls.restrict.length));
-const projGatePack = gateFor('ho_pack');
+const projGatePack = gateFor('ho_sessions');
 const projGateHand = gateFor('ho_handover');
 const projExec = { agent: projAgent };
-ok(typeof projGatePack === 'function' && projGatePack(projExec) === false, '项目角色不可见 ho_pack（每步条件）');
+ok(typeof projGatePack === 'function' && projGatePack(projExec) === false, '项目角色不可见 ho_sessions（每步条件）');
 ok(typeof projGateHand === 'function' && projGateHand(projExec) === true, '项目角色可见 ho_handover（每步条件）');
-ok(gateFor('ho_brief')(projExec) === false, '项目角色不可见 ho_brief');
+ok(gateFor('ho_changelog')(projExec) === false, '项目角色不可见 ho_changelog');
 ok(calls.sections.length === 1 && calls.sections[0].name === 'dsh-handover:manual', '应注册同名提示段遮蔽兜底段');
 const secNorm = String(calls.sections[0].text).replace(/\\/g, '/');
 ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '项目提示段应含自己的路径', secNorm.slice(0, 200));
 ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明任务完成不向全局报告', secNorm.slice(0, 400));
 ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务达成');
-ok(secNorm.indexOf('可直接 peer_send') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
+ok(secNorm.indexOf('可直接 peer') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
 ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
 console.log('项目提示段 token 实测：' + budget.estimateTokens(calls.sections[0].text) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
 ok(calls.sections[0].text.indexOf('子智能体') === -1, '项目段不得携带子智能体派发纪律（不属于本插件）');
@@ -572,7 +626,7 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
 // 分层护栏——常驻段只留判定，工作流细节必须留在手册里
 {
   const g0 = String(gCalls.sections[0].text);
-  ok(g0.indexOf('ho_pack') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
+  ok(g0.indexOf('ho_backup') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
   ok(g0.indexOf('ho_charter(doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
   const rm = fs.readFileSync(path.join(dist, 'templates', 'Runtime_Manual.md'), 'utf8');
   ok(rm.indexOf('## 11. 首次安装') !== -1 && rm.indexOf('## 12. 提示词预算') !== -1, '手册应含首次安装与提示词预算两节');
@@ -625,7 +679,7 @@ writeRole({}, 'session-unr', { role: 'project', project: 'Demo', source: 'user' 
 for (const cb of ((reg.listeners && reg.listeners['agent/status']) || [])) cb({ agent: unrAgent, status: 'running' });
 ok(!!unrCalls.section && /项目/.test(String(unrCalls.section.text)), '开轮前核对应按新角色补装提示段', JSON.stringify(unrCalls.section && unrCalls.section.name));
 
-// 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 24 个，改角色后开轮前换成 13 个。
+// 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 14 个，改角色后开轮前换成 3 个。
 {
   const legacyCalls = { restrict: 0, lastDeny: null, disposed: 0 };
   const legacyListeners = {};
@@ -651,10 +705,10 @@ ok(!!unrCalls.section && /项目/.test(String(unrCalls.section.text)), '开轮�
     ctx: { tools: legacyTools, systemPrompt: legacyCtx.systemPrompt },
   };
   for (const cb of (legacyListeners['agent/created'] || [])) cb({ agent: legacyAgent, source: 'fresh' });
-  ok(legacyCalls.restrict === 1 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 24, '旧内核：创建时按普通收窄 24 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  ok(legacyCalls.restrict === 1 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 14, '旧内核：创建时按普通收窄 14 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
   writeRole({}, 'session-legacy', { role: 'project', project: 'Demo', source: 'user' });
   for (const cb of (legacyListeners['agent/status'] || [])) cb({ agent: legacyAgent, status: 'running' });
-  ok(legacyCalls.restrict === 2 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 13, '旧内核：开轮前换成项目角色的 13 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  ok(legacyCalls.restrict === 2 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 3, '旧内核：开轮前换成项目角色的 3 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
   ok(legacyCalls.disposed === 1, '旧内核：换角色应撤销旧限制', String(legacyCalls.disposed));
 }
 // ---------- 角色路由 ----------
@@ -697,15 +751,15 @@ const guardExec = (name, argsObj, sid, cwd, title) => ({
 });
 ok(typeof reg.guardFn === 'function', '应注册工具守卫', typeof reg.guardFn);
 if (typeof reg.guardFn === 'function') {
-  const gGlobal = reg.guardFn(guardExec('peer_send', { session_id: 'session-proj-x' }, 'session-glob', WS, '全局9'));
-  ok(gGlobal === undefined, '全局角色 peer_send 应放行', String(gGlobal));
-  const gReport = reg.guardFn(guardExec('peer_send', { session_id: 'session-glob' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
+  const gGlobal = reg.guardFn(guardExec('peer', { action: 'send', session_id: 'session-proj-x' }, 'session-glob', WS, '全局9'));
+  ok(gGlobal === undefined, '全局角色 peer(action=send) 应放行', String(gGlobal));
+  const gReport = reg.guardFn(guardExec('peer', { action: 'send', session_id: 'session-glob' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(gReport === undefined, '项目会话向全局报告应放行', String(gReport));
-  const gPeer = reg.guardFn(guardExec('peer_send', { session_id: 'session-proj' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
+  const gPeer = reg.guardFn(guardExec('peer', { action: 'send', session_id: 'session-proj' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(gPeer === undefined, '会话之间可直接对话，不必经全局转述', String(gPeer));
-  const gNew = reg.guardFn(guardExec('peer_new', { workspace: 'Demo库' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
+  const gNew = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Demo库' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(typeof gNew === 'string' && /仅属全局/.test(gNew), '项目会话不得建平级会话', String(gNew));
-  const gMisc = reg.guardFn(guardExec('peer_new', { workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '抢名额'), '杂项1'));
+  const gMisc = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '抢名额'), '杂项1'));
   ok(gMisc === undefined, '杂项会话自建 Misc 换任应放行', String(gMisc));
 }
 

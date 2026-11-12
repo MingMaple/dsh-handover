@@ -176,7 +176,7 @@ function reuseBlocker(env, ws, kind, key) {
   if (pct === null || pct === undefined || !(Number(pct) < watermark(env.cfg).warnValue)) return '';
   const label = kind === 'global' ? '全局类别' : kind === 'project' ? '项目「' + key + '」' : '杂项任务「' + key + '」';
   return '拒绝新建：' + label + '已有在任会话 ' + (cur.name || '（未命名）') + '（' + cur.sessionId + '）水位 '
-    + Number(pct).toFixed(1) + '%，低于 ' + watermark(env.cfg).warn + '；建议用 peer_send 复用，确需另建请传 force=true。';
+    + Number(pct).toFixed(1) + '%，低于 ' + watermark(env.cfg).warn + '；建议用 peer（action="send"）复用，确需另建请传 force=true。';
 }
 
 export async function sessionNew(env, args, exec) {
@@ -241,7 +241,7 @@ export async function sessionNew(env, args, exec) {
     '读毕先向用户报告，不得自行开展作业：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。待用户指派后再动手。交接无待办时如实说明，不得编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '全局会话 id：' : '创建者会话 id：') + meId,
-    '默认沉默：仅在三种时机各发一条 peer_send 给全局：水位不低于 ' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer_send，不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
+    '默认沉默：仅在三种时机各发一条 peer（action="send"）给全局：水位不低于 ' + watermark(env.cfg).warn + ' 且已写交接、需用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer（action="send"），不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
   ].join(NL);
   const r = await sendPrompt(env.controller(), sessionId, text, 'queue');
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');
@@ -344,7 +344,7 @@ export function sessionPrompt(env, args, exec) {
 export async function sessionArchive(env, args, exec) {
   const reg = env.registry();
   if (!reg || typeof reg.archiveSession !== 'function') {
-    throw new Error('workspaceRegistry.archiveSession 不可用（先跑 ho_diag 看服务可见性）');
+    throw new Error('workspaceRegistry.archiveSession 不可用（先跑 ho_status（view=diag） 看服务可见性）');
   }
   const sid = String(args.session_id || '').trim();
   if (!sid) throw new Error('必须给 session_id');
@@ -370,7 +370,7 @@ export async function sessionArchive(env, args, exec) {
 export async function sessionUnarchive(env, args) {
   const reg = env.registry();
   if (!reg || typeof reg.unarchiveSession !== 'function') {
-    throw new Error('workspaceRegistry.unarchiveSession 不可用（先跑 ho_diag 看服务可见性）');
+    throw new Error('workspaceRegistry.unarchiveSession 不可用（先跑 ho_status（view=diag） 看服务可见性）');
   }
   const sid = String(args.session_id || '').trim();
   if (!sid) throw new Error('必须给 session_id');
@@ -393,7 +393,7 @@ function orderHandoverText(env, sid, extra) {
   lines.push("   直接调用 ho_handover(action=\"write\", text=...)，不要传 path：路径已按你的角色（" + (info && info.role ? info.role : "unknown") + "）解析。");
   lines.push("2) 必写：① 当前进度（版本、产物、是否通过）② 环境与路径（版本号、安装位置、下载源）③ 下一步清单，按顺序列出，每条可直接执行 ④ 已完成待验收、要求未实现的部分 ⑤ 已知问题与已踩的错。");
   lines.push("3) 机密只写位置，不写值：密码、token、密钥均写明所在文件。");
-  lines.push("4) 写完只回一条 peer_send 给全局：`交接已写 <绝对路径>`，附一句状态，不复述全文。");
+  lines.push("4) 写完只回一条 peer（action=\"send\"）给全局：`交接已写 <绝对路径>`，附一句状态，不复述全文。");
   lines.push("5) 不要压缩上下文，不要新建会话（新建会话属全局权限）。");
   if (extra) lines.push("6) 全局附加：" + extra);
   return lines.join(NL);
@@ -482,7 +482,7 @@ export async function sessionPlace(env, args) {
   if (!sid) throw new Error("place 需要 session_id");
   if (!key) throw new Error("place 需要 workspace（id、标题、路径都行）");
   const reg = env.registry();
-  if (!reg || typeof reg.get !== "function") throw new Error("workspaceRegistry 不可用（先跑 ho_diag）");
+  if (!reg || typeof reg.get !== "function") throw new Error("workspaceRegistry 不可用（先跑 ho_status（view=diag））");
   const wid = findWorkspaceId(key);
   if (!wid) throw new Error("找不到工作区：" + key);
   const w = reg.get(wid);

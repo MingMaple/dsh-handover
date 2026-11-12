@@ -69,6 +69,6 @@ export function composeBrief(input) {
     out.push('Δ交接  读不到（会话日志不可用）');
   }
   if (input.advice && input.advice.text) out.push('阶段   ' + input.advice.text);
-  out.push('提示   ' + (input.ok ? '按「活跃」名单逐个 peer_send 广播本会话 id 并记回 §3；可正常开始作业' : '本会话已过阈值或闸门异常，应先收齐交接，再开展新任务'));
+  out.push('提示   ' + (input.ok ? '按「活跃」名单逐个用 peer（action="send"）广播本会话 id 并记回 §3；可正常开始作业' : '本会话已过阈值或闸门异常，应先收齐交接，再开展新任务'));
   return out;
 }

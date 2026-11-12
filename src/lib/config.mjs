@@ -17,8 +17,8 @@ export const DEFAULTS = {
   compactAttempts: 3,
   waitIdleMs: 180000,      // 等会话空闲的上限（超过就放弃并回告）
   driftSlack: 3,           // Δ交接容忍轮数（超过即需刷交接）
-  wakeAuthority: 'on',     // 会话守卫硬拦：on / off（off＝连 peer_new 也不拦）
-  directPeer: 'on',        // 会话之间直接 peer_send：on 允许（不经全局转述）；off 退回「只能向全局报告」的旧口径
+  wakeAuthority: 'on',     // 会话守卫硬拦：on / off（off＝连 peer 的 new 动作也不拦）
+  directPeer: 'on',        // 会话之间直接 peer（action="send"）：on 允许（不经全局转述）；off 退回「只能向全局报告」的旧口径
   roleGating: 'on',        // 按角色裁剪工具与提示段：on / off（off＝所有会话都看得见全部工具）
   reuseCheck: true,        // 建新会话前查在任会话水位（低于 warnRatio 拒绝）
   prepackMinAgeMin: 90,    // 打包前要求会话静止分钟数

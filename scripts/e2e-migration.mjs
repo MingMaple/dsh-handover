@@ -15,7 +15,7 @@ const argIdx = process.argv.indexOf('--dist');
 const dist = argIdx !== -1 ? path.resolve(process.argv[argIdx + 1]) : path.join(repo, 'dist');
 
 const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
-const { pmPackTool } = await imp('tools/ho_pack.mjs');
+const { pmBackupTool } = await imp('tools/ho_backup.mjs');
 const { resolveConfig } = await imp('lib/config.mjs');
 
 const fails = [];
@@ -47,7 +47,7 @@ const env = {
   selfId: () => null,
   selfCwd: () => null,
 };
-const packTool = pmPackTool(env);
+const packTool = pmBackupTool(env);
 /** action 分流：pack／verify／restore 都走同一个工具（合并口径）。 */
 const run = (args) => packTool.execute(args, null);
 

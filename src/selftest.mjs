@@ -1,14 +1,13 @@
 /**
  * 脱离 DSH 的自测台：用假 env 直接跑工具 execute，打印只读结果，供人工比对；不参与发布门禁。
- * 用法：node selftest.mjs [--ws <工作区根>] [--session <session id>] [--tool brief|gate|sessions|phase|charter|all]
+ * 用法：node selftest.mjs [--ws <工作区根>] [--session <session id>] [--tool status|gate|sessions|charter|office|succeed|all]
  */
 import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, pressurePct } from './lib/sessions.mjs';
 import { readJsonDir, isDir } from './lib/text.mjs';
-import { pmBriefTool } from './tools/ho_brief.mjs';
+import { pmStatusTool } from './tools/ho_status.mjs';
 import { pmGateTool } from './tools/ho_gate.mjs';
 import { pmSessionsTool } from './tools/ho_sessions.mjs';
-import { pmPhaseTool } from './tools/ho_phase.mjs';
 import { pmCharterTool } from './tools/ho_charter.mjs';
 import { pmOfficeTool } from './tools/ho_office.mjs';
 import { pmSucceedTool } from './tools/ho_succeed.mjs';
@@ -65,10 +64,11 @@ const envSucceed = Object.assign({}, env, {
 
 const exec = null;
 const cases = [
-  { t: pmBriefTool(env), a: {}, flag: "brief" },
+  { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "brief" }, flag: "status" },
+  { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "phase" }, flag: "status" },
+  { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "diag" }, flag: "status" },
   { t: pmGateTool(env), a: { scope: "all" }, flag: "gate" },
   { t: pmSessionsTool(env), a: {}, flag: "sessions" },
-  { t: pmPhaseTool(env), a: {}, flag: "phase" },
   { t: pmCharterTool(env), a: { doc: "charter", section: "8.1.1.4", maxLines: 30 }, flag: "charter" },
   { t: pmOfficeTool(env), a: { query: "全局" }, flag: "office" },
   { t: pmSucceedTool(envSucceed), a: {}, flag: "succeed", want: /没有授权/ },
@@ -77,7 +77,7 @@ const cases = [
 let failed = 0;
 for (const c of cases) {
   if (only !== "all" && only !== c.flag) continue;
-  const bar = "==== ho_" + c.flag + " ====";
+  const bar = "==== " + c.t.name + " " + JSON.stringify(c.a) + " ====";
   console.log(bar);
   try {
     const out = await c.t.execute(c.a, exec);
