@@ -53,7 +53,7 @@ export function globalManual(opts) {
     '',
     '三、节奏',
     handoverRuleText(o.cfg),
-    '压缩须当前用户点「压缩授权」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。confirm 仅表意图，授权以点击为准。关键步骤传 at_risk=true 暂缓。',
+    '压缩须当前用户点击「授权压缩」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。confirm 仅表意图，授权以点击为准。关键步骤传 at_risk=true 暂缓。',
     '',
     '四、交接',
     '交接：_Control_Center/records/Global_Handover.md。',
@@ -94,7 +94,7 @@ export function scopedManual(info, opts) {
     hp.path
       ? '交接：' + hp.path + '（ho_handover 默认）。'
       : '交接路径未解析（缺角色或项目名），请先在设置页设定角色。',
-    handoverRuleText(o.cfg) + '压缩须当前用户点「压缩授权」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
+    handoverRuleText(o.cfg) + '压缩须当前用户点击「授权压缩」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
     '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需当前用户决定、全局口径有误时向全局报告；任务完成不报全局。',
     reuseRule(o.cfg),
     RUNTIME_POINTER,

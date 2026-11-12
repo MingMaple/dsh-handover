@@ -36,9 +36,9 @@ function list(env, args, exec) {
   }
   const notifProjects = new Set(scan.notify.map((r) => r.project));
   const skipProjects = new Set(scan.skip.map((r) => r.project));
-  out.push("通知判定：活跃项目 " + notifProjects.size + " 个，需要通知 " + scan.notify.length + " 个会话（仅各项目在任）/ 沉默项目 " + skipProjects.size + " 个，跳过 " + scan.skip.length + " 个会话（沉默项目全部＋前任）");
+  out.push("通知判定：活跃项目 " + notifProjects.size + " 个，需要通知 " + scan.notify.length + " 个会话（仅各项目在任）/ 沉默项目 " + skipProjects.size + " 个，跳过 " + scan.skip.length + " 个会话（沉默项目全部＋已交出的旧会话）");
   for (const r of scan.notify) out.push("  要通知【在任】" + r.project + "(" + r.sid + ")  最后活动 " + stamp(r.mtime));
-  if (scan.skip.length) out.push("  跳过（沉默项目，含其前任）：" + scan.skip.map((x) => x.project + "(" + x.sid.slice(-8) + ")").join("、"));
+  if (scan.skip.length) out.push("  跳过（沉默项目，含其已交出的旧会话）：" + scan.skip.map((x) => x.project + "(" + x.sid.slice(-8) + ")").join("、"));
   const gate = syncCheck(env.resolveWs(exec));
   if (gate.error) out.push("通用约束条闸门（Charter §7.2.3）：读不到 §8.1.1.4 正文 —— 请人工核 " + gate.path);
   else if (!gate.ok) {

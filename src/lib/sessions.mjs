@@ -37,7 +37,7 @@ function isPlausible(name) {
 
 /** 返回 { project, real }：优先看 cwd 里的 Projects/<名>/，退回首条提示里的 Projects/<名>/ 或 「<名>」项目。 */
 export function projectOf(data) {
-  // 先认路径：首条提示是自然语言的会话解析不出项目名，会被整行过滤，在任判定就可能落到前任身上。
+  // 先认路径：首条提示是自然语言的会话解析不出项目名，会被整行过滤，在任判定就可能落到已交出的旧会话身上。
   // cwd 由宿主写入，最可靠。
   const raw = String(cwdOf(data) || '').replace(/\\/g, '/');
   const ci = raw.toLowerCase().indexOf('/projects/');

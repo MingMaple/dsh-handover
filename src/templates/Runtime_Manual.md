@@ -25,7 +25,7 @@
 - `ho_sessions` —— 会话清点；也用来设定角色、建会话、出提示词、归档、解归档（`action` 分流）。
 - `ho_charter` —— 按节取规则正文：`doc`＝`charter`（缺省）、`handover_rules`、`migration_rules`、`misc_standard`、`writing_rules`、`runtime`（本文全文）；`section` 留空只列目录。**工作区没有对应规则文件时退回插件内置默认口径**（输出会注明），所以换到空白机器也不会变空壳。
 - `ho_office` —— 查在任：输入「全局」「全局3」「项目名」等，返回现任会话的名字与会话 id；多个名字空格分隔，留空列出全部。
-- `ho_docmap` —— 本血脉的文档定位：`action=read|write|check`。血脉由本会话角色推导，不接受传入项目名；写入者必须是该血脉在任者，已交出的旧会话只读。
+- `ho_docmap` —— 本会话的文档定位：`action=read|write|check`。写入范围由本会话角色决定，不接受传入项目名；写入者必须是在任会话，已交出的旧会话只读。
 
 ### 写
 - `ho_handover` —— 读、写、追加、归档**本会话自己的**交接（写前自动备份、写后按角色体检）。
@@ -170,11 +170,11 @@
 
 ### 13.1 文档定位（docmap）
 
-- 每个血脉一份文件：`_Control_Center/records/docmap/global.md`、`project-<项目名>.md`、`misc-<任务名>.md`，随工作区迁移。
+- 每个会话（全局、每个项目、每个杂项任务）一份文件：`_Control_Center/records/docmap/global.md`、`project-<项目名>.md`、`misc-<任务名>.md`，随工作区迁移。
 - 三列：路径（工作区相对路径）、一句话介绍、什么时候该读。只指路，读不读由会话自己判断，不要求通读。
-- 写：`ho_docmap(action="write", entries=[…])` 整份替换，逐条校验路径存在，缺项整条拒绝；写入者必须是该血脉在任者（以 `Office.json` 为准），已交出的旧会话只读；全局不代写项目与杂项的 map。
+- 写：`ho_docmap(action="write", entries=[…])` 整份替换，逐条校验路径存在，缺项整条拒绝；写入者必须是在任会话（以 `Office.json` 为准），已交出的旧会话只读；全局不代写项目与杂项的 map。
 - 生效：写盘后当场重装该会话提示段，下一轮即注入；空 map 不注入；不设字数上限。
-- 闸门：`ho_gate` 检查所有 map 的路径存在性，失效即报，由该血脉在任会话更新。
+- 闸门：`ho_gate` 检查所有 map 的路径存在性，失效即报，由对应会话的在任者更新。
 - 外部承接：`_Control_Center/templates/External_Takeover_Prompt.md` 生成提示词时，把本项目 map 的表格原样嵌入「文件地图」之后并保留判定句；没有 map 则省略这一段，不得编造。
 
 ### 13.2 授权提示（压缩、换任）

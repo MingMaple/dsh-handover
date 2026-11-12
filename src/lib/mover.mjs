@@ -327,7 +327,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
       spawn(process.execPath, [RETARGET_HELPER, '0'], { detached: true, stdio: 'ignore', windowsHide: true, env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }) }).unref();
       log('③ 已派登记修改登记助手（把 DSH 的登记改到新位置）');
     } catch (e) {
-      log('修改登记助手未派成功：' + e.message + '（可在设置页点「把登记迁到新位置」）');
+      log('修改登记助手未派成功：' + e.message + '（可在设置页点击「把登记迁到新位置」）');
     }
   }
   log('切换完成。旧备份：' + old);

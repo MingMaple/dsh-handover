@@ -437,11 +437,11 @@ ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普�
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: 'session-dm2', workspace: WS });
   let oldErr = '';
   try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { oldErr = String(e && e.message ? e.message : e); }
-  ok(/只有在任者可以写/.test(oldErr), 'docmap：已交出的旧会话只读', oldErr);
+  ok(/只有在任会话可以写/.test(oldErr), 'docmap：已交出的旧会话只读', oldErr);
   const emptyDm = await dm.execute({ action: 'write', entries: [] }, dmExec('session-dm2'));
   ok(/空 map/.test(emptyDm.text), 'docmap：空 entries 应写明不注入', emptyDm.text);
   ok(docmapBlock(WS, dmInfo) === '', 'docmap：空 map 注入块为空串');
-  ok(docmapRelPath(dmInfo).replace(/\\/g, '/') === '_Control_Center/records/docmap/project-Demo.md', 'docmap：文件路径按血脉命名', docmapRelPath(dmInfo));
+  ok(docmapRelPath(dmInfo).replace(/\\/g, '/') === '_Control_Center/records/docmap/project-Demo.md', 'docmap：文件路径按会话命名', docmapRelPath(dmInfo));
 
   grantConsent('session-dm2', 'blank-smoke', 'compact');
   const actDm = activeConsentsFor('session-dm2');
@@ -807,7 +807,7 @@ const plainRows = [];
 for (let i = 0; i < 10; i++) {
   plainRows.push({
     sid: 'session-p' + i, title: '旧会话' + i, role: 'plain', roleLabel: '普通', source: 'none',
-    project: '', task: '', pct: i + 1, state: 'idle', active: false, onduty: false, seen: '2026-10-21 20:19 +0800',
+    project: '', task: '', wsKey: '', wsTitle: '', wsPath: '', pct: i + 1, state: 'idle', active: false, onduty: false, seen: '2026-10-21 20:19 +0800',
   });
 }
 
@@ -821,18 +821,19 @@ const FIXTURE = {
   extraPrompt: '',
   extraPromptEnabled: false,
   gate: { ok: true, verdict: '全部落位。', total: 1, bodyLines: 24, libraries: [{ name: 'Demo1', ok: true, titleOk: true, waterOk: true, missing: 0, lines: 24 }] },
-  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], misc: [{ name: '抢名额脚本', verdict: '通过', reasons: [] }], fail: 0 },
+  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], misc: [{ name: '示例任务', verdict: '通过', reasons: [] }], fail: 0 },
   sessions: {
+    workspaces: [{ key: 'w1', title: '全局', path: 'C:/ws' }],
     rows: [
       { sid: 'session-y', title: 'Demo1', project: 'Demo1', role: 'project', roleLabel: '项目', dutyKind: '项目', dutyKey: 'Demo1', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
       { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', dutyKind: '全局', dutyKey: '全局1', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
-      { sid: 'session-misc', title: '抢名额脚本', role: 'misc', roleLabel: '杂项', dutyKind: '杂项', dutyKey: '抢名额脚本', pct: 5, state: 'idle', active: false, onduty: true, seen: '2026-10-20 09:00 +0800' },
+      { sid: 'session-misc', title: '示例任务', role: 'misc', roleLabel: '杂项', dutyKind: '杂项', dutyKey: '示例任务', pct: 5, state: 'idle', active: false, onduty: true, seen: '2026-10-20 09:00 +0800' },
       { sid: 'session-l', project: 'Demo2', title: 'Demo2', role: 'project', roleLabel: '项目', dutyKind: '项目', dutyKey: 'Demo2', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ],
     all: [
-      { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
-      { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', wsKey: 'w1', wsTitle: '全局', wsPath: 'C:/ws', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
+      { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', wsKey: 'w1', wsTitle: '全局', wsPath: 'C:/ws', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', wsKey: 'w1', wsTitle: '全局', wsPath: 'C:/ws', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
     notify: [{ sid: 'session-y', key: 'Demo1', name: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
     verdict: '2 个会话已进预警区（≥32%），应先收齐交接再换会话',
@@ -905,7 +906,22 @@ const wantOrder = ['授权', '移动全局根目录', '会话角色', '全局前
 ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、判定、说明', JSON.stringify(cardTitles));
 
 const folds = treeJson.split('"details"').length - 1;
-ok(folds === 4, '只折叠低频项（迁移、前置提示词、工具明细、使用说明），常用区直接展开', String(folds));
+ok(folds === 6, '折叠项应为迁移、前置提示词、工具明细、使用说明与两个工作区组', String(folds));
+
+// 会话角色：按 DSH 工作区分组、默认折叠，已归档会话不列出。
+const roleCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '会话角色');
+const roleDetails = [];
+(function walk(n) {
+  if (!n || typeof n !== 'object') return;
+  if (Array.isArray(n)) { n.forEach(walk); return; }
+  if (n.type === 'details') roleDetails.push(n);
+  (n.kids || []).forEach(walk);
+})(roleCard);
+ok(roleDetails.length === 2, '会话角色应按工作区分组（全局＋未归属）', String(roleDetails.length));
+ok(roleDetails.every((d) => d.props.open !== true), '工作区分组默认收起');
+const roleText = textOf(roleCard).join(' ');
+ok(roleText.indexOf('全局（3 个会话）') !== -1 && roleText.indexOf('未归属工作区') !== -1, '分组标题应带会话数', roleText.slice(0, 200));
+ok(roleText.indexOf('已归档会话不列出') === -1 && roleText.indexOf('点击「设置角色」当场生效') === -1, '会话角色卡不再堆说明文字，只留标题与分组');
 
 // 授权：只列在任会话，两组各一列按钮，用户不必手填 id。
 const grantBtns = [];
@@ -947,13 +963,13 @@ ok(text.indexOf('缺 ## 1. 正在做的事') !== -1 && text.indexOf('强制项')
 const waterCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '会话水位');
 const waterText = textOf(waterCard).join(' ');
 ok(waterText.indexOf('Demo1') !== -1 && waterText.indexOf('34.6%') !== -1, '会话水位应列出项目在任会话与水位');
-ok(waterText.indexOf('全局1') !== -1 && waterText.indexOf('抢名额脚本') !== -1, '会话水位应含全局与杂项的在任会话', waterText.slice(0, 240));
-ok(waterText.indexOf('Demo2') === -1, '会话水位不列已退位的会话', waterText.slice(0, 240));
+ok(waterText.indexOf('全局1') !== -1 && waterText.indexOf('示例任务') !== -1, '会话水位应含全局与杂项的在任会话', waterText.slice(0, 240));
+ok(waterText.indexOf('Demo2') === -1, '会话水位不列已交出的会话', waterText.slice(0, 240));
 ok(text.indexOf('本轮需通知') !== -1, '水位段应给出本轮需通知');
 ok(text.indexOf('Demo2') !== -1, '角色表应列出平级会话');
 const hoCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '交接文档体检');
 const hoText = textOf(hoCard).join(' ');
-ok(hoText.indexOf('杂项') !== -1 && hoText.indexOf('抢名额脚本') !== -1, '交接体检应覆盖已登记的杂项任务', hoText.slice(0, 240));
+ok(hoText.indexOf('杂项') !== -1 && hoText.indexOf('示例任务') !== -1, '交接体检应覆盖已登记的杂项任务', hoText.slice(0, 240));
 
 // 版式约束：无进度条、无图形结论符号。
 ok(treeJson.indexOf('dshh-bar') === -1, '不得使用进度条');
@@ -978,7 +994,7 @@ const NOT_READY = {
   generatedAt: '2026-11-07 21:25 +0800',
   plugin: { name: '@mingmaple/dsh-handover', version: 'test', tools: 22, inject: ['tools'], initErrors: [], scheduler: '就绪' },
   workspace: { root: '', found: false },
-  setup: { steps: ['准备一个长期存在的目录', '粘贴路径后点「一键部署」'] },
+  setup: { steps: ['准备一个长期存在的目录', '粘贴路径后点击「一键部署」'] },
   guide: payload ? payload.guide : null,
   notes: ['未找到 _Control_Center：这个实例还没接入工作区。'],
 };
@@ -1122,7 +1138,7 @@ try {
 ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会话缺工作区时应报错并列出可选工作区', newErr.slice(0, 160));
 
 // 回归锁（0.9.14）：① 新建杂项会话的启动提示读本任务交接，不退回全局交接；
-// ② 杂项换任的接任者落回本会话所在的注册工作区；③ 接任提示里的「全局 id」是现任全局，不是退休前任。
+// ② 杂项换任的接任者落回本会话所在的注册工作区；③ 接任提示里的「全局 id」是现任全局，不是已交出的旧会话。
 {
   const { registerHolder } = await import(DIST('lib/office.mjs'));
   const storages = path.join(BLANK, '.dsh', 'storages');
@@ -1182,7 +1198,7 @@ ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会�
     const p = seen.prompts[seen.prompts.length - 1] || '';
     ok(new RegExp('.{0,1}示例任务[\\\\/]Handover\\.md').test(p), '接任提示末尾应带本任务交接路径', p.slice(-320));
     ok(p.indexOf('session-global-cur') !== -1, '接任提示的「全局 id」应是现任全局', p.slice(-320));
-    ok(p.indexOf('session-misc-old') === -1, '接任提示不得把退休前任当全局', p.slice(-320));
+    ok(p.indexOf('session-misc-old') === -1, '接任提示不得把旧会话当全局', p.slice(-320));
   }
 }
 

@@ -1,9 +1,9 @@
 /**
- * ho_docmap —— 本血脉的文档定位 map（只指路，不规定读多少）。
+ * ho_docmap —— 本会话的文档定位 map（只指路，不规定读多少）。
  *
- * 血脉由会话已登记的角色推导，不接受传入项目名或任务名：全局只写 global.md，
+ * 写入范围由会话已登记的角色决定，不接受传入项目名或任务名：全局只写 global.md，
  * 项目只写 project-<本项目>.md，杂项只写 misc-<本任务>.md。
- * 写入者必须是该血脉在任者（以 Office.json 为准）；已交出的旧会话只读。
+ * 写入者必须是在任会话（以 Office.json 为准）；已交出的旧会话只读。
  * 不设字数上限；写盘前逐条校验路径存在，缺项整条拒绝并列出。
  */
 import fs from 'node:fs';
@@ -46,7 +46,7 @@ export function pmDocmapTool(env) {
   return {
     name: nameOf('docmap'),
     description:
-      '本血脉的文档定位：action=read 读、write 写（逐条校验路径存在）、check 查自己的 map；只指路，不规定读多少。',
+      '本会话的文档定位：action=read 读、write 写（逐条校验路径存在）、check 查自己的 map；只指路，不规定读多少。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -103,10 +103,10 @@ export function pmDocmapTool(env) {
       const holder = holderOf(ws, lin);
       const meId = String(env.selfId(exec) || '');
       if (!holder.current) {
-        throw new Error('登记表里没有「' + (holder.key || label) + '」的在任记录：换任登记表是写入依据，先由全局把本类别登记在任');
+        throw new Error('登记表里没有「' + (holder.key || label) + '」的在任记录：以在任记录为写入依据，先由全局完成登记');
       }
       if (!meId || String(holder.current.sessionId || '') !== meId) {
-        throw new Error('只有在任者可以写：本类别现任为 ' + (holder.current.name || '?') + '（' + holder.current.sessionId + '），本会话为只读');
+        throw new Error('只有在任会话可以写：本条登记的在任会话为 ' + (holder.current.name || '?') + '（' + holder.current.sessionId + '），本会话为只读');
       }
       const list = Array.isArray(args.entries) ? args.entries : null;
       if (!list) throw new Error('write 需要 entries 数组（每项 path、about、when）');

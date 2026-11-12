@@ -21,7 +21,7 @@ export function pmCheckpointTool(env) {
         resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向：continue（默认）按交接 §2 继续；wait 表示本轮任务已收尾，压缩后不唤醒，等当前用户派新任务' },
         at_risk: { type: 'boolean', description: '当前处在关键步骤：为 true 时，水位在提醒线～交接线之间只提醒、不压缩（过交接线仍会压）' },
         force: { type: 'boolean', description: '忽略关键步骤判定，直接排压缩' },
-        confirm: { type: 'boolean', description: '判定为「可压缩」后须经当前用户同意才传 true；还需当前用户在设置页点「授权压缩」（5 分钟一次性授权），否则不排压缩' },
+        confirm: { type: 'boolean', description: '判定为「可压缩」后须经当前用户同意才传 true；还需当前用户在设置页点击「授权压缩」（5 分钟一次性授权），否则不排压缩' },
       },
     },
     output: textOutput(),
@@ -106,7 +106,7 @@ export function pmCheckpointTool(env) {
       const cs = checkConsent(meId);
       if (!cs.ok) {
         out.push('交接已写好，但**没有排压缩**：' + cs.reason + '。');
-        out.push('授权方式（任选其一）：① 在聊天框发送 /allow-compact（最快，仅授权本会话）；② 在设置页的 dsh-handover 中点击「压缩授权」一次。授权有效期 5 分钟，其后须再调用 ho_checkpoint(confirm=true)。');
+        out.push('授权方式（任选其一）：① 在聊天框发送 /allow-compact（最快，仅授权本会话）；② 在设置页的 dsh-handover 中点击「授权压缩」一次。授权有效期 5 分钟，其后须再调用 ho_checkpoint(confirm=true)。');
         out.push('如此设限的原因：压缩会丢弃历史，而参数由 AI 自行填写——惟有当前用户在设置页当面点击的那一次，方视为同意。');
         return { text: out.join(NL) };
       }

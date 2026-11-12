@@ -768,13 +768,23 @@ window.__ModuleLoader__.load({
               h("div", { className: "dshh-wrap" }, kids)))));
       }
 
-      // 四、会话角色：按全局、项目、杂项、普通的顺序排列，同角色内按最近活动。
+      // 四、会话角色：按 DSH 工作区分组，默认全部折叠；组内按全局、项目、杂项、普通排列。
       const ROLE_ORDER = { global: 0, project: 1, misc: 2, plain: 3 };
       const byRole = byActivity.slice().sort((a, b) => {
         const ra = ROLE_ORDER[a.role] === undefined ? 9 : ROLE_ORDER[a.role];
         const rb = ROLE_ORDER[b.role] === undefined ? 9 : ROLE_ORDER[b.role];
         return ra !== rb ? ra - rb : String(b.seen || "").localeCompare(String(a.seen || ""));
       });
+      const wsList = (ss && Array.isArray(ss.workspaces)) ? ss.workspaces : [];
+      const roleGroups = [];
+      const claimed = {};
+      for (const w of wsList) {
+        const rows = byRole.filter((r) => r.wsKey === w.key);
+        claimed[w.key] = true;
+        if (rows.length) roleGroups.push({ key: w.key, title: w.title || w.path || "工作区", path: w.path || "", rows });
+      }
+      const restRows = byRole.filter((r) => !claimed[r.wsKey]);
+      if (restRows.length) roleGroups.push({ key: "", title: "未归属工作区", path: "", rows: restRows });
       const roleRow = (r, i) => {
         const draft = (roleSel && roleSel[r.sid]) || {};
         const role = draft.role !== undefined ? draft.role : (r.role || "plain");
@@ -811,15 +821,18 @@ window.__ModuleLoader__.load({
       };
       sections.push(card("会话角色",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "点击「设置角色」后当场生效；按钮转为「通知该会话」后，再次点击会投递整理指令并唤醒该会话一轮。"),
-          byRole.length
-            ? h(Folded, {
-              rows: byRole,
-              pageSize: 5,
-              cols: ["会话", "短号", "水位", "角色", "项目或任务名", "操作"],
-              widths: ["30%", "9%", "7%", "12%", "20%", "22%"],
-              render: roleRow,
-            })
+          roleGroups.length
+            ? roleGroups.map((g, gi) => h("details", { key: gi },
+              h("summary", { className: "dshh-sum" }, g.title + "（" + g.rows.length + " 个会话）"),
+              h("div", { className: "dshh-wrap" },
+                g.path ? h("div", { className: "dshh-muted dshh-code" }, g.path) : null,
+                h(Folded, {
+                  rows: g.rows,
+                  pageSize: 5,
+                  cols: ["会话", "短号", "水位", "角色", "项目或任务名", "操作"],
+                  widths: ["30%", "9%", "7%", "12%", "20%", "22%"],
+                  render: roleRow,
+                }))))
             : h("div", { className: "dshh-muted" }, "暂无可设置角色的会话。空白会话不列出。"),
           roleMsg ? h("div", { className: roleBad ? "dshh-bad" : "dshh-ok" }, roleMsg) : null)));
 

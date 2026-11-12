@@ -121,7 +121,7 @@ export async function runSuccession(env, exec, opts) {
       cs.reason + '。',
       '授权方式（任选其一）：',
       '  ① 在聊天框发送 /allow-succeed（最快，仅授权本会话）；',
-      '  ② 在设置页的 dsh-handover 中，点「授权」里的「授权换任」。',
+      '  ② 在设置页的 dsh-handover 中，点击「授权」里的「授权换任」。',
       '授权有效期 5 分钟，用后失效。',
     ].join(NL));
   }
@@ -188,7 +188,7 @@ export async function runSuccession(env, exec, opts) {
   }
 
   // 7. 拼启动提示词：末尾追加交接路径与「先读交接、读毕报到」。
-  // 「全局 id」填**现任全局**：项目与杂项换任时，前任不是全局，不能顶替这个位置。
+  // 「全局 id」填**现任全局**：项目与杂项换任时，已交出的旧会话不是全局，不能顶替这个位置。
   let prompt = '';
   try {
     const globalId = kind === 'global' ? selfId : (currentGlobalId(ws) || selfId);

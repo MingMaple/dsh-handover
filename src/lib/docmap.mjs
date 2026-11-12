@@ -1,9 +1,9 @@
 /**
- * 文档定位 map（docmap）：每个血脉一个文件，写「本类别有哪些文档、各自一句话介绍、什么时候该读」。
+ * 文档定位 map（docmap）：每个会话（全局、每个项目、每个杂项任务）一份文件，写「本类别有哪些文档、各自一句话介绍、什么时候该读」。
  *
  * 定位：只指路，不规定读多少。是否读正文由被注入的会话自己判断；
  * 空 map 不注入，提示段其余文字一字不动。文件放在 _Control_Center/records/docmap/，
- * 随工作区迁移；写入者必须是该血脉在任者（由 tools/ho_docmap.mjs 用在任登记表判定）。
+ * 随工作区迁移；写入者必须是在任会话（由 tools/ho_docmap.mjs 用在任登记表判定）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +12,7 @@ import { NL, readUtf8, isFile, isDir } from './text.mjs';
 export const DOCMAP_DIR = path.join('_Control_Center', 'records', 'docmap');
 export const COLUMNS = ['路径', '一句话介绍', '何时读'];
 
-/** 从会话角色取血脉（全局／项目／杂项）；普通会话没有 map。 */
+/** 由会话角色推导所属的登记（全局／项目／杂项）；普通会话没有 map。 */
 export function lineageOf(info) {
   const role = info && info.role ? info.role : '';
   if (role === 'global') return { kind: 'global', project: '', task: '', key: '全局' };

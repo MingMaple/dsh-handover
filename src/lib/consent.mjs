@@ -96,7 +96,7 @@ export function checkConsent(sessionId, kind) {
     return {
       ok: false,
       kind: k,
-      reason: k === 'succeed' ? '当前用户还没有授权换任（聊天页命令 /allow-succeed）' : '当前用户还没有在设置页点「授权压缩」',
+      reason: k === 'succeed' ? '当前用户还没有授权换任（聊天页命令 /allow-succeed）' : '当前用户还没有在设置页点击「授权压缩」',
     };
   }
   return { ok: true, kind: k, until: hit.until, leftMs: hit.until - now, atText: hit.atText || '' };

@@ -59,7 +59,7 @@ export function composeBrief(input) {
     const skipProjects = new Set(scan.skip.map((r) => r.project));
     out.push("活跃   " + notifProjects.size + " 个项目，需要通知 " + scan.notify.length + " 个会话：" + (scan.notify.length ? scan.notify.map((r) => r.project + "(" + sidShort(r.sid) + ",在任)").join("、") : "无"));
     out.push("沉默   " + skipProjects.size + " 个项目，跳过 " + scan.skip.length + " 个会话（不唤醒，省 token）");
-    if (scan.hot.length) out.push("预警   " + scan.hot.length + " 个会话已进预警区（≥" + Math.round(scan.warn) + "%）—— 全为退场、前任则可忽略");
+    if (scan.hot.length) out.push("预警   " + scan.hot.length + " 个会话已进预警区（≥" + Math.round(scan.warn) + "%）—— 全为已交出的旧会话则可忽略");
   }
   if (input.drift) {
     out.push('Δ交接  ' + driftVerdict(input.drift));

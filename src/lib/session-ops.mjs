@@ -454,7 +454,7 @@ export async function sessionOrder(env, args) {
   const cs = checkConsent(sid);
   if (!cs.ok) {
     out.push("拒绝排压缩：" + cs.reason + "。");
-    out.push("请当前用户到设置页的 dsh-handover 中，点「授权」里的「授权压缩」（5 分钟内有效），再重下这条指令。");
+    out.push("请当前用户到设置页的 dsh-handover 中，点击「授权」里的「授权压缩」（5 分钟内有效），再重下这条指令。");
     return out.join(NL);
   }
   const resume = args.resume === "continue" ? "continue" : "wait";

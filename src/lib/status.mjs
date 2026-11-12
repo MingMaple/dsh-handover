@@ -4,6 +4,7 @@
  * 任何一段出错都只让该段带 error 字段，不让整页 500。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { syncCheck } from './gates.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
@@ -21,7 +22,54 @@ function guard(fn, fallback) {
 }
 
 /**
- * 在任登记：Office.json 每条血脉的现任（全局、各项目、各杂项任务）。
+ * DSH 工作区索引：读 `~/.dsh/storages/workspace.json`（只读）。
+ * 返回 { list, bySession, archived }：
+ * - list：按登记顺序的工作区（key、title、path）；
+ * - bySession：sessionId → 工作区；
+ * - archived：已归档会话 id，设置页不再罗列。
+ * 读不到时全部为空，调用方据此退化为「按会话目录分组、只按归档表过滤」。
+ */
+function loadWorkspaceIndex() {
+  const out = { list: [], bySession: new Map(), archived: new Set() };
+  let v = null;
+  try {
+    const file = path.join(os.homedir(), '.dsh', 'storages', 'workspace.json');
+    v = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  } catch { return out; }
+  if (!v || typeof v !== 'object') return out;
+  const tables = v.tables && v.tables.workspaces ? v.tables.workspaces : {};
+  const order = v.global && Array.isArray(v.global.workspaceIds) && v.global.workspaceIds.length
+    ? v.global.workspaceIds : Object.keys(tables);
+  for (const key of order) {
+    const w = tables[key];
+    if (!w) continue;
+    const item = { key: String(key), title: String(w.title || ''), path: String(w.path || '') };
+    out.list.push(item);
+    for (const sid of (Array.isArray(w.sessionIds) ? w.sessionIds : [])) out.bySession.set(String(sid), item);
+  }
+  for (const sid of (v.global && Array.isArray(v.global.archivedSessionIds) ? v.global.archivedSessionIds : [])) {
+    out.archived.add(String(sid));
+  }
+  return out;
+}
+
+/** 仍然存在的会话目录：`~/.dsh/sessions` 下以 session- 开头的目录名（含已归档里恢复不了的会话就自然不在）。 */
+function liveSessionDirs() {
+  const set = new Set();
+  try {
+    const walk = (dir, depth) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!e.isDirectory()) continue;
+        if (e.name.indexOf('session-') === 0) set.add(e.name);
+        else if (depth < 4) walk(path.join(dir, e.name), depth + 1);
+      }
+    };
+    walk(path.join(os.homedir(), '.dsh', 'sessions'), 0);
+  } catch { /* 读不到就返回空集 */ }
+  return set;
+}
+
+/** 在任登记：Office.json 中每条登记（全局、各项目、各杂项任务）的现任。
  * 返回 sessionId → { key, kind, kindLabel, name }；读不到登记表时为空表，调用方据此退化为「不过滤」。
  * 普通会话不登记，因此不会被当成在任会话。
  */
@@ -70,8 +118,8 @@ function miscDir(ws, task) {
 }
 
 /**
- * 杂项交接体检：按 Office.json 里已登记的杂项血脉找任务目录。
- * 登记名与目录名不一致（例如登记「抢名额脚本」、目录是 `_Misc/微信志愿抢名额`）时报「未找到」，
+ * 杂项交接体检：按 Office.json 里已登记的杂项条目找任务目录。
+ * 登记名与目录名不一致（例如登记「示例任务」、目录名不同）时报「未找到」，
  * 不猜近似目录：猜错会把别人的交接算到这条任务头上。
  */
 function lintMisc(ws, office) {
@@ -182,10 +230,48 @@ export function buildStatus(env, extra) {
       const meta = sessionMeta(sid);
       return resolveRole({ cfg: env.cfg, roles: store, sessionId: sid, cwd, firstPrompt, subagent: meta.subagent, title });
     };
+    // 工作区与归档：设置页按工作区分组罗列，已归档与目录已不存在的会话不再出现。
+    const wsIndex = loadWorkspaceIndex();
+    const live = liveSessionDirs();
+    // 会话 id 在缓存里有带与不带 session- 前缀两种写法，统一成带前缀再比。
+    const sidKey = (sid) => (/^session-/.test(String(sid)) ? String(sid) : 'session-' + String(sid));
+    const archived = (sid) => wsIndex.archived.has(sidKey(sid));
+    const stillThere = (sid) => live.size === 0 || live.has(sidKey(sid));
+    // 真实路径：旧根现为链接，靠 realpath 才能把老会话归到当前工作区。
+    const realCache = new Map();
+    const realOf = (p) => {
+      const key = String(p || '').toLowerCase();
+      if (realCache.has(key)) return realCache.get(key);
+      let v = '';
+      try { v = fs.realpathSync(String(p || '')); } catch { v = ''; }
+      realCache.set(key, v);
+      return v;
+    };
+    const wsReal = wsIndex.list.map((w) => ({
+      w,
+      real: String(realOf(w.path) || w.path || '').replace(/\\/g, '/').toLowerCase(),
+    }));
+    const wsOf = (sid, cwd) => {
+      const direct = wsIndex.bySession.get(sidKey(sid));
+      if (direct) return direct;
+      // 未登记到工作区的会话：按 cwd（先取真实路径）最长前缀归到工作区。
+      const c = String(realOf(cwd) || cwd || '').replace(/\\/g, '/').toLowerCase();
+      if (!c) return null;
+      let best = null;
+      for (const item of wsReal) {
+        const wp = item.real;
+        if (!wp) continue;
+        if ((c === wp || c.indexOf(wp + '/') === 0) && (!best || wp.length > best.real.length)) best = item;
+      }
+      return best ? best.w : null;
+    };
     const mapRow = (r) => {
       const meta = sessionMeta(r.sid);
       const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
       const d = dutyOf(r.sid);
+      const w = wsOf(r.sid, meta.cwd);
+      // 目录已不存在的老会话（旧树里删掉的项目库等）不再罗列。
+      const cwdOk = !meta.cwd || !!realOf(meta.cwd);
       return {
         sid: r.sid,
         title: r.project === '-' ? '' : r.project,
@@ -195,6 +281,11 @@ export function buildStatus(env, extra) {
         source: info.source,
         projectName: info.project,
         task: info.task,
+        cwdOk,
+        // 工作区分组：没有登记归属时留空，客户端归入「未归属工作区」。
+        wsKey: w ? w.key : '',
+        wsTitle: w ? w.title : '',
+        wsPath: w ? w.path : String(meta.cwd || ''),
         // 类别与名称以在任登记为准：登记过的会话才能说清自己是全局、项目还是杂项。
         dutyKind: d ? d.kindLabel : '',
         dutyKey: d ? d.key : '',
@@ -207,10 +298,13 @@ export function buildStatus(env, extra) {
         seen: stampTz(r.mtime),
       };
     };
-    const all = wide.rows.filter((r) => r.kind === '平级').map(mapRow);
+    const all = wide.rows
+      .filter((r) => r.kind === '平级' && !archived(r.sid) && stillThere(r.sid))
+      .map(mapRow)
+      .filter((r) => r.wsKey || r.cwdOk);
     // 在任集合：全局、各项目、各杂项任务的现任各一行；普通会话不在登记表里，因此不出现。
     const rows = all.filter((r) => r.onduty).slice(0, 60);
-    // 通知：每条血脉的现任，若本轮仍活跃；退休会话即使更活跃也不通知。
+    // 通知：每条登记的在任会话，若本轮仍活跃；已交出的会话即使更活跃也不通知。
     const notify = [];
     for (const sid of duty.map.keys()) {
       const hit = rows.find((r) => r.sid === sid);
@@ -220,6 +314,7 @@ export function buildStatus(env, extra) {
     return {
       rows,
       all,
+      workspaces: wsIndex.list.map((w) => ({ key: w.key, title: w.title || w.path, path: w.path })),
       notify,
       onduty: duty.map.size,
       hot,
