@@ -57,8 +57,9 @@ function tableRows(lines) {
   return lines.filter((l) => l.trim().startsWith('|') && l.indexOf('---') === -1);
 }
 
+/** 列出条目：无序列表（`-`、`*`、`+`）与有序列表（`1.`、`1)`、`1、`）都算。 */
 function bulletRows(lines) {
-  return lines.filter((l) => l.trim().startsWith('-') || l.trim().startsWith('*'));
+  return lines.filter((l) => /^\s*(?:[-*+]|\d+[.)、])\s+/.test(l));
 }
 
 /** 全局交接体检：{ verdict, reasons }。 */
