@@ -1,6 +1,6 @@
 {
   "name": "@mingmaple/dsh-handover",
-  "version": "0.9.19",
+  "version": "0.9.20",
   "type": "module",
   "description": "DeepSeek Harness 插件：把「全局」的交接、闸门、会话清点与上下文压缩续跑流程做成工具（dsh-handover）",
   "license": "MIT",

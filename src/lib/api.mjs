@@ -218,21 +218,21 @@ export function createApi(env, info) {
       if (method === 'move.start') {
         const src = currentRoot(env);
         if (!src) return bad('no-workspace', '未找到全局根（工作区未接入）');
-        env.log('搬迁：开始复制 ' + src + ' → ' + String(p.to || ''));
+        env.log('迁移：开始复制 ' + src + ' → ' + String(p.to || ''));
         const startedAt = Date.now();
         const r = await startMove({ src, to: p.to });
-        env.log('搬迁：' + (r.ok ? '校验通过' : '校验有差异') + '，用时 ' + Math.round((Date.now() - startedAt) / 1000) + ' s');
+        env.log('迁移：' + (r.ok ? '校验通过' : '校验有差异') + '，用时 ' + Math.round((Date.now() - startedAt) / 1000) + ' s');
         return r.ok ? ok(r) : { ok: false, error: { code: 'verify-failed', message: '复制完成但校验有差异，未生成切换脚本', details: r.report }, http: 500 };
       }
 
       if (method === 'move.switch') {
         const r = stageSwitch({ relaunch: p.relaunch === true });
-        env.log('搬迁：后台切换助手 ' + (r.already ? '无需再派（已切换）' : '已派出 pid=' + r.pid));
+        env.log('迁移：后台切换助手 ' + (r.already ? '无需再派（已切换）' : '已派出 pid=' + r.pid));
         return ok(r);
       }
 
       if (method === 'move.status') {
-        // 一律以搬迁标记里的源路径为准：修改登记生效后当前工作区根已经变成新位置，
+        // 一律以迁移标记里的源路径为准：修改登记生效后当前工作区根已经变成新位置，
         // 再拿它去比对会把「已经是新位置」误报成「还指着旧路径」。
         return ok(moveStatus());
       }
@@ -267,20 +267,20 @@ export function createApi(env, info) {
 
       if (method === 'move.retarget-stage') {
         const r = stageRetarget();
-        env.log('搬迁：登记修改登记助手 ' + (r.already ? '无需（已在新位置）' : '已派出 pid=' + r.pid));
+        env.log('迁移：登记修改登记助手 ' + (r.already ? '无需（已在新位置）' : '已派出 pid=' + r.pid));
         return ok(r);
       }
 
       if (method === 'move.repair') {
         const r = repairLink();
-        env.log('搬迁：重建链接 ' + (r.already ? '已存在' : r.src + ' → ' + r.dst));
+        env.log('迁移：重建链接 ' + (r.already ? '已存在' : r.src + ' → ' + r.dst));
         invalidateStatus(env);
         return ok(r);
       }
 
       if (method === 'move.cleanup') {
         const r = await cleanupOld({ confirm: p.confirm === true });
-        env.log('搬迁：清理旧副本 ' + (r.removed || []).length + ' 个');
+        env.log('迁移：清理旧备份 ' + (r.removed || []).length + ' 个');
         return ok(r);
       }
 

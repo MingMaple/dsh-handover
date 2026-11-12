@@ -122,7 +122,7 @@ function diagText(env, state, exec) {
   }
   if (typeof env.guardLast === 'function') {
     const g = env.guardLast();
-    out.push('唤醒判定  ' + (g
+    out.push('通信判定  ' + (g
       ? (g.allow ? '放行' : '拦截') + ' · 依据 ' + g.source + (g.title ? ' · 标题 ' + g.title : '') + ' · 会话 ' + g.sid
       : '本进程还没有 peer（action="send"、"new"）调用'));
   }

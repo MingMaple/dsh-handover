@@ -566,20 +566,21 @@ export function apply(ctx, config) {
           if (action === 'new') return '会话创建仅属全局：非全局会话不得新建平级会话（杂项落到 Misc 除外）。';
           return '会话间通信受限（directPeer=off）：非全局会话只能向现任全局报告，不得唤醒其他会话。';
         };
-        if (info.role === 'global') return mk(true, 'global/' + info.source);
+        if (info.role === 'global') return mk(true, '全局角色');
         if (action === 'send') {
           // 会话之间可直接通信；向全局报告也在此路。directPeer=off 才退回旧口径。
           const target = String(args.session_id || '');
           let t = null;
           try { t = target ? infoFor(target, {}) : null; } catch { t = null; }
-          if (t && t.role === 'global') return mk(true, 'report-to-global/' + (t.source || ''));
-          if (cfg.directPeer !== 'off') return mk(true, 'direct/' + info.role + ' → ' + (t ? t.role : 'unknown'));
-          return mk(false, info.source + '/' + info.role + ' → ' + (t ? t.role : 'unknown'));
+          const tRole = t ? t.role : '未知';
+          if (t && t.role === 'global') return mk(true, '向现任全局报告');
+          if (cfg.directPeer !== 'off') return mk(true, '会话之间直接通信（' + info.role + ' → ' + tRole + '）');
+          return mk(false, 'directPeer=off：仅允许向全局报告（' + info.role + ' → ' + tRole + '）');
         }
         // action=new：只有杂项可以落到 Misc
         const target = String(args.workspace || args.cwd || '').toLowerCase();
-        if (info.role === 'misc' && target.indexOf('misc') !== -1) return mk(true, 'misc/' + info.source);
-        return mk(false, info.source + '/' + info.role);
+        if (info.role === 'misc' && target.indexOf('misc') !== -1) return mk(true, '杂项会话新建到 Misc');
+        return mk(false, '非全局角色不得新建平级会话（' + info.role + '）');
       });
     } catch { /* 老版本没有 guard：退化为规则约束 */ }
   }

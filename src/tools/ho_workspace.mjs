@@ -1,4 +1,4 @@
-/** ho_workspace —— 工作区生命周期：list / create / delete / init（首次建体系）＋ 全局根目录搬迁。 */
+/** ho_workspace —— 工作区生命周期：list / create / delete / init（首次建体系）＋ 全局根目录迁移。 */
 import fs from 'node:fs';
 import { nameOf } from '../lib/names.mjs';
 import path from 'node:path';
@@ -21,7 +21,7 @@ function gb(n) {
 
 function renderProbe(p) {
   const out = [];
-  out.push('搬迁预检：' + (p.ok ? '通过' : '不通过'));
+  out.push('迁移预检：' + (p.ok ? '通过' : '不通过'));
   out.push('  源  ' + p.src + (p.srcIsLink ? '（已是链接，指向 ' + p.linkTarget + '）' : ''));
   out.push('  复制源  ' + p.copyFrom);
   out.push('  目标  ' + p.dst);
@@ -56,7 +56,7 @@ export function pmWorkspaceTool(env) {
         ensure: { type: 'boolean', description: 'create 用：目录不存在时自动创建（默认 false，不替你建目录）' },
         workspace: { type: 'string', description: 'delete 用：工作区 id、标题、路径' },
         to: { type: 'string', description: 'move 用：新根绝对路径（父目录可自动建）' },
-        confirm: { type: 'boolean', description: 'move-cleanup 用：true 才真的删旧副本' },
+        confirm: { type: 'boolean', description: 'move-cleanup 用：true 才真的删旧备份' },
       },
     },
     output: textOutput(),
@@ -216,7 +216,7 @@ export function pmWorkspaceTool(env) {
         out.push('下一步（三条，顺序不能换）：');
         out.push('  ① 完全退出 DSH（源目录被占用，改名会失败）');
         out.push('  ② 执行 ho_workspace(action="move-switch") 派后台助手（推荐）；助手会等待 DSH 退出后自动完成');
-        out.push('  ③ 重新启动 DSH；确认无误后在设置页点「删除旧副本」');
+        out.push('  ③ 重新启动 DSH；确认无误后可在设置页删除旧备份');
         return { text: out.join(NL) };
       }
 
@@ -232,8 +232,8 @@ export function pmWorkspaceTool(env) {
 
       if (action === 'move-status') {
         const st = moveStatus();   // 以标记里的源路径为准：修改登记后当前根已是新位置，拿它比对会误报
-        const label = { none: '没有搬迁记录', verified: '已复制校验通过，等待切换', switched: '已切换（旧路径是 junction）', partial: '复制有差异，未生成脚本' };
-        out.push('搬迁状态：' + (label[st.phase] || st.phase));
+        const label = { none: '没有迁移记录', verified: '已复制并校验通过，待切换', switched: '已切换（原路径为链接）', partial: '复制有差异，未生成脚本' };
+        out.push('迁移状态：' + (label[st.phase] || st.phase));
         out.push('  源  ' + st.src + (st.linkTarget ? '（→ ' + st.linkTarget + '）' : ''));
         if (st.dst) out.push('  目标  ' + st.dst);
         if (st.marker && st.marker.files) out.push('  清单  ' + st.marker.files + ' 文件 · ' + (st.marker.digest || '').slice(0, 16) + '…');
@@ -247,10 +247,10 @@ export function pmWorkspaceTool(env) {
           }
         }
         if (st.olds && st.olds.length) {
-          for (const o of st.olds) out.push('  旧副本  ' + o.path + '  ' + gb(o.bytes));
+          for (const o of st.olds) out.push('  旧备份  ' + o.path + '  ' + gb(o.bytes));
           out.push('  删除：ho_workspace(action="move-cleanup", confirm=true)');
         } else if (st.phase === 'switched') {
-          out.push('  没有旧副本残留');
+          out.push('  没有旧备份');
         }
         return { text: out.join(NL) };
       }
@@ -275,7 +275,7 @@ export function pmWorkspaceTool(env) {
       }
 
       if (action === 'move-cleanup') {
-        if (args.confirm !== true) throw new Error('move-cleanup 需要 confirm=true（会真删旧副本目录）');
+        if (args.confirm !== true) throw new Error('move-cleanup 需要 confirm=true（会真删旧备份目录）');
         const r = await cleanupOld({ confirm: true });
         out.push(r.note);
         for (const p of r.removed) out.push('  已删 ' + p);

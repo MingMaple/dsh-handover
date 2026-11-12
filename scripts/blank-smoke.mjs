@@ -959,7 +959,19 @@ ok(hoText.indexOf('杂项') !== -1 && hoText.indexOf('抢名额脚本') !== -1, 
 ok(treeJson.indexOf('dshh-bar') === -1, '不得使用进度条');
 const clientSrc = fs.readFileSync(path.join(dist, 'client.js'), 'utf8');
 ok(!/[\u2705\u274C\u26A0\u2717]/.test(clientSrc), '界面不得使用图形结论符号');
-ok(clientSrc.indexOf('delWord.trim() !== "删除"') !== -1, '删除旧副本须输入确认词');
+ok(clientSrc.indexOf('delWord.trim() !== "删除"') !== -1, '删除旧备份须输入确认词');
+// 保留的旧备份不算待处理：迁移卡只在妨碍使用的情形下提示。
+ok(clientSrc.indexOf('(st.phase === "switched" && (st.olds || []).length)') === -1, '保留的旧备份不得计入待处理');
+ok(clientSrc.indexOf('旧备份保留，不影响使用') !== -1, '迁移完成后应注明旧备份不影响使用');
+// 角色顺序：全局、项目、杂项、普通（表格与下拉同序）。
+{
+  const g = clientSrc.indexOf('value: "global"');
+  const p = clientSrc.indexOf('value: "project"');
+  const m = clientSrc.indexOf('value: "misc"');
+  const n = clientSrc.indexOf('value: "plain"');
+  ok(g !== -1 && p !== -1 && m !== -1 && n !== -1 && g < p && p < m && m < n, '角色下拉应为全局、项目、杂项、普通', JSON.stringify({ g, p, m, n }));
+  ok(clientSrc.indexOf('ROLE_ORDER') !== -1, '会话角色应按角色顺序排列');
+}
 
 // 未接入工作区：一键部署卡片置顶。
 const NOT_READY = {

@@ -1,5 +1,5 @@
 /**
- * 全局根目录搬迁（跨平台）：探针 → 复制 → 全量校验 → 派后台助手在 DSH 退出后切换 → 状态 → 清旧副本。
+ * 全局根目录迁移（跨平台）：探针 → 复制 → 全量校验 → 派后台助手在 DSH 退出后切换 → 状态 → 清旧备份。
  *
  * 平台无关的做法（Windows / Linux / macOS / 安卓 PRoot Ubuntu 同一套）：
  * - **链接**：Windows 用 junction，POSIX 用目录 symlink；都用 node:fs.symlinkSync，不需要管理员。
@@ -313,7 +313,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
   let target = '';
   try { target = fs.readlinkSync(src); } catch { target = ''; }
   if (!target || stamp(target) !== stamp(dst)) {
-    log('链接指向不对：' + target + '（旧副本在 ' + old + '）');
+    log('链接指向不对：' + target + '（旧备份在 ' + old + '）');
     stop('切换校验失败');
   }
   m.phase = 'switched';
@@ -330,7 +330,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
       log('修改登记助手未派成功：' + e.message + '（可在设置页点「把登记迁到新位置」）');
     }
   }
-  log('切换完成。旧副本：' + old);
+  log('切换完成。旧备份：' + old);
   if (RELAUNCH && EXE) {
     try {
       spawn(EXE, [], { detached: true, stdio: 'ignore', env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: undefined }) }).unref();
@@ -352,7 +352,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 /** 派后台助手：等本进程（DSH）退出后自动切换。 */
 export function stageSwitch({ relaunch, waitPid } = {}) {
   const m = readMarker();
-  if (!m || !m.src || !m.dst) throw new Error('没有可用搬迁标记，先跑一次 move');
+  if (!m || !m.src || !m.dst) throw new Error('没有可用迁移标记，先跑一次 move');
   const st = moveStatus({ src: m.src });
   if (st.phase === 'switched' || st.phase === 'switched+cleaned') return { ok: true, already: true, phase: st.phase, log: switchLogPath() };
   if (st.phase !== 'verified') throw new Error('当前不是「已复制并校验通过」（phase=' + st.phase + '），不能切换');
@@ -394,7 +394,7 @@ export function stageSwitch({ relaunch, waitPid } = {}) {
  */
 export function repairLink() {
   const m = readMarker();
-  if (!m || !m.src || !m.dst) throw new Error('没有搬迁记录，无法重建链接');
+  if (!m || !m.src || !m.dst) throw new Error('没有迁移记录，无法重建链接');
   if (!fs.existsSync(m.dst)) throw new Error('目标不存在（' + m.dst + '），先确认数据在哪里，本工具不动文件');
   const kind = linkKind();
   let st = null;
@@ -638,8 +638,8 @@ export async function rmTree(dir) {
 export async function cleanupOld({ src, confirm } = {}) {
   const st = moveStatus({ src });
   if (st.phase !== 'switched') throw new Error('当前不是已切换状态（phase=' + st.phase + '），拒绝删除任何目录');
-  if (confirm !== true) throw new Error('删除旧副本需要明确确认（confirm=true）');
-  if (!st.olds.length) return { ok: true, removed: [], bytes: 0, note: '没有找到旧副本目录' };
+  if (confirm !== true) throw new Error('删除旧备份需要明确确认（confirm=true）');
+  if (!st.olds.length) return { ok: true, removed: [], bytes: 0, note: '没有找到旧备份目录' };
   const removed = []; const failed = []; let bytes = 0;
   const base = path.basename(st.src) + '.old-';
   for (const o of st.olds) {
@@ -657,7 +657,7 @@ export async function cleanupOld({ src, confirm } = {}) {
   return {
     ok: failed.length === 0,
     removed, failed, bytes,
-    note: failed.length ? ('有 ' + failed.length + ' 个旧副本没删干净，可重试')
-      : (removed.length ? '已删除旧副本' : '没有可删的旧副本'),
+    note: failed.length ? ('有 ' + failed.length + ' 个旧备份未删净，可重试')
+      : (removed.length ? '已删除旧备份' : '没有可删的旧备份'),
   };
 }

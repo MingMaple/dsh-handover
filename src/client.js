@@ -107,7 +107,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 可折叠表格：先显示 pageSize 行，点「再展开」继续加 pageSize 行。
+     * 可折叠表格：先显示 pageSize 行，点击「再展开」继续追加 pageSize 行。
      * 列宽由 widths 百分比给定（表头固定、不横向滚动）。
      */
     function Folded(props) {
@@ -142,7 +142,7 @@ window.__ModuleLoader__.load({
       return "可用（参数 " + (conn.rpc.call.length || "?") + "）";
     }
 
-    /** 与超时赛跑：宿主 rpc.call 不理会 AbortSignal，光 abort 会让页面永远「读取中」。 */
+    /** 与超时竞速：宿主 rpc.call 不理会 AbortSignal，仅中止请求无法结束等待，页面会停在「读取中」。 */
     function raceTimeout(promise, ms, label) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(label + " 超时 " + ms + " ms")), ms);
@@ -160,7 +160,7 @@ window.__ModuleLoader__.load({
       // "[object Object]/api" 并报 invalid RPC target。
       const rpcObj = conn && conn.rpc && typeof conn.rpc.call === "function" ? conn.rpc : null;
       if (!rpcObj) throw new Error("宿主没有 connection.rpc（载体=" + carrierKind() + "）");
-      // 不用 AbortController 主动中止：宿主处理可能超过 8 秒，只做与超时赛跑，
+      // 不用 AbortController 主动中止：宿主处理可能超过 8 秒，只做与超时竞速，
       // 让请求在宿主侧自然完成，慢一点也能拿到结果。
       const ac = new AbortController();
       const limit = ms || 30000;
@@ -272,14 +272,14 @@ window.__ModuleLoader__.load({
       const [extraMsg, setExtraMsg] = React.useState("");
       const [extraBad, setExtraBad] = React.useState(false);
       const [channel, setChannel] = React.useState("");
-      // 搬迁：探针 / 复制 / 状态
+      // 迁移：探针 / 复制 / 状态
       const [mvTo, setMvTo] = React.useState("");
       const [mvBusy, setMvBusy] = React.useState(false);
       const [mvMsg, setMvMsg] = React.useState("");
       const [mvBad, setMvBad] = React.useState(false);
       const [mvProbe, setMvProbe] = React.useState(null);
       const [mvStatus, setMvStatus] = React.useState(null);
-      // 删除旧副本的确认词。
+      // 删除旧备份的确认词。
       const [delWord, setDelWord] = React.useState("");
 
       const load = React.useCallback(() => {
@@ -335,7 +335,7 @@ window.__ModuleLoader__.load({
         setWorking(true); setSetupBad(false); setSetupMsg("");
         post("register", { path: created, title: "全局" }, 20000)
           .then((r) => {
-            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（" + (r.id || "?") + "）。点「刷新」后可继续。");
+            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（" + (r.id || "?") + "）。点击「刷新」后可继续。");
             else { setSetupBad(true); setSetupMsg(((r && r.error) || "注册失败") + (r && r.hint ? "；" + r.hint : "")); }
           })
           .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
@@ -389,7 +389,7 @@ window.__ModuleLoader__.load({
           .then((r) => {
             if (r && r.ok) {
               if (r.unchanged) setExtraMsg(r.note || "内容未变，已跳过写入。");
-              else setExtraMsg((r.chars ? "已保存，共 " + r.chars + " 字符，位置在工具说明之前。" : "已清空，不再注册提示段。") + (r.cacheNote ? " " + r.cacheNote : ""));
+              else setExtraMsg((r.chars ? "已保存，共 " + r.chars + " 字符。" : "已清空，不再注册提示段。") + (r.cacheNote ? " " + r.cacheNote : ""));
             }
             else { setExtraBad(true); setExtraMsg((r && r.error) || "保存失败"); }
           })
@@ -442,7 +442,7 @@ window.__ModuleLoader__.load({
           .then(() => setWorking(false));
       }, [load]);
 
-      // 搬迁：探针 → 复制并校验 → 状态 → 清旧副本
+      // 迁移：探针 → 复制并校验 → 状态 → 清旧备份
       const refreshMove = React.useCallback(() => {
         rpc("move.status", {}, 10000).then((st) => setMvStatus(st)).catch(() => {});
       }, []);
@@ -479,20 +479,20 @@ window.__ModuleLoader__.load({
           if (!r) return;
           setMvBad(false);
           setMvMsg(r.already
-            ? "当前已处于切换完成状态（原路径为链接），无需再次切换。"
-            : "已就绪：请完全退出 DSH，退出后约 1 秒完成切换，等待 10 秒后再打开。日志：" + (r.log || ""));
+            ? "已处于切换完成状态（原路径为链接），无需再次切换。"
+            : "已就绪：完全退出 DSH 后约 1 秒完成切换，等待 10 秒再打开。日志：" + (r.log || ""));
           refreshMove();
         });
       }, [callMove, refreshMove]);
 
-      // 压缩授权：只有用户在这里点一下，压缩才排得进去（AI 不能自己批）
+      // 压缩授权：只有用户在此授权，压缩才排得进；模型不能自批。
       const [csSid, setCsSid] = React.useState("");
       const [csMsg, setCsMsg] = React.useState("");
       const doGrant = React.useCallback((kind) => {
         setWorking(true); setCsMsg("");
         post("consent.grant", { session_id: csSid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
+            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "：5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
             else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
           })
           .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
@@ -502,7 +502,7 @@ window.__ModuleLoader__.load({
         setWorking(true); setCsMsg("");
         post("consent.grant", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "，5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
+            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "：5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
             else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
           })
           .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
@@ -539,7 +539,7 @@ window.__ModuleLoader__.load({
       const doCleanup = React.useCallback(() => {
         if (String(delWord || "").trim() !== "删除") {
           setMvBad(true);
-          setMvMsg("确认词不正确。请输入「删除」两个字后再执行。");
+          setMvMsg("确认词不正确。输入「删除」后重试。");
           return;
         }
         callMove("move.cleanup", { confirm: true }, 180000).then((r) => {
@@ -563,7 +563,7 @@ window.__ModuleLoader__.load({
       if (err && !data) {
         return h("div", { className: "dshh-root" }, head,
           h("div", { className: "dshh-bad" }, "无法取得状态：" + err),
-          h("div", { className: "dshh-muted" }, "若插件刚安装，请确认已在配置中启用本插件，并已重启 DSH。"));
+          h("div", { className: "dshh-muted" }, "插件刚安装时，确认已在配置中启用并重启 DSH。"));
       }
       if (!data) {
         return h("div", { className: "dshh-root" }, head, h("div", { className: "dshh-muted" }, "正在读取状态数据。"));
@@ -577,7 +577,7 @@ window.__ModuleLoader__.load({
       const allSessions = (data.sessions && Array.isArray(data.sessions.all)) ? data.sessions.all : [];
       const byActivity = allSessions.slice().sort((a, b) => String(b.seen || "").localeCompare(String(a.seen || "")));
 
-      // 排序原则：进来大概率要做的事在前，只读数据居中，说明文字最后。
+      // 排序原则：高频操作在前，只读数据居中，说明文字在后。
       const sections = [];
 
       // 一、首次安装与全局会话：未接入时给一键部署；已接入但还没有全局会话时给补建入口。
@@ -600,7 +600,7 @@ window.__ModuleLoader__.load({
               className: "dshh-input",
               type: "text",
               value: parent,
-              placeholder: "粘贴一个绝对路径：全局根 _Workspace 会建在它里面",
+              placeholder: "填写绝对路径：全局根 _Workspace 将建在该目录下",
               onChange: (e) => setParent(e.target.value),
             }),
             h("div", { className: "dshh-row" },
@@ -612,7 +612,7 @@ window.__ModuleLoader__.load({
       } else if (globalCount === 0) {
         sections.push(card("全局会话",
           h("div", null,
-            h("div", { className: "dshh-muted" }, "工作区已接入，但还没有「全局」会话。点下面的按钮新建一个，插件会把它登记为全局角色。"),
+            h("div", { className: "dshh-muted" }, "工作区已接入，尚无「全局」会话。点击下方按钮新建，插件会将其登记为全局角色。"),
             h("div", { className: "dshh-muted" }, "全局根：" + (ws.root || "")),
             h("div", { className: "dshh-row" },
               h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: makeGlobalSession }, working ? "正在创建" : "创建全局会话")),
@@ -641,9 +641,9 @@ window.__ModuleLoader__.load({
       });
       const authKids = [];
       if (dutyRows.length) {
-        authKids.push(h("div", { className: "dshh-muted" }, "点「授权压缩」后，该会话 5 分钟内可压缩一次，用后失效；也可在会话中发送 /allow-compact。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "点击「授权压缩」后，该会话 5 分钟内可压缩一次，用后失效；也可在会话中发送 /allow-compact。"));
         authKids.push(grantTable("compact"));
-        authKids.push(h("div", { className: "dshh-muted" }, "换任同样须你授权：5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "换任同样须授权：点击「授权换任」后 5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
         authKids.push(grantTable("succeed"));
       } else {
         authKids.push(h("div", { className: "dshh-muted" }, "暂无可点选的在任会话；可在下方直接填会话 id 授权。"));
@@ -653,7 +653,7 @@ window.__ModuleLoader__.load({
           className: "dshh-inputSm",
           type: "text",
           value: csSid,
-          placeholder: "或输入会话 id 或 8 位短号",
+          placeholder: "或填写会话 id 或 8 位短号",
           onChange: (e) => setCsSid(e.target.value),
         }),
         h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权压缩"),
@@ -676,21 +676,25 @@ window.__ModuleLoader__.load({
         const st = mvStatus;
         const phaseLabel = {
           none: "尚无迁移记录",
-          verified: "已复制并校验，等待切换",
+          verified: "已复制并校验，待切换",
           switched: "已切换，原路径为链接",
-          "switched+cleaned": "已切换，旧副本已删除",
+          "switched+cleaned": "已切换，旧备份已删除",
           partial: "校验有差异，需重新复制",
         };
-        const attention = !!(st && (st.linkBroken || st.srcExists === false || st.phase === "verified" || st.phase === "partial" || (st.retarget && st.retarget.needed) || (st.phase === "switched" && (st.olds || []).length)));
-        const stateText = st ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（" + st.dst + "）" : "") : "正在读取迁移状态";
+        // 旧备份是否保留不影响使用，因此不计入「需要处理」；需要处理的只有会妨碍使用的情形。
+        const hasOlds = !!(st && st.phase === "switched" && (st.olds || []).length);
+        const attention = !!(st && (st.linkBroken || st.srcExists === false || st.phase === "verified" || st.phase === "partial" || (st.retarget && st.retarget.needed)));
+        const stateText = st
+          ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（" + st.dst + "）" : "") + (hasOlds ? "；旧备份保留，不影响使用" : "")
+          : "正在读取迁移状态";
         const kids = [];
         kids.push(h("div", { className: "dshh-muted" }, "切换只改名与建链接，不改动文件内容。"));
         if (st && st.phase && st.phase.indexOf("switched") === 0) {
-          kids.push(h("div", { className: "dshh-muted" }, "原路径现为链接，请勿删除；若已删除，用「重建链接」恢复。"));
+          kids.push(h("div", { className: "dshh-muted" }, "原路径为指向新位置的链接；若已删除，可用「重建链接」恢复。"));
         }
         if (st && (st.srcExists === false || st.linkBroken)) {
           kids.push(h("div", { className: "dshh-bad" }, st.linkBroken
-            ? "链接指向的新位置不存在：" + (st.dst || "") + "。请先确认真实数据位置；本页不改动文件。"
+            ? "链接指向的新位置不存在：" + (st.dst || "") + "。应先确认真实数据位置；本页不改动文件。"
             : "原路径不存在（可能已被删除）：" + (st.src || "") + "。数据仍在 " + (st.dst || "") + "。"));
           if (st.canRepair) {
             kids.push(h("div", { className: "dshh-row" },
@@ -721,8 +725,8 @@ window.__ModuleLoader__.load({
         if (st && st.retarget && st.retarget.needed === false) {
           kids.push(h("div", { className: "dshh-ok" }, "DSH 登记已指向新位置：" + (st.dst || "") + "。"));
         }
-        if (st && st.phase === "switched" && (st.olds || []).length) {
-          kids.push(h("div", { className: "dshh-muted" }, "旧副本：" + st.olds.map((o) => o.path + "（" + fmtBytes(o.bytes) + "）").join("、") + "。删除后无法恢复。"));
+        if (hasOlds) {
+          kids.push(h("div", { className: "dshh-muted" }, "旧备份：" + st.olds.map((o) => o.path + "（" + fmtBytes(o.bytes) + "）").join("、") + "。保留不影响使用；删除后无法恢复。"));
           kids.push(h("div", { className: "dshh-row" },
             h("input", {
               className: "dshh-inputSm",
@@ -731,7 +735,7 @@ window.__ModuleLoader__.load({
               placeholder: "输入「删除」以确认",
               onChange: (e) => setDelWord(e.target.value),
             }),
-            h("button", { className: "dshh-btn", type: "button", disabled: mvBusy || delWord.trim() !== "删除", onClick: doCleanup }, "删除旧副本（不可撤销）")));
+            h("button", { className: "dshh-btn", type: "button", disabled: mvBusy || delWord.trim() !== "删除", onClick: doCleanup }, "删除旧备份（不可撤销）")));
         }
         kids.push(h("div", { className: "dshh-row" },
           h("input", {
@@ -764,7 +768,13 @@ window.__ModuleLoader__.load({
               h("div", { className: "dshh-wrap" }, kids)))));
       }
 
-      // 四、会话角色：角色列即当前值，设置成功后按钮切换为「通知该会话」。
+      // 四、会话角色：按全局、项目、杂项、普通的顺序排列，同角色内按最近活动。
+      const ROLE_ORDER = { global: 0, project: 1, misc: 2, plain: 3 };
+      const byRole = byActivity.slice().sort((a, b) => {
+        const ra = ROLE_ORDER[a.role] === undefined ? 9 : ROLE_ORDER[a.role];
+        const rb = ROLE_ORDER[b.role] === undefined ? 9 : ROLE_ORDER[b.role];
+        return ra !== rb ? ra - rb : String(b.seen || "").localeCompare(String(a.seen || ""));
+      });
       const roleRow = (r, i) => {
         const draft = (roleSel && roleSel[r.sid]) || {};
         const role = draft.role !== undefined ? draft.role : (r.role || "plain");
@@ -786,10 +796,10 @@ window.__ModuleLoader__.load({
             value: role,
             onChange: (e) => setRoleValue(r.sid, { role: e.target.value }),
           },
-            h("option", { value: "plain" }, "普通"),
             h("option", { value: "global" }, "全局"),
             h("option", { value: "project" }, "项目"),
-            h("option", { value: "misc" }, "杂项"))),
+            h("option", { value: "misc" }, "杂项"),
+            h("option", { value: "plain" }, "普通"))),
           h("td", null, wide ? h("input", {
             className: "dshh-inputSm",
             type: "text",
@@ -801,16 +811,16 @@ window.__ModuleLoader__.load({
       };
       sections.push(card("会话角色",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "点「设置角色」当场生效；按钮转为「通知该会话」后，再点一次会投递整理指令并唤醒它一轮。"),
-          byActivity.length
+          h("div", { className: "dshh-muted" }, "点击「设置角色」后当场生效；按钮转为「通知该会话」后，再次点击会投递整理指令并唤醒该会话一轮。"),
+          byRole.length
             ? h(Folded, {
-              rows: byActivity,
+              rows: byRole,
               pageSize: 5,
               cols: ["会话", "短号", "水位", "角色", "项目或任务名", "操作"],
               widths: ["30%", "9%", "7%", "12%", "20%", "22%"],
               render: roleRow,
             })
-            : h("div", { className: "dshh-muted" }, "暂无可设置角色的会话。空白会话不在此列出。"),
+            : h("div", { className: "dshh-muted" }, "暂无可设置角色的会话。空白会话不列出。"),
           roleMsg ? h("div", { className: roleBad ? "dshh-bad" : "dshh-ok" }, roleMsg) : null)));
 
       // 五、全局前置提示词：默认折叠，只显示已保存字数。
