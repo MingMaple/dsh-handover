@@ -3,6 +3,7 @@
  * 全部读本地文件，不唤醒任何会话、不花任何会话的 token。
  * 任何一段出错都只让该段带 error 字段，不让整页 500。
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { syncCheck } from './gates.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
@@ -13,26 +14,36 @@ import { buildGuide, SETUP_STEPS } from './guide.mjs';
 import { readRoles, resolveRole, ROLE_LABEL, sessionMeta } from './role.mjs';
 import { listConsent } from './consent.mjs';
 import { listProfiles } from './profile.mjs';
-import { loadOffice, readRegistryProjects } from './office.mjs';
+import { loadOffice, readRegistryProjects, KIND_LABEL } from './office.mjs';
 
 function guard(fn, fallback) {
   try { return fn(); } catch (e) { return { ...fallback, error: String(e && e.message ? e.message : e) }; }
 }
 
 /**
- * 在任会话集合：Office.json 每条血脉的现任 sessionId。
- * 读不到登记表时返回空集，调用方据此退化为「不过滤」，不把页面清空。
+ * 在任登记：Office.json 每条血脉的现任（全局、各项目、各杂项任务）。
+ * 返回 sessionId → { key, kind, kindLabel, name }；读不到登记表时为空表，调用方据此退化为「不过滤」。
+ * 普通会话不登记，因此不会被当成在任会话。
  */
-function onDutySet(ws) {
-  const set = new Set();
-  try {
-    const office = loadOffice(ws);
-    for (const key of Object.keys(office.lineages || {})) {
-      const cur = office.lineages[key] && office.lineages[key].current;
-      if (cur && cur.sessionId) set.add(String(cur.sessionId));
-    }
-  } catch { /* 无登记表：按空集处理 */ }
-  return set;
+function loadDuty(ws) {
+  const map = new Map();
+  let office = null;
+  try { office = loadOffice(ws); } catch { office = null; }
+  const lineages = (office && office.lineages) || {};
+  for (const key of Object.keys(lineages)) {
+    const lin = lineages[key] || {};
+    const cur = lin.current;
+    if (!cur || !cur.sessionId) continue;
+    map.set(String(cur.sessionId), {
+      key,
+      kind: String(lin.kind || ''),
+      kindLabel: KIND_LABEL[lin.kind] || '',
+      project: String(lin.project || ''),
+      task: String(lin.task || ''),
+      name: String(cur.name || key),
+    });
+  }
+  return { map, office };
 }
 
 /** 项目交接体检：只查 Registry.md 已登记的项目，未登记的旧目录不在此列。 */
@@ -47,13 +58,47 @@ function lintProjects(ws) {
   return out;
 }
 
+/** 杂项目录：规范位置 `_Misc/tasks/<任务>/`，兼容旧布局 `_Misc/<任务>/`；两处都没有就返回空串。 */
+function miscDir(ws, task) {
+  const name = String(task || '').trim();
+  if (!name) return '';
+  const cands = [path.join(ws, '_Misc', 'tasks', name), path.join(ws, '_Misc', name)];
+  for (const dir of cands) {
+    try { if (fs.statSync(dir).isDirectory()) return dir; } catch { /* 继续看下一个 */ }
+  }
+  return '';
+}
+
+/**
+ * 杂项交接体检：按 Office.json 里已登记的杂项血脉找任务目录。
+ * 登记名与目录名不一致（例如登记「抢名额脚本」、目录是 `_Misc/微信志愿抢名额`）时报「未找到」，
+ * 不猜近似目录：猜错会把别人的交接算到这条任务头上。
+ */
+function lintMisc(ws, office) {
+  const out = [];
+  const lineages = (office && office.lineages) || {};
+  for (const key of Object.keys(lineages)) {
+    const lin = lineages[key] || {};
+    if (String(lin.kind || '') !== 'misc') continue;
+    const name = String(lin.task || key).trim();
+    if (!name) continue;
+    const dir = miscDir(ws, name);
+    const r = dir
+      ? lintProject(path.join(dir, 'Handover.md'))
+      : { verdict: '未找到', reasons: ['按登记名找不到任务目录：_Misc/tasks/' + name + ' 或 _Misc/' + name] };
+    out.push({ name, verdict: r.verdict, reasons: Array.isArray(r.reasons) ? r.reasons.slice(0, 5) : [] });
+  }
+  return out;
+}
+
 export function buildStatus(env, extra) {
   const info = extra || {};
   const ws = routeWorkspace(env);
   const found = hasCenter(ws);
   const warn = Math.round((env.cfg.warnRatio || 0.32) * 100);
-  const duty = onDutySet(ws);
-  const onDuty = (sid) => (duty.size ? duty.has(String(sid || '')) : true);
+  const duty = loadDuty(ws);
+  const onDuty = (sid) => (duty.map.size ? duty.map.has(String(sid || '')) : true);
+  const dutyOf = (sid) => duty.map.get(String(sid || '')) || null;
   const out = {
     generatedAt: stampTz(Date.now()),
     plugin: {
@@ -117,68 +162,73 @@ export function buildStatus(env, extra) {
   out.handover = guard(() => {
     const g = lintGlobal(path.join(ws, '_Control_Center', 'records', 'Global_Handover.md'));
     const projects = lintProjects(ws);
+    const misc = lintMisc(ws, duty.office);
+    const bad = projects.concat(misc).filter((p) => p.verdict === '不合格');
     return {
       global: { verdict: g.verdict, reasons: Array.isArray(g.reasons) ? g.reasons.slice(0, 5) : [] },
       projects,
-      fail: projects.filter((p) => p.verdict === '不合格').length,
+      misc,
+      fail: bad.length,
     };
-  }, { global: { verdict: '读不到', reasons: [] }, projects: [], fail: 0 });
+  }, { global: { verdict: '读不到', reasons: [] }, projects: [], misc: [], fail: 0 });
 
   out.sessions = guard(() => {
-    const scan = scanSessions({
-      dir: env.cacheDir(),
-      meId: null,
-      meCwd: null,
-      warn,
-      silentHours: env.cfg.sessionScanHours,
-      projectsOnly: true,
+    const wide = scanSessions({
+      dir: env.cacheDir(), meId: null, meCwd: null, warn,
+      silentHours: env.cfg.sessionScanHours, projectsOnly: false,
     });
     const store = readRoles(env.cfg);
     const roleOf = (sid, cwd, firstPrompt, title) => {
       const meta = sessionMeta(sid);
       return resolveRole({ cfg: env.cfg, roles: store, sessionId: sid, cwd, firstPrompt, subagent: meta.subagent, title });
     };
-    const wide = scanSessions({
-      dir: env.cacheDir(), meId: null, meCwd: null, warn, silentHours: env.cfg.sessionScanHours, projectsOnly: false,
-    });
-    const all = wide.rows.filter((r) => r.kind === '平级').map((r) => {
+    const mapRow = (r) => {
       const meta = sessionMeta(r.sid);
       const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
+      const d = dutyOf(r.sid);
       return {
         sid: r.sid,
         title: r.project === '-' ? '' : r.project,
+        project: r.project,
         role: info.role,
         roleLabel: ROLE_LABEL[info.role] || info.role,
         source: info.source,
-        project: info.project,
+        projectName: info.project,
         task: info.task,
+        // 类别与名称以在任登记为准：登记过的会话才能说清自己是全局、项目还是杂项。
+        dutyKind: d ? d.kindLabel : '',
+        dutyKey: d ? d.key : '',
+        dutyName: d ? d.name : '',
         pct: r.pct,
         state: r.state,
-        active: r.mtime >= scan.cutoffMs,
-        onduty: onDuty(r.sid),
+        active: r.mtime >= wide.cutoffMs,
+        onduty: !!d,
+        mtime: r.mtime,
         seen: stampTz(r.mtime),
       };
-    });
+    };
+    const all = wide.rows.filter((r) => r.kind === '平级').map(mapRow);
+    // 在任集合：全局、各项目、各杂项任务的现任各一行；普通会话不在登记表里，因此不出现。
+    const rows = all.filter((r) => r.onduty).slice(0, 60);
+    // 通知：每条血脉的现任，若本轮仍活跃；退休会话即使更活跃也不通知。
+    const notify = [];
+    for (const sid of duty.map.keys()) {
+      const hit = rows.find((r) => r.sid === sid);
+      if (hit && hit.mtime >= wide.cutoffMs) notify.push({ sid: hit.sid, key: hit.dutyKey, name: hit.dutyName });
+    }
+    const hot = rows.filter((r) => r.pct !== null && r.pct >= warn).length;
     return {
-      rows: scan.rows.filter((r) => onDuty(r.sid)).slice(0, 60).map((r) => {
-        const meta = sessionMeta(r.sid);
-        const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
-        return {
-          sid: r.sid, project: r.project, pct: r.pct, state: r.state,
-          role: info.role, roleLabel: ROLE_LABEL[info.role] || info.role,
-          active: r.mtime >= scan.cutoffMs, onduty: onDuty(r.sid), seen: stampTz(r.mtime),
-        };
-      }),
+      rows,
       all,
-      notify: scan.notify.filter((r) => onDuty(r.sid)).map((r) => ({ sid: r.sid, project: r.project })),
-      onduty: duty.size,
-      hot: scan.hot.length,
-      unknown: scan.unknown.length,
-      cutoff: stampTz(scan.cutoffMs),
-      silentHours: scan.silentHours,
-      verdict: scan.hot.length
-        ? scan.hot.length + ' 个会话已进预警区（不低于 ' + warn + '%），应先收齐交接，再换会话'
-        : '没有会话进入预警区。',
+      notify,
+      onduty: duty.map.size,
+      hot,
+      unknown: wide.unknown.length,
+      cutoff: stampTz(wide.cutoffMs),
+      silentHours: wide.silentHours,
+      verdict: hot
+        ? hot + ' 个在任会话已进预警区（不低于 ' + warn + '%），应先收齐交接，再换会话'
+        : '没有在任会话进入预警区。',
     };
   }, { rows: [], notify: [], hot: 0, unknown: 0 });
 

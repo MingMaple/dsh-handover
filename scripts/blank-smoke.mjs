@@ -821,18 +821,20 @@ const FIXTURE = {
   extraPrompt: '',
   extraPromptEnabled: false,
   gate: { ok: true, verdict: '全部落位。', total: 1, bodyLines: 24, libraries: [{ name: 'Demo1', ok: true, titleOk: true, waterOk: true, missing: 0, lines: 24 }] },
-  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], fail: 0 },
+  handover: { global: { verdict: '通过', reasons: [] }, projects: [{ name: 'Demo1', verdict: '通过', reasons: [] }, { name: 'Idle', verdict: '缺节', reasons: ['缺 ## 1. 正在做的事（2026-10-12 起的强制项，本项目还没补）'] }], misc: [{ name: '抢名额脚本', verdict: '通过', reasons: [] }], fail: 0 },
   sessions: {
     rows: [
-      { sid: 'session-y', project: 'Demo1', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
-      { sid: 'session-l', project: 'Demo2', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
+      { sid: 'session-y', title: 'Demo1', project: 'Demo1', role: 'project', roleLabel: '项目', dutyKind: '项目', dutyKey: 'Demo1', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
+      { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', dutyKind: '全局', dutyKey: '全局1', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
+      { sid: 'session-misc', title: '抢名额脚本', role: 'misc', roleLabel: '杂项', dutyKind: '杂项', dutyKey: '抢名额脚本', pct: 5, state: 'idle', active: false, onduty: true, seen: '2026-10-20 09:00 +0800' },
+      { sid: 'session-l', project: 'Demo2', title: 'Demo2', role: 'project', roleLabel: '项目', dutyKind: '项目', dutyKey: 'Demo2', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ],
     all: [
       { sid: 'session-g1', title: '全局1', role: 'global', roleLabel: '全局', source: 'title', project: '', task: '', pct: 40, state: 'idle', active: true, onduty: true, seen: '2026-11-07 21:00 +0800' },
       { sid: 'session-y', title: 'Demo1', role: 'project', roleLabel: '项目', source: 'store', project: 'Demo1', task: '', pct: 34.6, state: 'idle', active: true, onduty: true, seen: '2026-10-23 23:19 +0800' },
       { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
-    notify: [{ sid: 'session-y', project: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
+    notify: [{ sid: 'session-y', key: 'Demo1', name: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
     verdict: '2 个会话已进预警区（≥32%），应先收齐交接再换会话',
   },
   consent: [{ sessionId: 'session-y', leftMs: 120000, kind: 'compact', onduty: true }],
@@ -941,10 +943,17 @@ ok(migrateDetail && migrateDetail.type === 'details' && migrateDetail.props.open
 // 交接体检只写问题，不带括注。
 ok(text.indexOf('缺 ## 1. 正在做的事') !== -1 && text.indexOf('强制项') === -1, '交接体检的问题列不应带括注说明');
 
-// 会话水位只列项目会话，并给出本轮需通知。
-ok(text.indexOf('Demo1') !== -1 && text.indexOf('34.6%') !== -1, '会话水位应列出项目会话与水位');
+// 会话水位只列在任会话，全局、项目、杂项都要有，并给出本轮需通知。
+const waterCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '会话水位');
+const waterText = textOf(waterCard).join(' ');
+ok(waterText.indexOf('Demo1') !== -1 && waterText.indexOf('34.6%') !== -1, '会话水位应列出项目在任会话与水位');
+ok(waterText.indexOf('全局1') !== -1 && waterText.indexOf('抢名额脚本') !== -1, '会话水位应含全局与杂项的在任会话', waterText.slice(0, 240));
+ok(waterText.indexOf('Demo2') === -1, '会话水位不列已退位的会话', waterText.slice(0, 240));
 ok(text.indexOf('本轮需通知') !== -1, '水位段应给出本轮需通知');
 ok(text.indexOf('Demo2') !== -1, '角色表应列出平级会话');
+const hoCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '交接文档体检');
+const hoText = textOf(hoCard).join(' ');
+ok(hoText.indexOf('杂项') !== -1 && hoText.indexOf('抢名额脚本') !== -1, '交接体检应覆盖已登记的杂项任务', hoText.slice(0, 240));
 
 // 版式约束：无进度条、无图形结论符号。
 ok(treeJson.indexOf('dshh-bar') === -1, '不得使用进度条');

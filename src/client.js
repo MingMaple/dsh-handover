@@ -831,12 +831,13 @@ window.__ModuleLoader__.load({
               h("span", { className: "dshh-muted" }, extra.length + " 字符")),
             extraMsg ? h("div", { className: extraBad ? "dshh-bad" : "dshh-ok" }, extraMsg) : null))));
 
-      // 六、会话水位：只读数据区从这里开始；只列在任的项目会话。
+      // 六、会话水位：只读数据区从这里开始；只列在任会话（全局、项目、杂项各一行）。
       if (ss) {
         const byRecent = (ss.rows || []).filter((r) => r.onduty !== false).slice().sort((a, b) => String(b.seen || "").localeCompare(String(a.seen || "")));
         const waterRow = (r, i) => h("tr", { key: i },
-          h("td", null, r.project),
+          h("td", null, r.dutyName || r.dutyKey || r.title || r.project || "（无名）"),
           h("td", { className: "dshh-code dshh-num" }, shortSid(r.sid)),
+          h("td", null, r.dutyKind || r.roleLabel || ""),
           h("td", { className: "dshh-num" }, r.pct === null || r.pct === undefined ? "?" : r.pct.toFixed(1) + "%"),
           h("td", null, r.state),
           h("td", null, r.active ? "活跃" : "沉默"),
@@ -845,17 +846,17 @@ window.__ModuleLoader__.load({
           h("div", null,
             h("div", { className: "dshh-muted" }, ss.verdict + "。活跃线 " + ss.cutoff + "，回溯 " + ss.silentHours + " 小时。"),
             (ss.notify || []).length
-              ? h("div", null, "本轮需通知：" + ss.notify.map((r) => r.project + "（" + shortSid(r.sid) + "）").join("、"))
+              ? h("div", null, "本轮需通知：" + ss.notify.map((r) => (r.name || r.key || "") + "（" + shortSid(r.sid) + "）").join("、"))
               : h("div", { className: "dshh-muted" }, "本轮无需通知。"),
             byRecent.length
               ? h(Folded, {
                 rows: byRecent,
                 pageSize: 5,
-                cols: ["项目", "会话", "水位", "状态", "活跃", "最后活动"],
-                widths: ["22%", "13%", "9%", "9%", "9%", "38%"],
+                cols: ["会话", "短号", "类别", "水位", "状态", "活跃", "最后活动"],
+                widths: ["20%", "11%", "7%", "8%", "8%", "7%", "31%"],
                 render: waterRow,
               })
-              : h("div", { className: "dshh-muted" }, "暂无可显示的在任项目会话。"))));
+              : h("div", { className: "dshh-muted" }, "暂无可显示的在任会话。"))));
       }
 
       // 七、通用约束条闸门
@@ -877,12 +878,15 @@ window.__ModuleLoader__.load({
                 h("tbody", null, rows)))));
       }
 
-      // 八、交接文档体检：问题列只留问题本身，去掉括注与时间要求。
+      // 八、交接文档体检：全局一行，项目与杂项同一张表；问题列只留问题本身。
       if (ho) {
         const cleanReason = (x) => String(x || "").replace(/（[^）]*）/g, "").replace(/\s+/g, " ").trim();
-        const prows = (ho.projects || []).map((r, i) => h("tr", { key: i },
+        const rows = (ho.projects || []).map((r) => Object.assign({}, r, { kind: "项目" }))
+          .concat((ho.misc || []).map((r) => Object.assign({}, r, { kind: "杂项" })));
+        const prows = rows.map((r, i) => h("tr", { key: i },
+          h("td", null, r.kind),
           h("td", null, r.name),
-          h("td", null, r.verdict === "通过" ? verdict("通过", true) : r.verdict === "缺节" ? h("span", { className: "dshh-warn" }, "缺节") : verdict(r.verdict, false)),
+          h("td", null, r.verdict === "通过" ? verdict("通过", true) : (r.verdict === "缺节" || r.verdict === "读不到" || r.verdict === "未找到") ? h("span", { className: "dshh-warn" }, r.verdict) : verdict(r.verdict, false)),
           h("td", null, (r.reasons || []).map(cleanReason).filter(Boolean).join("；"))));
         sections.push(card("交接文档体检",
           h("div", null,
@@ -890,9 +894,9 @@ window.__ModuleLoader__.load({
               (ho.global.reasons || []).length ? h("span", { className: "dshh-muted" }, (ho.global.reasons || []).map(cleanReason).filter(Boolean).join("；")) : null),
             prows.length
               ? h("table", { className: "dshh-table" },
-                h("thead", null, h("tr", null, h("th", null, "项目"), h("th", null, "结论"), h("th", null, "问题"))),
+                h("thead", null, h("tr", null, h("th", null, "类别"), h("th", null, "名称"), h("th", null, "结论"), h("th", null, "问题"))),
                 h("tbody", null, prows))
-              : h("div", { className: "dshh-muted" }, "暂无已登记项目。"))));
+              : h("div", { className: "dshh-muted" }, "暂无已登记的项目或杂项。"))));
       }
 
       // 九、插件信息
