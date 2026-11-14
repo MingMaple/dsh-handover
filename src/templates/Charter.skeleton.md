@@ -46,7 +46,7 @@
 
 ## 10. 工作区约定
 
-- 全局交接：`_Control_Center/records/Global_Handover.md`（ho_handover 读写，写前自动备份）
+- 全局交接：`_Control_Center/records/Global_Handover.md`（ho_handover 读写，整篇重写先归档）
 - 台账：`_Control_Center/records/Global_Changelog.md`（ho_changelog 按格式追加）
 - 会话提示词模板：`_Control_Center/templates/Prompt_Templates.md`（ho_sessions 的 action=prompt 渲染）
 - 体系注册：全局总注册 `_Control_Center/records/systems.md`（只列各任务体系文件路径），各任务一份 `System.md`（全局任务 `_Control_Center/tasks/<任务名>/System.md`、项目 `_Project_Meta/<项目名>/System.md`、杂项 `_Misc/tasks/<任务名>/System.md`）

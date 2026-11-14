@@ -1,11 +1,12 @@
 /**
- * 1.0 行为测试（新增六类）：
+ * 1.0 行为测试（新增七类）：
  * 1. 35%/50% 提醒只注入一次，且不生成用户消息；
  * 2. 行动计划文件与「先交接、再计划、后执行」的阅读顺序；
  * 3. 暂任交出与归还的提示词模板与规范随模板分发；
  * 4. 身份互转的快照与移动（auto）与直接建（direct）；
  * 5. 写作规范随插件模板分发；
- * 6. 语体门禁可执行并按 W 条款判定。
+ * 6. 语体门禁可执行并按 W 条款判定；
+ * 7. 交接固定流程：读旧交接、归档、读模板、新建写入，且 write 不得改写已有交接。
  *
  * 全程在系统临时目录内完成，不碰真实工作区与真实 HOME。
  * 用法：node scripts/behavior.mjs [--dist <dist 目录>]
@@ -230,6 +231,42 @@ section('6 语体门禁');
   ok(/STYLE-GATE (OK|PASS)/.test(String(r.stdout || '')), '语体门禁输出通过判定', String(r.stdout || '').slice(0, 80));
 }
 
+// ---------- 7 交接固定流程：读旧、归档、读模板、新建写入
+section('7 交接固定流程');
+{
+  const tpl = fs.readFileSync(path.join(dist, 'templates', 'Handover.template.md'), 'utf8');
+  ok(/固定流程/.test(tpl) && /action="read"/.test(tpl) && /action="archive"/.test(tpl) && /action="new"/.test(tpl), '模板写明四步固定流程');
+  ok(/不得在旧文件上续写/.test(tpl), '模板禁止续写旧文件');
+  const rules = fs.readFileSync(path.join(dist, 'templates', 'rules', 'Handover_Rules.md'), 'utf8');
+  ok(/## 3 固定流程/.test(rules) && /action="new"/.test(rules), '规范写入固定流程');
+  ok(/篇幅不设上限/.test(rules), '规范保留不设体积上限');
+
+  const { pmHandoverTool } = await imp('tools/ho_handover.mjs');
+  const handPath = path.join(WS, '_Control_Center', 'records', 'Global_Handover.md');
+  const envH = {
+    cfg,
+    resolveWs: () => WS,
+    roleOf: () => ({ role: 'global' }),
+    handoverFor: () => ({ path: handPath, kind: 'global', role: 'global' }),
+  };
+  const tool = pmHandoverTool(envH);
+  ok(tool.parameters.properties.action.enum.indexOf('new') !== -1, '工具动作含 new');
+  const oldText = '# 全局 交接文档\n\n## 0. 身份与寻址\n\n| 项 | 值 |\n|---|---|\n| 会话类型 | 全局 |\n| 本任 | 旧任 |\n\n## 1. 正在做的事\n旧状态\n\n## 2. 下一步\n\n| # | 动作 | 落点 | 完成判据 |\n|---|---|---|---|\n| 1 | 旧 | - | - |\n\n## 3. 待用户决定\n无\n\n## 4. 用户要求逐条落位\n无\n\n## 5. 风险与禁区\n无\n\n## 6. 关键路径\n无\n\n## 7. 会话 id 对照\n\n| 角色 | session id | 状态 |\n|---|---|---|\n| 全局 | session-old | 旧任 |\n';
+  const first = await tool.execute({ action: 'write', text: oldText }, null);
+  ok(/已写入/.test(first.text), '首次创建可用 write', first.text.split('\n')[0]);
+  const second = await tool.execute({ action: 'new', text: oldText.split('旧状态').join('新状态') }, null);
+  ok(/已归档/.test(second.text) && /已新建/.test(second.text), 'new 先归档再新建', second.text.split('\n')[0]);
+  const archDir = path.join(WS, '_Archives', '_Global', 'Handover');
+  const archs = fs.existsSync(archDir) ? fs.readdirSync(archDir) : [];
+  ok(archs.some((n) => /^Global_Handover_\d{8}_\d{6}\.md$/.test(n)), '归档命名带时间标注', archs.join(','));
+  const archivedOld = archs.length ? fs.readFileSync(path.join(archDir, archs[0]), 'utf8') : '';
+  ok(archivedOld.indexOf('旧状态') !== -1, '归档保存旧交接全文');
+  ok(!/旧状态/.test(fs.readFileSync(handPath, 'utf8')) && /新状态/.test(fs.readFileSync(handPath, 'utf8')), '新交接只含新内容');
+  let blocked = '';
+  try { await tool.execute({ action: 'write', text: oldText }, null); } catch (e) { blocked = String(e && e.message ? e.message : e); }
+  ok(/固定流程|action="new"/.test(blocked), '已有交接时 write 被拒并指向 new', blocked.slice(0, 60));
+}
+
 fs.rmSync(SB, { recursive: true, force: true });
 console.log('');
 if (fails.length) {
@@ -237,4 +274,4 @@ if (fails.length) {
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 }
-console.log('BEHAVIOR OK（六类行为测试全过）');
+console.log('BEHAVIOR OK（七类行为测试全过）');

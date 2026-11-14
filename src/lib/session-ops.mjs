@@ -409,7 +409,7 @@ function orderHandoverText(env, sid, extra) {
   lines.push("【全局指令：执行交接流程】将当前工作写成交接，写毕即停止操作，等待换任。本轮不再进行项目作业。");
   lines.push("");
   lines.push("1) 目标文件：" + (hp && hp.path ? hp.path : "（角色未定，须先由全局设定角色）"));
-  lines.push("   直接调用 ho_handover(action=\"write\", text=...)，不要传 path：路径已按你的角色（" + (info && info.role ? info.role : "unknown") + "）解析。");
+  lines.push("   按固定流程重写：① ho_handover(action=\"read\") 读旧交接；② ho_handover(action=\"archive\") 归档；③ 读模板 _Control_Center/templates/Handover.md；④ ho_handover(action=\"new\", text=...) 新建空白写入。不要传 path：路径已按你的角色（" + (info && info.role ? info.role : "unknown") + "）解析。");
   lines.push("2) 必写：① 当前进度（版本、产物、是否通过）② 环境与路径（版本号、安装位置、下载源）③ 下一步清单，按顺序列出，每条可直接执行 ④ 已完成待验收、要求未实现的部分 ⑤ 已知问题与已踩的错。");
   lines.push("3) 机密只写位置，不写值：密码、token、密钥均写明所在文件。");
   lines.push("4) 写完只回一条 peer（action=\"send\"）给全局：`交接已写 <绝对路径>`，附一句状态，不复述全文。");

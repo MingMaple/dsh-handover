@@ -47,7 +47,7 @@ DeepSeek Harness（DSH）插件，用于长会话的上下文水位管理、交�
 
 全局任务的交接在 `_Control_Center/tasks/<任务名>/Handover.md`，由全局会话以 `ho_handover` 的 `task` 参数读写。
 
-每次写入前自动备份；归档文件名为 `<原文件名>_<YYYYMMDD_HHMMSS>.md`，同一秒重复时追加 `-2`。
+写交接按固定流程，4 步不可跳：`ho_handover(action="read")` 读上一份 → `action="archive"` 归档 → 读模板 `_Control_Center/templates/Handover.md` → `action="new"` 新建空白文件写入。`action="write"` 只用于首次创建，文件已存在时直接报错；`action="append"` 只用于中途补一行推进状态。归档文件名为 `<原文件名>_<YYYYMMDD_HHMMSS>.md`，同一秒重复时追加 `-2`。交接不设体积上限：体积由结构控制，只写在途与指针。已完成经过、验证记录与需求全文不进交接，分别写台账、计划或归档。
 
 换任由在任会话办理：用户发送 `/allow-succeed` 或点击「授权换任」后，会话调用 `ho_succeed`。插件校验授权与交接结构，建立接任会话并登记在任；任一项不通过则不做任何改动。
 

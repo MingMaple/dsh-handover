@@ -30,7 +30,7 @@ export function buildGuide(cfg) {
       { when: '首次安装', say: '部署全局文件体系', what: '本页「一键部署」一次完成三步：建立文件体系、注册「全局」工作区、建立「全局」会话' },
       { when: '作业开始与结束', say: '先出一份起始简报', what: '汇总上下文水位、通用约束条闸门、会话清点、交接漂移与阶段建议（ho_status view=brief）' },
       { when: '查阅规则', say: '取出 Charter 第 7.2.3 节', what: '按节返回规则正文，避免整篇读取；插件用法用 doc="runtime"（ho_charter）' },
-      { when: '交接与压缩续跑', say: '写好交接文档后压缩并继续', what: '写本角色的交接、体检并登记压缩；未完成用 resume=continue 续跑，已收尾用 resume=wait（ho_handover、ho_checkpoint）' },
+      { when: '交接与压缩续跑', say: '写好交接文档后压缩并继续', what: '按固定流程重写交接（读旧交接、归档、读模板、新建写入），体检并登记压缩；未完成用 resume=continue 续跑，已收尾用 resume=wait（ho_handover、ho_checkpoint）' },
       { when: '上下文到 35% 或 50%', say: '查询本会话的上下文水位', what: compact + '；两个线各后台提醒一次，不生成用户消息（ho_status view=phase）' },
       { when: '换任', say: '让在任会话自己完成换任', what: '先由当前用户授权：聊天框发送 /allow-succeed，或在设置页「授权」卡点击「授权换任」；在任会话随后校验交接、建立接任会话并登记在任（ho_succeed）' },
       { when: '会话角色', say: '把 Demo1 设为项目角色', what: '写角色表、当场收窄该会话的工具与提示，并投递首轮体系建立指令；项目与杂项互转默认先快照再移动，也可选直接建（ho_sessions action=role）' },
@@ -65,7 +65,7 @@ export function buildGuide(cfg) {
       {
         title: '写工具（会改动文件；均带备份或预演）',
         tools: [
-          ['ho_handover', '读写、追加、归档本会话自己的交接（写前备份、写后按角色体检）'],
+          ['ho_handover', '读写、新建、追加、归档本会话自己的交接；整篇重写用 new 先归档旧交接再新建写入，写后按角色体检'],
           ['ho_checkpoint', '写交接、登记压缩；回合结束后压缩，并按 resume 决定是否续跑'],
           ['ho_changelog', '按固定表格追加一行台账'],
           ['ho_backup', 'action：snapshot 库快照、check 前置闸门、pack 打包、verify 校验、restore 恢复（默认预演）'],

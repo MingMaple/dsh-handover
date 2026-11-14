@@ -1,14 +1,19 @@
-/** 交接文档读写：原子写 + 写前备份 + 写后体检（判据复用 lib/lint.mjs）。路径按会话角色解析。 */
+/** 交接文档读写：原子写 + 写前备份 + 存档（整篇重写先归档）+ 写后体检（判据复用 lib/lint.mjs）。路径按会话角色解析。 */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { readUtf8 } from './text.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
-import { snapshotDirFor } from './role.mjs';
+import { snapshotDirFor, archiveDirFor } from './role.mjs';
 
 function stamp() {
   const d = new Date();
   const p = (n) => (n < 10 ? "0" + n : "" + n);
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+function sha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
 /** 读交接：{ path, text }；文件不存在返回 text: null。 */
@@ -30,7 +35,7 @@ export function archiveStamp(d) {
 /**
  * 归档文件名：`<原文件名>_<YYYYMMDD_HHMMSS>.md`。
  * 「原文件名」取源文件主名（不含扩展名）：全局 `Global_Handover_…`、项目与杂项 `Handover_…`；
- * 不加链标识——归档目录本身已按链隔离（规范 §4.1）。
+ * 不加链标识——归档目录本身已按链隔离（规范 §5）。
  */
 export function archiveFileName(file, stampText) {
   const base = String(file || "").split(/[\\/]/).pop().replace(/\.md$/i, "");
@@ -38,8 +43,33 @@ export function archiveFileName(file, stampText) {
 }
 
 /**
+ * 归档交接：复制到规范位置并校验 sha256；同名不覆盖，同一秒追加 `-2`、`-3`。
+ * @param {object} [opts] { info?: 角色信息, kind?: 'global'|'project'|'misc', archiveDir?: 强制指定目录 }
+ * @returns {{ dest, bytes, sha256 }}
+ */
+export function archiveHandover(ws, file, opts) {
+  const o = opts || {};
+  const info = o.info || { role: o.kind === 'project' ? 'project' : o.kind === 'misc' ? 'misc' : 'global' };
+  const dir = o.archiveDir || archiveDirFor(ws, info);
+  fs.mkdirSync(dir, { recursive: true });
+  const stampText = archiveStamp(new Date());
+  let dest = path.join(dir, archiveFileName(file, stampText));
+  for (let n = 2; fs.existsSync(dest) && n < 100; n++) dest = path.join(dir, archiveFileName(file, stampText + "-" + n));
+  if (fs.existsSync(dest)) throw new Error("归档目标已存在，不覆盖：" + dest);
+  fs.copyFileSync(file, dest);
+  const a = sha256(file);
+  const b = sha256(dest);
+  if (a !== b) {
+    try { fs.rmSync(dest, { force: true }); } catch { /* 删不掉就留着，报错已说明路径 */ }
+    throw new Error("归档校验失败：sha256 不一致，未写入新交接：" + dest);
+  }
+  return { dest, bytes: fs.statSync(dest).size, sha256: b };
+}
+
+/**
  * 写交接：先把旧文件复制到 <作用域>/Snapshots/pm-handover-<stamp>/，再原子替换，最后按角色体检。
- * @param {object} [opts] { info?: 角色信息（决定体检判据与备份目录）, kind?: 'global'|'project'|'misc' }
+ * `opts.noBackup` 为 true 时跳过备份（整篇重写已先归档）。
+ * @param {object} [opts] { info?: 角色信息（决定体检判据与备份目录）, kind?: 'global'|'project'|'misc', noBackup?: boolean }
  * @returns {{ path, backup, verdict, reasons, bytes }}
  */
 export function writeHandover(ws, file, text, mode, opts) {
@@ -49,7 +79,7 @@ export function writeHandover(ws, file, text, mode, opts) {
   try { dir = o.snapshotDir || snapshotDirFor(ws, info); } catch { dir = path.join(ws, '_Temp', '_Global', 'Snapshots'); }
   let backup = null;
   try {
-    if (fs.existsSync(file)) {
+    if (!o.noBackup && fs.existsSync(file)) {
       const bdir = path.join(dir, "pm-handover-" + stamp());
       fs.mkdirSync(bdir, { recursive: true });
       backup = path.join(bdir, path.basename(file));
@@ -66,4 +96,16 @@ export function writeHandover(ws, file, text, mode, opts) {
     ? lintProject(file)
     : lintGlobal(file);
   return { path: file, backup, verdict: res.verdict, reasons: res.reasons, bytes: Buffer.byteLength(body, "utf8") };
+}
+
+/**
+ * 整篇重写：先归档旧交接（文件存在时），再新建空白文件写入，最后体检。
+ * 固定流程的落点：读旧交接由调用方完成，归档与新建由本函数一次做完。
+ * @returns 同 writeHandover，另加 archived: { dest, bytes, sha256 } | null
+ */
+export function rewriteHandover(ws, file, text, opts) {
+  const o = opts || {};
+  const archived = fs.existsSync(file) ? archiveHandover(ws, file, o) : null;
+  const res = writeHandover(ws, file, text, "write", Object.assign({}, o, { noBackup: true }));
+  return Object.assign({}, res, { archived });
 }

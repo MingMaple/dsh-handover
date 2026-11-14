@@ -39,6 +39,7 @@ const FILES = [
   ['_Control_Center/records/systems.md', 'Systems.global.skeleton.md'],
   ['_Control_Center/rules/Workspace_Charter.md', 'Charter.skeleton.md'],
   ['_Control_Center/templates/Prompt_Templates.md', 'Prompt_Templates.md'],
+  ['_Control_Center/templates/Handover.md', 'Handover.template.md'],
   ['_Control_Center/templates/Plan.skeleton.md', 'Plan.skeleton.md'],
   ['_Control_Center/templates/System.skeleton.md', 'System.skeleton.md'],
   // 通用规范：一条规范一个子目录，各角色会话都可读，只有全局写。

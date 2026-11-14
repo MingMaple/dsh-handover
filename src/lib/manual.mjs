@@ -28,6 +28,9 @@ const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/
 /** 暂任与协作的落点：规范与提示词随任务库独立。 */
 const DELEGATION_POINTER = '暂任与协作：规范在任务库 rules/Delegation_Rules.md，协作模板在 templates/Prompt_Templates.md。';
 
+/** 写交接的固定流程（三档角色共用）：只写这一行，细则在规范与模板里。 */
+const HANDOVER_FLOW = '写交接按固定流程：先读上一份交接，再归档上一份，再读模板 _Control_Center/templates/Handover.md，最后 ho_handover(action="new") 新建空白写入；不得在旧文件上续写。';
+
 /** 复用准则：全局、项目、杂项三处同一句。 */
 function reuseRule(cfg) {
   return '指派任务或新建会话前，先用 ho_office（空参数）查一次在任；同一类别已有在任且其水位低于 '
@@ -83,6 +86,7 @@ export function globalManual(opts) {
     '',
     '五、交接与体系',
     '交接：_Control_Center/records/Global_Handover.md。',
+    HANDOVER_FLOW,
     '体系注册：_Control_Center/records/systems.md 只列各任务体系文件的路径；本段只注入这些引用，不注入各任务正文。',
     '全局任务库：_Control_Center/tasks/<任务名>/；每个任务有独立交接与计划，任务可一键独立为项目或杂项会话。',
     WRITING_POINTER,
@@ -126,6 +130,7 @@ export function scopedManual(info, opts) {
     hp.path
       ? '交接：' + hp.path + '（ho_handover 默认）。'
       : '交接路径未解析（缺角色或名称），请先在设置页设定角色。',
+    HANDOVER_FLOW,
     '名称已注册，不得自行修改；需要改名由全局处理。',
     '',
     ...workflowLines(o.cfg),

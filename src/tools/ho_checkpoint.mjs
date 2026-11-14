@@ -2,7 +2,7 @@
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
-import { readHandover, writeHandover } from '../lib/handover-io.mjs';
+import { readHandover, rewriteHandover } from '../lib/handover-io.mjs';
 import { eventsOf, countCompactions } from '../lib/events.mjs';
 import { decide } from '../lib/phase.mjs';
 import { checkConsent, consumedConsent } from '../lib/consent.mjs';
@@ -61,7 +61,7 @@ export function pmCheckpointTool(env) {
       const adv = decide({ ratio, compactionsUsed: count.used, cfg: env.cfg, lockState: count.lock });
       if (adv.action === "new_session") {
         out.push("不建议压缩：" + adv.reason);
-        out.push('下一步：用 ho_handover(action=write) 写交接，再由全局 ho_sessions(action="new") 建新会话。');
+        out.push('下一步：按固定流程写交接——ho_handover(action="read") 读旧交接、action="archive" 归档、读模板 _Control_Center/templates/Handover.md，再用 action="new" 新建写入；之后由全局 ho_sessions(action="new") 建新会话。');
         return { text: out.join(NL) };
       }
       if (args.at_risk === true && args.force !== true && ratio !== null && ratio < (env.cfg.hardRatio || 0.85)) {
@@ -82,8 +82,9 @@ export function pmCheckpointTool(env) {
       }
       let wrote = null;
       if (typeof args.handover_text === "string" && args.handover_text.trim() !== "") {
-        wrote = writeHandover(ws, file, args.handover_text, "write", { kind: target.kind, info });
-        out.push("交接已写入 " + file + "（" + wrote.bytes + " B，备份：" + (wrote.backup || "无") + "）· 角色 " + info.role);
+        wrote = rewriteHandover(ws, file, args.handover_text, { kind: target.kind, info });
+        out.push("交接已写入 " + file + "（" + wrote.bytes + " B）· 角色 " + info.role);
+        if (wrote.archived) out.push("旧交接已归档 " + wrote.archived.dest + "（sha256 一致）");
         out.push("体检 " + wrote.verdict + (wrote.reasons.length ? "：" : " · 结构齐备"));
         for (const r of wrote.reasons) out.push("  - " + r);
         if (wrote.verdict !== "通过") {

@@ -1,12 +1,10 @@
-/** ho_handover —— 读/写/追加/归档**本会话自己的**交接（路径按角色解析；写前备份、写后按角色体检）。 */
+/** ho_handover —— 读/新建/追加/归档**本会话自己的**交接（路径按角色解析；整篇重写先归档旧交接，写后按角色体检）。 */
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import { readHandover, writeHandover, archiveStamp, archiveFileName } from '../lib/handover-io.mjs';
-import { archiveDirFor, assertTaskName } from '../lib/role.mjs';
+import { readHandover, writeHandover, rewriteHandover, archiveHandover } from '../lib/handover-io.mjs';
+import { assertTaskName } from '../lib/role.mjs';
 
 function noPath(input) {
   const reason = input && input.reason ? input.reason : '未知原因';
@@ -23,14 +21,14 @@ export function pmHandoverTool(env) {
   return {
     name: nameOf('handover'),
     description:
-      '读写、追加、归档交接；项目与杂项读写自己的交接，全局可用 task 指向某个全局任务。写前备份、写后按角色体检。',
+      '读写、新建、追加、归档交接；整篇重写用 new（先归档旧交接，再新建空白文件写入）；项目与杂项读写自己的交接，全局可用 task 指向某个全局任务。写后按角色体检。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['read', 'write', 'append', 'archive'], description: 'read | write | append | archive' },
-        text: { type: 'string', description: 'write/append 时的正文（read/archive 忽略）' },
+        action: { type: 'string', enum: ['read', 'new', 'write', 'append', 'archive'], description: 'read | new（整篇重写：归档旧交接后新建空白写入）| write（仅首次创建）| append | archive' },
+        text: { type: 'string', description: 'new/write/append 时的正文（read/archive 忽略）' },
         path: { type: 'string', description: '覆盖默认路径（演练或强制指定时用）' },
         task: { type: 'string', description: '全局会话读写某个全局任务的交接：_Control_Center/tasks/<任务>/Handover.md' },
       },
@@ -54,40 +52,50 @@ export function pmHandoverTool(env) {
           : env.handoverFor(exec);
       }
       if (!target || !target.path) return { text: noPath(target) };
+      const archiveOpts = taskName
+        ? {
+            info: { role: 'misc', task: taskName },
+            archiveDir: path.join(ws, '_Archives', '_Global', 'tasks', taskName, 'Handover'),
+          }
+        : { kind: target.kind, info };
       const snapOpts = taskName
         ? { kind: target.kind, info: { role: 'misc', task: taskName }, snapshotDir: path.join(ws, '_Temp', '_Global', 'tasks', taskName, 'Snapshots') }
         : { kind: target.kind, info };
 
       if (args.action === "read") {
         const r = readHandover(target.path);
-        if (r.text === null) return { text: "交接文档不存在：" + target.path + NL + "（第一次写用 action=write 或 action=append）" };
+        if (r.text === null) return { text: "交接文档不存在：" + target.path + NL + "（首次创建用 action=write；整篇重写用 action=new）" };
         return { text: r.text };
       }
       if (args.action === "archive") {
-        const src = readHandover(target.path);
-        if (src.text === null) throw new Error("要归档的交接不存在：" + target.path);
-        const stampText = archiveStamp(new Date());
-        const dir = taskName ? path.join(ws, '_Archives', '_Global', 'tasks', taskName, 'Handover') : archiveDirFor(ws, info);
-        fs.mkdirSync(dir, { recursive: true });
-        // 命名按 Handover_Rules §4.2：<原文件名>_<YYYYMMDD_HHMMSS>.md；同一秒重复归档加 -2、-3。
-        let dest = path.join(dir, archiveFileName(target.path, stampText));
-        for (let n = 2; fs.existsSync(dest) && n < 100; n++) {
-          dest = path.join(dir, archiveFileName(target.path, stampText + "-" + n));
-        }
-        if (fs.existsSync(dest)) throw new Error("归档目标已存在，不覆盖：" + dest);
-        fs.copyFileSync(target.path, dest);
-        const a = crypto.createHash("sha256").update(fs.readFileSync(target.path)).digest("hex");
-        const b = crypto.createHash("sha256").update(fs.readFileSync(dest)).digest("hex");
+        if (!readHandover(target.path).text) throw new Error("要归档的交接不存在：" + target.path);
+        const a = archiveHandover(ws, target.path, archiveOpts);
+        return { text: "已归档 " + a.dest + "（" + a.bytes + " B）" + NL + "sha256 一致 " + a.sha256.slice(0, 16) + "…" };
+      }
+      if (args.action === "new") {
+        if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("new 需要 text");
+        const res = rewriteHandover(ws, target.path, args.text, Object.assign({}, snapOpts, archiveOpts));
         const out = [];
-        out.push("已归档 " + dest + "（" + fs.statSync(dest).size + " B）");
-        out.push("sha256 " + (a === b ? "一致 " + a.slice(0, 16) + "…" : "**不一致，归档失败**"));
+        out.push(res.archived
+          ? "已归档 " + res.archived.dest + "（" + res.archived.bytes + " B，sha256 一致）"
+          : "原交接不存在，直接新建（无需归档）");
+        out.push("已新建 " + res.path + "（" + res.bytes + " B）· 角色 " + (taskName ? 'global-task' : info.role) + (taskName ? " · 任务「" + taskName + "」" : ""));
+        out.push("体检 " + res.verdict + (res.reasons.length ? "" : " · 结构齐备"));
+        for (const r of res.reasons) out.push("  - " + r);
+        if (res.verdict !== "通过") out.push("提示：修好后重跑 action=new（会再归档一份当前文件）。");
         return { text: out.join(NL) };
       }
       if (args.action !== "write" && args.action !== "append") {
-        throw new Error("未知 action：" + String(args.action) + "（只能是 read | write | append | archive）");
+        throw new Error("未知 action：" + String(args.action) + "（只能是 read | new | write | append | archive）");
       }
-      if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("write/append 需要 text");
-      const res = writeHandover(ws, target.path, args.text, args.action === "append" ? "append" : "write", snapOpts);
+      if (typeof args.text !== "string" || args.text.trim() === "") throw new Error(args.action + " 需要 text");
+      if (args.action === "write" && readHandover(target.path).text) {
+        throw new Error(
+          "交接已存在，不能用 write 改写：" + target.path + NL
+          + "整篇重写按固定流程：先 ho_handover(action=\"read\") 读旧交接，再 ho_handover(action=\"archive\") 归档，然后读模板 _Control_Center/templates/Handover.md，最后 ho_handover(action=\"new\", text=…) 新建空白写入。",
+        );
+      }
+      const res = writeHandover(ws, target.path, args.text, args.action, snapOpts);
       const out = [];
       const scope = taskName ? '全局任务「' + taskName + '」' : (target.kind !== 'global' ? '（' + (info.project || info.task) + '）' : '');
       out.push("已写入 " + res.path + "（" + res.bytes + " B）· 角色 " + (taskName ? 'global-task' : info.role) + scope);
