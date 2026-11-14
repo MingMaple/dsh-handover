@@ -54,7 +54,7 @@
 
 ### 3.3 平级会话
 
-- `peer`：`action` 取 `send`（投消息，唯一消耗对方 token 的动作）、`status`（单会话详情）、`list`（一览）、`peek`（近期会话历史，消耗本会话 token）、`rename`（只改标题）、`new`（新建）。`list`、`peek`、`rename` 仅全局可用；`send`、`status` 各角色可用；`new` 全局可用，杂项可建到杂项目录下。
+- `peer`：`action` 取 `send`（投消息，`wait=true` 时同一轮等回复）、`wait`（等单个回复）、`collect`（列多个会话，先完成的先返回）、`status`（单会话详情）、`list`（一览）、`peek`（近期会话历史）、`rename`（只改标题）、`new`（新建）。`list`、`peek`、`rename` 仅全局可用；`send`、`wait`、`collect`、`status` 各角色可用；`new` 全局可用，杂项可建到杂项目录下。`wait` 与 `collect` 的 `timeout_ms` 由助手按任务预估设置，最低 120000。
 
 ### 3.4 ho_sessions 的动作
 
@@ -178,6 +178,7 @@
 ### 7.3 协作
 
 - 两会话可直接用 `peer`（`action="send"`）协作，不必经全局转述。
+- 多会话协作：协调者先逐个 `send` 派任务，再用 `collect` 列出要等的会话；谁先完成先返回，同时完成就一起返回。被派方做完即结束回合，不发确认或进度消息；协调者处理完再 `collect` 一次即可，已完成的下次会立即返回。
 - 多会话由全局统筹：全局按任务分配、查在任、协调时序；各会话默认沉默，不每轮回执。
 - 协作提示词模板见 `_Control_Center/templates/Prompt_Templates.md` §8 与 §9。
 

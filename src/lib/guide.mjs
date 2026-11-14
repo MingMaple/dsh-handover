@@ -35,6 +35,7 @@ export function buildGuide(cfg) {
       { when: '换任', say: '让在任会话自己完成换任', what: '先由当前用户授权：聊天框发送 /allow-succeed，或在设置页「授权」卡点击「授权换任」；在任会话随后校验交接、建立接任会话并登记在任（ho_succeed）' },
       { when: '会话角色', say: '把 Demo1 设为项目角色', what: '写角色表、当场收窄该会话的工具与提示，并投递首轮体系建立指令；项目与杂项互转默认先快照再移动，也可选直接建（ho_sessions action=role）' },
       { when: '通知会话', say: '通知 Demo 更新交接文档', what: '投递一条消息；会话之间可直接通信，不必经全局转述；会消耗目标会话一整轮 token，应尽量少用（peer action=send）' },
+      { when: '多会话协作', say: '把这三件事分给三个会话并收结果', what: '先逐个 send 派任务，再用 collect 列出要等的会话；谁先完成先返回，同时完成就一起返回。被派方做完即结束回合，不发确认或进度消息（peer action=collect）' },
       { when: '全局前置提示词', say: '将这段设为全局前置提示词', what: '在本页保存到本机；仅在开启且内容非空时注入全部会话，关闭或留空时不注册提示段' },
       { when: '项目骨架', say: '注册 Demo 的骨架', what: '读取、注册、校验项目或杂项的骨架档案；档案文件由该项目会话自己写（ho_profile）' },
       { when: '体系注册', say: '把本项目的体系注册写进提示段', what: '每个任务一份体系注册，写目录结构、规范文件与计划；全局总注册只列各任务体系文件路径；写入后热更新（ho_docmap action=write）' },
@@ -77,7 +78,7 @@ export function buildGuide(cfg) {
       {
         title: '平级会话工具',
         tools: [
-          ['peer', 'action：list 会话一览、status 单会话详情、send 投消息（耗对方 token）、peek 读近期会话历史、rename 改标题、new 新建'],
+          ['peer', 'action：list 会话一览、status 单会话详情、send 投消息（wait=true 同轮等回复）、wait 等单个回复、collect 收集先完成的最终回复、peek 读近期会话历史、rename 改标题、new 新建'],
         ],
       },
     ],

@@ -28,6 +28,9 @@ const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/
 /** 暂任与协作的落点：规范与提示词随任务库独立。 */
 const DELEGATION_POINTER = '暂任与协作：规范在任务库 rules/Delegation_Rules.md，协作模板在 templates/Prompt_Templates.md。';
 
+/** 协作收结果的口径：被派方不发消息，协调方按完成顺序收集最终回复。 */
+const COLLAB_LINE = '协作收结果：派任务用 peer(action="send")；被派方完成即结束回合，不发确认或进度消息。协调方用 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复；timeout_ms 按任务预估设置，最低 120000。';
+
 /** 写交接的固定流程（三档角色共用）：只写这一行，细则在规范与模板里。 */
 const HANDOVER_FLOW = '写交接按固定流程：先读上一份交接，再归档上一份，再读模板 _Control_Center/templates/Handover.md，最后 ho_handover(action="new") 新建空白写入；不得在旧文件上续写。';
 
@@ -89,6 +92,7 @@ export function globalManual(opts) {
     HANDOVER_FLOW,
     '体系注册：_Control_Center/records/systems.md 只列各任务体系文件的路径；本段只注入这些引用，不注入各任务正文。',
     '全局任务库：_Control_Center/tasks/<任务名>/；每个任务有独立交接与计划，任务可一键独立为项目或杂项会话。',
+    COLLAB_LINE,
     WRITING_POINTER,
     DELEGATION_POINTER,
     '',
@@ -141,6 +145,7 @@ export function scopedManual(info, opts) {
     '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).remind + ' 且已写交接、需当前用户决定、全局口径有误时向全局报告；任务完成不报全局。',
     WRITING_POINTER,
     DELEGATION_POINTER,
+    COLLAB_LINE,
     '',
     '六、按需取用',
     RUNTIME_POINTER,

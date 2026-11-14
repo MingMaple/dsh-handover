@@ -83,7 +83,7 @@ DeepSeek Harness（DSH）插件，用于长会话的上下文水位管理、交�
 
 暂任规则在任务库 `rules/Delegation_Rules.md`，协作模板在 `_Control_Center/templates/Prompt_Templates.md`。
 
-交出前刷新交接，提示词写入任务库 `Delegation_Prompt.md`，旧文件移入 `_archive/` 且不再读取；归还时刷新交接并写明暂任者。插件不检查提示词文件是否存在，也不检查是否归档。
+交出前刷新交接，提示词写入任务库 `Delegation_Prompt.md`，旧文件移入 `_archive/` 且不再读取；归还时刷新交接并写明暂任者。插件不检查提示词文件是否存在，也不检查是否归档。多会话协作由协调者逐个 `peer(action="send")` 派任务，再用 `peer(action="collect", sessions=[…], timeout_ms=…)` 收结果；谁先完成先返回，同时完成就一起返回。被派方做完即结束回合，不发确认或进度消息；`timeout_ms` 按任务预估设置，最低 120 秒。
 
 ### 旧体系迁移
 

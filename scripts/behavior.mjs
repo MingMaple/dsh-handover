@@ -7,6 +7,7 @@
  * 5. 写作规范随插件模板分发；
  * 6. 语体门禁可执行并按 W 条款判定；
  * 7. 交接固定流程：读旧交接、归档、读模板、新建写入，且 write 不得改写已有交接。
+ * 8. 会话协作：collect 先完成先返回、同时完成一起返回、最终回复全文不截断。
  *
  * 全程在系统临时目录内完成，不碰真实工作区与真实 HOME。
  * 用法：node scripts/behavior.mjs [--dist <dist 目录>]
@@ -14,6 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -31,6 +33,7 @@ fs.mkdirSync(HOME, { recursive: true });
 fs.mkdirSync(WS, { recursive: true });
 process.env.USERPROFILE = HOME;
 process.env.HOME = HOME;
+process.env.DSH_HOME = path.join(HOME, '.dsh');
 
 const fails = [];
 function ok(cond, msg, extra) {
@@ -50,6 +53,7 @@ const { writeRole } = await imp('lib/role.mjs');
 const { migrateIdentity } = await imp('lib/identity.mjs');
 const { writeHandover } = await imp('lib/handover-io.mjs');
 const { scopedManual } = await imp('lib/manual.mjs');
+const { pmPeerTool } = await imp('tools/peer.mjs');
 
 function w(rel, text) {
   const p = path.join(WS, rel.split('/').join(path.sep));
@@ -274,6 +278,50 @@ section('7 交接固定流程');
   ok(/固定流程|action="new"/.test(blocked), '已有交接时 write 被拒并指向 new', blocked.slice(0, 60));
 }
 
+// ---------- 8 会话协作：先完成先返回、全文不截断
+section('8 会话协作收集');
+{
+  const peer = pmPeerTool({ controller: () => ({}) });
+  ok(peer.parameters.properties.action.enum.indexOf('collect') !== -1, 'peer 动作含 collect');
+  ok(peer.parameters.properties.action.enum.indexOf('wait') !== -1, 'peer 动作含 wait');
+  const src = fs.readFileSync(path.join(repo, 'src', 'tools', 'peer.mjs'), 'utf8');
+  ok(src.indexOf('WAIT_MIN_MS = 120000') !== -1, '等待下限为 120000 毫秒');
+  ok(src.indexOf('COLLECT_POLL_MS = 30000') !== -1, 'collect 每 30 秒检查一次');
+
+  const sessionDir = path.join(HOME, '.dsh', 'sessions', 'testslug');
+  const cacheDir = path.join(HOME, '.dsh', 'storages', 'session_projcache', 'sessions');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  function fakeSession(id, openStep, messages) {
+    const dir = path.join(sessionDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const body = messages.map((m) => JSON.stringify(m)).join('\n') + '\n';
+    fs.writeFileSync(path.join(dir, 'session.v4.jsonl.zstd'), zlib.zstdCompressSync(Buffer.from(body, 'utf8')));
+    fs.writeFileSync(path.join(cacheDir, id + '.json'), JSON.stringify({
+      record: { rows: { sessionStats: { val: { openStep: openStep ? 1 : null } }, title: { val: 'Fake' }, sessionListMetadata: { val: { blank: false } } } },
+    }));
+  }
+  if (typeof zlib.zstdCompressSync !== 'function') {
+    ok(true, '当前 Node 没有 zstd，跳过日志用例');
+  } else {
+    const at = Date.now() - 60000;
+    const ask = (t) => ({ type: 'user/message', time: t, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '任务' }] } });
+    const say = (t, text) => ({ type: 'assistant/message', time: t, data: { message: { content: [{ type: 'text', text }] } } });
+    const longText = '结果' + '甲'.repeat(3000) + '尾部标记';
+    fakeSession('session-done', false, [ask(at), say(at + 1000, longText)]);
+    fakeSession('session-busy', true, [ask(at), say(at + 1000, '还在做')]);
+    const exec = { agent: { session: { header: { id: 'session-coord' } } } };
+    const first = await peer.execute({ action: 'collect', sessions: ['session-done', 'session-busy'], timeout_ms: 120000, since_ms: 1 }, exec);
+    ok(/已完成 1 个/.test(first.text) && /session-done/.test(first.text), '先完成的先返回', first.text.slice(0, 60));
+    ok(first.text.indexOf('尾部标记') !== -1 && first.text.length > 3000, '最终回复全文不截断', String(first.text.length));
+    const waited = await peer.execute({ action: 'wait', session_id: 'session-done', timeout_ms: 120000, since_ms: 1 }, exec);
+    ok(/回复 session-done/.test(waited.text) && waited.text.indexOf('尾部标记') !== -1, 'wait 返回全文', waited.text.slice(0, 40));
+    fakeSession('session-done2', false, [ask(at), say(at + 2000, '第二个结果')]);
+    fakeSession('session-done3', false, [ask(at), say(at + 3000, '第三个结果')]);
+    const multi = await peer.execute({ action: 'collect', sessions: ['session-done2', 'session-done3'], timeout_ms: 120000, since_ms: 1 }, exec);
+    ok(/已完成 2 个/.test(multi.text), '同时完成多个就一起返回', multi.text.slice(0, 40));
+  }
+}
+
 fs.rmSync(SB, { recursive: true, force: true });
 console.log('');
 if (fails.length) {
@@ -281,4 +329,4 @@ if (fails.length) {
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 }
-console.log('BEHAVIOR OK（七类行为测试全过）');
+console.log('BEHAVIOR OK（八类行为测试全过）');
