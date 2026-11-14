@@ -77,7 +77,9 @@ export function pmHandoverTool(env) {
         const res = rewriteHandover(ws, target.path, args.text, Object.assign({}, snapOpts, archiveOpts));
         const out = [];
         out.push(res.archived
-          ? "已归档 " + res.archived.dest + "（" + res.archived.bytes + " B，sha256 一致）"
+          ? (res.archived.reused
+            ? "已归档（复用内容相同的副本）" + res.archived.dest + "（" + res.archived.bytes + " B）"
+            : "已归档 " + res.archived.dest + "（" + res.archived.bytes + " B，sha256 一致）")
           : "原交接不存在，直接新建（无需归档）");
         out.push("已新建 " + res.path + "（" + res.bytes + " B）· 角色 " + (taskName ? 'global-task' : info.role) + (taskName ? " · 任务「" + taskName + "」" : ""));
         out.push("体检 " + res.verdict + (res.reasons.length ? "" : " · 结构齐备"));

@@ -98,14 +98,35 @@ export function writeHandover(ws, file, text, mode, opts) {
   return { path: file, backup, verdict: res.verdict, reasons: res.reasons, bytes: Buffer.byteLength(body, "utf8") };
 }
 
+function findSameArchive(dir, sha) {
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!/\.md$/i.test(name)) continue;
+      const p = path.join(dir, name);
+      try { if (sha256(p) === sha) return p; } catch { /* 读不到就跳过 */ }
+    }
+  } catch { /* 目录不存在时按未归档处理 */ }
+  return null;
+}
+
 /**
  * 整篇重写：先归档旧交接（文件存在时），再新建空白文件写入，最后体检。
  * 固定流程的落点：读旧交接由调用方完成，归档与新建由本函数一次做完。
- * @returns 同 writeHandover，另加 archived: { dest, bytes, sha256 } | null
+ * 归档幂等：归档目录里已有内容相同的副本时复用，不重复复制。
+ * @returns 同 writeHandover，另加 archived: { dest, bytes, sha256, reused } | null
  */
 export function rewriteHandover(ws, file, text, opts) {
   const o = opts || {};
-  const archived = fs.existsSync(file) ? archiveHandover(ws, file, o) : null;
+  let archived = null;
+  if (fs.existsSync(file)) {
+    const info = o.info || { role: o.kind === 'project' ? 'project' : o.kind === 'misc' ? 'misc' : 'global' };
+    const dir = o.archiveDir || archiveDirFor(ws, info);
+    const sha = sha256(file);
+    const same = findSameArchive(dir, sha);
+    archived = same
+      ? { dest: same, bytes: fs.statSync(same).size, sha256: sha, reused: true }
+      : Object.assign(archiveHandover(ws, file, o), { reused: false });
+  }
   const res = writeHandover(ws, file, text, "write", Object.assign({}, o, { noBackup: true }));
   return Object.assign({}, res, { archived });
 }
