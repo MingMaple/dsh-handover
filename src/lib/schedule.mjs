@@ -71,9 +71,9 @@ export function createScheduler(deps) {
 
   async function compactOnce(sessionId) {
     const agent = agentOf(sessionId);
-    if (!agent) throw new Error("agent 不在内存中（会话可能已休眠）");
+    if (!agent) throw new Error("会话不在内存中（可能已休眠）");
     const compaction = compactionOf(agent);
-    if (!compaction || typeof compaction.compactNow !== "function") throw new Error("compaction.compactNow 不可用（profile 级与会话作用域都没取到）");
+    if (!compaction || typeof compaction.compactNow !== "function") throw new Error("compaction.compactNow 不可用（profile 级与会话作用域均未取到）");
     const ac = new AbortController();
     const timer = later(() => ac.abort(new Error("timeout")), cfg.compactTimeoutMs || 120000);
     try {
@@ -128,7 +128,7 @@ export function createScheduler(deps) {
     if (!agent) { fail(sessionId, "会话不在内存，无法压缩"); return; }
     if (agent.status === "running") {
       const idle = await waitIdle(agent, cfg.waitIdleMs || 180000);
-      if (!idle) { fail(sessionId, "等了 " + Math.round((cfg.waitIdleMs || 180000) / 1000) + " 秒会话仍未空闲"); return; }
+      if (!idle) { fail(sessionId, "等待 " + Math.round((cfg.waitIdleMs || 180000) / 1000) + " 秒后，会话仍未空闲"); return; }
     }
     try {
       const result = await compactOnce(sessionId);
@@ -157,7 +157,7 @@ export function createScheduler(deps) {
     } catch (e) {
       const code = e && e.code;
       if (code === "busy") {
-        if (Date.now() - job.startedAt > (cfg.waitIdleMs || 180000)) { fail(sessionId, "压缩一直 busy（有别的压缩或排队工作）"); return; }
+        if (Date.now() - job.startedAt > (cfg.waitIdleMs || 180000)) { fail(sessionId, "压缩持续处于 busy 状态（存在其他压缩或排队工作）"); return; }
         retryLater(sessionId, 800);
         return;
       }
@@ -181,7 +181,7 @@ export function createScheduler(deps) {
     pending.delete(sessionId);
     note("checkpoint failed " + sessionId + ": " + msg);
     try {
-      promptSelf(sessionId, "【dsh-handover】压缩未执行：" + msg + "。历史没有被压缩，交接已就绪；请把这条消息原样告诉当前用户，不要自行重试压缩。").catch(() => {});
+      promptSelf(sessionId, "【dsh-handover】压缩未执行：" + msg + "。历史未被压缩，交接已就绪。请将本条消息原样告知当前用户，不得自行重试压缩。").catch(() => {});
     } catch { /* ignore */ }
   }
 

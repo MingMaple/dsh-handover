@@ -88,7 +88,7 @@ function defaultProfile(info) {
 
 function cleanList(v, field, errors) {
   if (v === undefined) return [];
-  if (!Array.isArray(v)) { errors.push(field + ' 必须是数组'); return []; }
+  if (!Array.isArray(v)) { errors.push(field + ' 须为数组'); return []; }
   const out = [];
   for (const x of v) {
     const s = String(x == null ? '' : x).trim().replace(/\\/g, '/');

@@ -13,7 +13,7 @@ function targetOf(env, info, args, exec) {
     // 项目会话只处理自己的骨架；传了别的名字就明确报错，而不是静默忽略入参（实测踩过）。
     if (given && given !== own) {
       throw new Error('本会话是' + (info.role === 'project' ? '项目「' + own + '」' : '杂项「' + own + '」')
-        + '，只能读写自己的骨架；要看「' + given + '」请由全局会话执行 ho_profile。');
+        + '，只能读写自己的骨架；如需查看「' + given + '」，由全局会话执行 ho_profile。');
     }
     return { role: info.role, project: info.project || '', task: info.task || '', self: true };
   }
@@ -32,7 +32,7 @@ function scopeOf(t) {
 export function pmProfileTool(env) {
   return {
     name: nameOf('profile'),
-    description: '项目或杂项骨架：读取、注册、校验、取预设。只写本角色的 _Project_Meta 或 _Misc 目录。',
+    description: '项目或杂项骨架：读取、注册、校验、取预设。仅写本角色的 _Project_Meta 或 _Misc 目录。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -81,7 +81,7 @@ export function pmProfileTool(env) {
         return { text: out.join(NL) };
       }
       if (action === 'register') {
-        if (!t.self) throw new Error('注册须由该项目或杂项会话本人执行');
+        if (!t.self) throw new Error('注册须由该项目或杂项会话自身执行');
         if (!r.exists) throw new Error('未找到骨架文件：' + p + '。先通读本库并写入该文件，再执行注册。');
         if (r.errors.length) throw new Error('骨架结构不合法：' + r.errors.join('；'));
         const saved = writeProfile(ws, scope, r.profile);

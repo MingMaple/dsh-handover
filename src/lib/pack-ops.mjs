@@ -26,7 +26,7 @@ function chooseFormat(args, cfg) {
   const want = String((args && args.format) || (cfg && cfg.packFormat) || 'auto').toLowerCase();
   if (want === '7z') {
     const bin = sevenZipBin(cfg && cfg.sevenZipPath);
-    if (!bin) throw new Error('指定了 format=7z，但本机没有 7-Zip。去掉 format 用 auto，或写 format="tar" 用内置归档器。');
+    if (!bin) throw new Error('指定 format=7z，但本机无 7-Zip。可省略 format 改用 auto，或写 format="tar" 使用内置归档器。');
     return { fmt: '7z', bin };
   }
   if (want === 'tar' || want === 'targz' || want === 'tar.gz') return { fmt: 'tar', bin: '' };
@@ -48,11 +48,11 @@ function unpack(packPath, dir) {
   }
   if (fmt === '7z') {
     const bin = sevenZipBin('');
-    if (!bin) return { code: -1, out: '这个包是 7z 格式，但本机没有 7-Zip；装一个 7-Zip，或改用 tar.gz 包。' };
+    if (!bin) return { code: -1, out: '该包为 7z 格式，但本机无 7-Zip；请安装 7-Zip，或改用 tar.gz 包。' };
     fs.mkdirSync(dir, { recursive: true });
     return run7zSafe(bin, packPath, dir);
   }
-  return { code: -1, out: '认不出包格式（既不是 7z 魔数也不是 gzip）：' + packPath };
+  return { code: -1, out: '无法识别包格式（既非 7z 魔数，也非 gzip）：' + packPath };
 }
 
 /** 包内路径必须相对且不越界：拒绝绝对路径、盘符、..（防止恢复时写到目标目录之外）。 */
@@ -121,7 +121,7 @@ export function packCheck(env, args, exec) {
       const live = scan.rows.filter((r) => r.project === item);
       if (live.length) {
         const best = live.slice().sort((a, b) => b.mtime - a.mtime)[0];
-        if (best.state === 'running') why.push('会话 ' + best.sid + ' 正在跑');
+        if (best.state === 'running') why.push('会话 ' + best.sid + ' 正在运行');
         if (now - best.mtime < minAge) why.push('最后活动距今 ' + Math.round((now - best.mtime) / 60000) + ' 分钟 < ' + Math.round(minAge / 60000));
       }
       const hand = path.join(ws, '_Project_Meta', item, 'Handover.md');
@@ -170,7 +170,7 @@ export function packNow(env, args, exec) {
   if (!entries.length) throw new Error('没有可打包的文件：' + roots.map((r) => r[0]).join('、'));
   const total = entries.reduce((a, b) => a + b.bytes, 0);
   const out = [];
-  out.push('目标 ' + kind + (name ? ':' + name : '') + ' → ' + entries.length + ' 个文件 / ' + (total / 1048576).toFixed(2) + ' MB');
+  out.push('目标 ' + kind + (name ? ':' + name : '') + '，' + entries.length + ' 个文件 / ' + (total / 1048576).toFixed(2) + ' MB');
   if (args.dry_run) {
     for (const e of entries.slice(0, 20)) out.push('  ' + e.rel + '  ' + e.bytes + ' B');
     const pre = scanAbsoluteRefs(ws, entries.map((e) => e.rel));
@@ -205,7 +205,7 @@ export function packNow(env, args, exec) {
   fs.writeFileSync(path.join(stagingRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
   fs.writeFileSync(path.join(stagingRoot, 'CHECKSUMS.sha256'), files.map((f) => f.sha256 + '  ' + f.path).join(NL) + NL, 'utf8');
   const absLines = renderAbsoluteRefs(abs, { title: '绝对路径体检（包内）', max: 200 });
-  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包里有 ' + abs.totalHits + ' 处写死的绝对路径，插件**只报告、不改写**文件内容——迁移后需由人或项目会话自己改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若是别的系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行、编码都要项目会话自己核一遍。', '', '## 目标环境前置（先做这两件，再做恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按它恢复状态。', '', '## 恢复', '', 'ho_backup(action="restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身**不迁移**：连续性只靠交接文档。'].join(NL);
+  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包内有 ' + abs.totalHits + ' 处写死的绝对路径，插件只报告、不改写文件内容，迁移后须由人工或项目会话修改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若为其他系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行与编码均须项目会话自行核对。', '', '## 目标环境前置（先完成这两项，再执行恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按其中内容恢复状态。', '', '## 恢复', '', 'ho_backup(action="restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身不迁移：连续性只依托交接文档。'].join(NL);
   fs.writeFileSync(path.join(stagingRoot, 'MIGRATION.md'), md, 'utf8');
   const outDir = args.out || path.join(ws, '_Archives', '_Global', 'Backups');
   fs.mkdirSync(outDir, { recursive: true });
@@ -263,7 +263,7 @@ export function packVerify(env, args, exec) {
   out.push('文件 ' + manifest.files.length + ' 个；一致 ' + same.length + ' / 漂移 ' + drift.length + ' / 缺失 ' + missing.length);
   for (const p of drift.slice(0, 10)) out.push('  漂移：' + p);
   for (const p of missing.slice(0, 10)) out.push('  缺失：' + p);
-  out.push(drift.length === 0 && missing.length === 0 ? '判定：包内即现版，可直接用' : '判定：**包已作废**（盘上已变），必须重打');
+  out.push(drift.length === 0 && missing.length === 0 ? '判定：包内即现版，可直接使用' : '判定：包已作废（磁盘内容已变更），须重新打包');
   return out.join(NL);
 }
 
@@ -323,10 +323,10 @@ export function packRestore(env, args, exec) {
   out.push('包 ' + packPath + '，目标 ' + target);
   out.push('文件 ' + manifest.files.length + ' 个；新增 ' + adds.length + ' / 覆盖 ' + overwrites.length);
   for (const p of overwrites.slice(0, 10)) out.push('  覆盖：' + p);
-  if (crossPlatform) out.push('注意：源平台 ' + manifest.sourcePlatform + ' ≠ 本机 ' + process.platform + '：路径分隔符、盘符、大小写、换行、编码都需要项目会话自己核一遍。');
+  if (crossPlatform) out.push('注意：源平台 ' + manifest.sourcePlatform + ' ≠ 本机 ' + process.platform + '；路径分隔符、盘符、大小写、换行与编码均须项目会话自行核对。');
   out.push(...renderAbsoluteRefs(abs, { title: '绝对路径体检（恢复前）', max: 20 }));
-  if (abs.totalHits) out.push('  ⇒ 这些位置插件**不会**改；迁移后由人或项目会话按新机器改，库内引用统一用相对路径。');
-  if (!apply) out.push('**预演**：未写入任何文件。确认无误后用 apply=true 再调一次。');
+  if (abs.totalHits) out.push('  上述位置插件不作改动；迁移后由人工或项目会话按新机器修改，库内引用统一使用相对路径。');
+  if (!apply) out.push('预演：未写入任何文件。确认无误后以 apply=true 再次调用。');
   else out.push('已写入；被覆盖的旧文件备份在 ' + backupDir);
   return out.join(NL);
 }

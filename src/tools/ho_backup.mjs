@@ -92,7 +92,7 @@ function snapshotText(env, args, exec) {
   ].join(NL);
   fs.writeFileSync(path.join(dest, 'PROVENANCE.md'), prov, 'utf8');
   out.push('已落盘 ' + dest);
-  out.push('校验 drift=' + drift + (drift === 0 ? '（逐文件一致）' : '（**不一致，判失败**）'));
+  out.push('校验 drift=' + drift + (drift === 0 ? '（逐文件一致）' : '（不一致，判定失败）'));
   return out.join(NL);
 }
 
@@ -100,25 +100,25 @@ export function pmBackupTool(env) {
   return {
     name: nameOf('backup'),
     description:
-      '备份与迁移：action=snapshot 库快照（默认）、check 前置闸门、pack 打包、verify 校包、restore 恢复（默认预演）。',
+      '备份与迁移：action=snapshot 库快照（缺省）、check 前置闸门、pack 打包、verify 校验包、restore 恢复（缺省预演）。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: { type: 'string', enum: ACTIONS, description: '缺省 snapshot' },
         project: { type: 'string', description: 'snapshot：项目名（Projects/<项目>/ 下）' },
-        tag: { type: 'string', description: 'snapshot：标签，默认 行为检查' },
+        tag: { type: 'string', description: 'snapshot：标签，缺省 行为检查' },
         kind: { type: 'string', enum: ['project', 'task', 'global'], description: 'pack：目标类型' },
         name: { type: 'string', description: 'pack：项目名或任务名' },
         out: { type: 'string', description: 'pack：输出目录' },
-        note: { type: 'string', description: 'pack：写进 MIGRATION.md 的说明' },
+        note: { type: 'string', description: 'pack：写入 MIGRATION.md 的说明' },
         items: { type: 'array', items: { type: 'string' }, description: 'check：检查的项目名（global 表示全局）' },
-        min_age_min: { type: 'number', description: 'check：要求静止分钟（默认 90）' },
+        min_age_min: { type: 'number', description: 'check：要求静止分钟数（默认 90）' },
         pack: { type: 'string', description: 'verify、restore：包路径' },
-        target: { type: 'string', description: 'restore：目标根（默认当前）' },
-        apply: { type: 'boolean', description: 'restore：true 才写入' },
+        target: { type: 'string', description: 'restore：目标根（缺省当前）' },
+        apply: { type: 'boolean', description: 'restore：为 true 才写入' },
         dry_run: { type: 'boolean', description: 'snapshot：只统计不落盘；pack、restore：只列清单' },
-        format: { type: 'string', enum: ['auto', '7z', 'tar'], description: 'pack：auto＝有 7-Zip 用 7z，否则内置 tar.gz（默认）' },
+        format: { type: 'string', enum: ['auto', '7z', 'tar'], description: 'pack：auto＝有 7-Zip 用 7z，否则内置 tar.gz（缺省）' },
       },
     },
     output: textOutput(),

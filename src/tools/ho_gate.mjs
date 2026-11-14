@@ -27,12 +27,12 @@ export function pmGateTool(env) {
   return {
     name: nameOf('gate'),
     description:
-      '通用约束条闸门（按库型判定）＋交接文档体检。只读。',
+      '通用约束条闸门（按库型判定）、交接文档体检与体系注册路径检查。只读。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        scope: { type: 'string', enum: ['all', 'global', 'project'], description: '默认 all' },
+        scope: { type: 'string', enum: ['all', 'global', 'project'], description: '缺省 all' },
         project: { type: 'string', description: 'scope=project 时的项目名' },
       },
     },
@@ -48,7 +48,7 @@ export function pmGateTool(env) {
         const g = syncCheck(ws);
         if (g.noWorkspace) {
           out.push('通用约束条闸门：未接入工作区（' + g.path + '）');
-          out.push('把工作区接入就好，一共四步：');
+          out.push('接入工作区共 4 步：');
           SETUP_STEPS.forEach((s, i) => out.push('  ' + (i + 1) + '. ' + s));
           return { text: out.join(NL) };
         }
@@ -61,7 +61,7 @@ export function pmGateTool(env) {
         } catch { /* 旧目录检查失败不影响闸门 */ }
       } else if (scope === "project") {
         const name = args.project;
-        if (!name) throw new Error("scope=project 时必须给 project 参数");
+        if (!name) throw new Error("scope=project 时须给 project 参数");
         const f = path.join(ws, "_Project_Meta", name, "Handover.md");
         out.push(renderLintProject(name, [{ name, file: f, res: lintProject(f) }]).join(NL));
       }

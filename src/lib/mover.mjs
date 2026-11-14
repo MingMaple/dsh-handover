@@ -172,11 +172,11 @@ export async function probeMove({ src, to }) {
   if (asLink) {
     try { copyFrom = tail(fs.realpathSync(s)); } catch { copyFrom = tail(asLink); }
   }
-  if (!fs.existsSync(path.join(copyFrom, '_Control_Center'))) warnings.push('源目录里没有 _Control_Center：确认这是全局根吗？');
+  if (!fs.existsSync(path.join(copyFrom, '_Control_Center'))) warnings.push('源目录中无 _Control_Center：请确认该目录是否为全局根。');
 
   const raw = String(to || '').trim();
   if (!raw) throw new Error('缺少目标路径（to）');
-  if (!path.isAbsolute(raw)) problems.push('目标必须是绝对路径：' + raw);
+  if (!path.isAbsolute(raw)) problems.push('目标须为绝对路径：' + raw);
   // 语义：to＝目标**父目录**（把整个根目录搬进去）；basename 与当前根同名则直接当新根。
   const toRaw = tail(path.resolve(raw));
   const rootName = path.basename(s);
@@ -201,7 +201,7 @@ export async function probeMove({ src, to }) {
   if (freeBytes !== null && freeBytes < srcSize.bytes * 1.15) {
     problems.push('目标盘空间不足：可用 ' + fmtBytes(freeBytes) + '，需要约 ' + fmtBytes(srcSize.bytes * 1.15));
   }
-  if (!freeBytes && freeBytes !== 0) warnings.push('无法获取目标盘可用空间（继续前请自行确认）');
+  if (!freeBytes && freeBytes !== 0) warnings.push('无法取得目标盘可用空间（继续前请自行确认）');
 
   return {
     ok: problems.length === 0,
@@ -299,7 +299,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
   if (!fs.existsSync(dst)) stop('目标不存在：' + dst);
   if (!fs.existsSync(src)) stop('源不存在：' + src);
   const stampFile = path.join(dst, '_Temp', '_Global', 'Scratch', '.dsh-handover-verified.json');
-  if (!fs.existsSync(stampFile)) stop('目标里没有校验印章，它可能不是这次复制出来的');
+  if (!fs.existsSync(stampFile)) stop('目标中无校验印章，可能并非本次复制所得');
   let sp2 = null;
   try { sp2 = JSON.parse(fs.readFileSync(stampFile, 'utf8')); } catch { stop('校验印章读不出来'); }
   if (String(sp2.digest) !== String(m.digest)) stop('校验印章与标记不一致，目标可能被改动过');
@@ -317,7 +317,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
   let target = '';
   try { target = fs.readlinkSync(src); } catch { target = ''; }
   if (!target || stamp(target) !== stamp(dst)) {
-    log('链接指向不对：' + target + '（旧备份在 ' + old + '）');
+    log('链接指向不符：' + target + '（旧备份在 ' + old + '）');
     stop('切换校验失败');
   }
   m.phase = 'switched';
@@ -356,7 +356,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 /** 派后台助手：等本进程（DSH）退出后自动切换。 */
 export function stageSwitch({ relaunch, waitPid } = {}) {
   const m = readMarker();
-  if (!m || !m.src || !m.dst) throw new Error('没有可用迁移标记，先跑一次 move');
+  if (!m || !m.src || !m.dst) throw new Error('无可用迁移标记，请先执行一次 move');
   const st = moveStatus({ src: m.src });
   if (st.phase === 'switched' || st.phase === 'switched+cleaned') return { ok: true, already: true, phase: st.phase, log: switchLogPath() };
   if (st.phase !== 'verified') throw new Error('当前不是「已复制并校验通过」（phase=' + st.phase + '），不能切换');
@@ -385,7 +385,7 @@ export function stageSwitch({ relaunch, waitPid } = {}) {
     child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true, env });
     child.unref();
   } catch (e) {
-    return { ok: false, spawned: false, error: '派助手失败：' + msgOf(e), helper: sp.helper, cmd: sp.cmd, sh: sp.sh, log: sp.log };
+    return { ok: false, spawned: false, error: '派出助手失败：' + msgOf(e), helper: sp.helper, cmd: sp.cmd, sh: sp.sh, log: sp.log };
   }
   return { ok: true, spawned: true, pid: child.pid, waitPid: pid, helper: sp.helper, cmd: sp.cmd, sh: sp.sh, log: sp.log, relaunch: relaunch === true };
 }
@@ -398,7 +398,7 @@ export function stageSwitch({ relaunch, waitPid } = {}) {
  */
 export function repairLink() {
   const m = readMarker();
-  if (!m || !m.src || !m.dst) throw new Error('没有迁移记录，无法重建链接');
+  if (!m || !m.src || !m.dst) throw new Error('无迁移记录，无法重建链接');
   if (!fs.existsSync(m.dst)) throw new Error('目标不存在（' + m.dst + '），先确认数据在哪里，本工具不动文件');
   const kind = linkKind();
   let st = null;
@@ -535,7 +535,7 @@ export function stageRetarget() {
     child = spawn(process.execPath, [sp.helper, String(process.pid)], { detached: true, stdio: 'ignore', windowsHide: true, env });
     child.unref();
   } catch (e) {
-    return { ok: false, spawned: false, error: '派助手失败：' + msgOf(e), plan, script: sp };
+    return { ok: false, spawned: false, error: '派出助手失败：' + msgOf(e), plan, script: sp };
   }
   return { ok: true, spawned: true, pid: child.pid, waitPid: process.pid, plan, script: sp };
 }
@@ -643,7 +643,7 @@ export async function cleanupOld({ src, confirm } = {}) {
   const st = moveStatus({ src });
   if (st.phase !== 'switched') throw new Error('当前不是已切换状态（phase=' + st.phase + '），拒绝删除任何目录');
   if (confirm !== true) throw new Error('删除旧备份需要明确确认（confirm=true）');
-  if (!st.olds.length) return { ok: true, removed: [], bytes: 0, note: '没有找到旧备份目录' };
+  if (!st.olds.length) return { ok: true, removed: [], bytes: 0, note: '未找到旧备份目录' };
   const removed = []; const failed = []; let bytes = 0;
   const base = path.basename(st.src) + '.old-';
   for (const o of st.olds) {
@@ -662,6 +662,6 @@ export async function cleanupOld({ src, confirm } = {}) {
     ok: failed.length === 0,
     removed, failed, bytes,
     note: failed.length ? ('有 ' + failed.length + ' 个旧备份未删净，可重试')
-      : (removed.length ? '已删除旧备份' : '没有可删的旧备份'),
+      : (removed.length ? '已删除旧备份' : '无可删的旧备份'),
   };
 }

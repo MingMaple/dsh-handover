@@ -58,19 +58,19 @@ const FILES = [
 /** 规整用户粘贴的路径：去掉引号/尾分隔符、展开 ~、解析成绝对路径。 */
 function normalizeParent(input) {
   let s = String(input || '').trim();
-  if (!s) return { error: '先粘贴一个目录（父目录，全局根会建在它里面）' };
+  if (!s) return { error: '请先填写目录（父目录，全局根建于其中）' };
   s = s.replace(/^["']+|["']+$/g, '').trim();
-  if (!s) return { error: '先粘贴一个目录' };
+  if (!s) return { error: '请先填写目录' };
   if (s === '~') s = os.homedir();
   else if (s.startsWith('~/') || s.startsWith('~\\')) s = path.join(os.homedir(), s.slice(2));
   const abs = path.resolve(s);
   let st = null;
   try { st = fs.statSync(abs); } catch { st = null; }
-  if (st && !st.isDirectory()) return { error: '这不是一个目录：' + abs, path: abs };
+  if (st && !st.isDirectory()) return { error: '该路径不是目录：' + abs, path: abs };
   // 目标父目录不存在就建：允许直接指定尚不存在的路径。
   if (!st) {
     try { fs.mkdirSync(abs, { recursive: true }); }
-    catch (e) { return { error: '建不出这个目录：' + abs + '（' + String(e && e.message ? e.message : e) + '）', path: abs }; }
+    catch (e) { return { error: '无法创建该目录：' + abs + '（' + String(e && e.message ? e.message : e) + '）', path: abs }; }
   }
   return { parent: abs, createdParent: !st };
 }
@@ -132,7 +132,7 @@ export function createGlobalWorkspace(parentInput, opts) {
 
   const name = (opts && typeof opts.name === 'string' && opts.name.trim()) || DEFAULT_ROOT_NAME;
   if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1 || name === '.' || name === '..') {
-    return { ok: false, error: '根目录名不能带路径分隔符：' + name };
+    return { ok: false, error: '根目录名不得含路径分隔符：' + name };
   }
   const sameName = pathKey(path.basename(t.parent)) === pathKey(name);
   const root = sameName ? t.parent : path.join(t.parent, name);

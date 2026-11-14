@@ -10,10 +10,10 @@ function noPath(input) {
   const reason = input && input.reason ? input.reason : '未知原因';
   return [
     '没有可用的交接路径：' + reason,
-    '两条处置：',
-    '  ① 在设置页的 dsh-handover 中「会话角色」给本会话指定角色（项目角色要填项目名）；',
+    '处置：',
+    '  ① 在设置页的 dsh-handover 中「会话角色」给本会话指定角色（项目角色须填项目名）；',
     '  ② 临时显式传 path="<交接文件绝对路径>"。',
-    '（插件不再默认读全局交接——那是以前会串角色的老行为。）',
+    '（插件不再默认读全局交接：旧版行为会导致角色串用。）',
   ].join(NL);
 }
 
@@ -21,7 +21,7 @@ export function pmHandoverTool(env) {
   return {
     name: nameOf('handover'),
     description:
-      '读写、新建、追加、归档交接；整篇重写用 new（先归档旧交接，再新建空白文件写入）；项目与杂项读写自己的交接，全局可用 task 指向某个全局任务。写后按角色体检。',
+      '读写、新建、追加、归档交接；整篇重写用 new（先归档旧交接，再新建空白文件写入）；项目与杂项会话读写自己的交接，全局会话可用 task 指向某个全局任务。写后按角色体检。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -84,7 +84,7 @@ export function pmHandoverTool(env) {
         out.push("已新建 " + res.path + "（" + res.bytes + " B）· 角色 " + (taskName ? 'global-task' : info.role) + (taskName ? " · 任务「" + taskName + "」" : ""));
         out.push("体检 " + res.verdict + (res.reasons.length ? "" : " · 结构齐备"));
         for (const r of res.reasons) out.push("  - " + r);
-        if (res.verdict !== "通过") out.push("提示：修好后重跑 action=new（会再归档一份当前文件）。");
+        if (res.verdict !== "通过") out.push("提示：修正后重跑 action=new（将再次归档当前文件）。");
         return { text: out.join(NL) };
       }
       if (args.action !== "write" && args.action !== "append") {
@@ -94,7 +94,7 @@ export function pmHandoverTool(env) {
       if (args.action === "write" && readHandover(target.path).text) {
         throw new Error(
           "交接已存在，不能用 write 改写：" + target.path + NL
-          + "整篇重写按固定流程：先 ho_handover(action=\"read\") 读旧交接，再 ho_handover(action=\"archive\") 归档，然后读模板 _Control_Center/templates/Handover.md，最后 ho_handover(action=\"new\", text=…) 新建空白写入。",
+          + "整篇重写按固定流程：① ho_handover(action=\"read\") 读旧交接；② ho_handover(action=\"archive\") 归档；③ 读模板 _Control_Center/templates/Handover.md；④ ho_handover(action=\"new\", text=…) 新建空白写入。",
         );
       }
       const res = writeHandover(ws, target.path, args.text, args.action, snapOpts);

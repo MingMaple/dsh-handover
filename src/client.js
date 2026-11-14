@@ -1,9 +1,9 @@
 /**
- * dsh-handover 浏览器半：在「设置 → 交接」注册一个只读状态页。
- * 手工构建的 DSH client bundle（不用 JSX/打包器）：只 require react，
- * 数据来自宿主侧注册的 GET /dsh-handover/status.json（只读、不唤醒任何会话）。
+ * dsh-handover 浏览器侧：在「设置 → 交接」注册只读状态页。
+ * 手工构建的 DSH client bundle（不使用 JSX 与打包器）：只 require react，
+ * 数据取自宿主侧注册的 GET /dsh-handover/status.json（只读，不唤醒任何会话）。
  *
- * 改了这个文件要重建 dist 并在 DSH 里重新激活插件（client bundle 不热更）。
+ * 修改本文件后须重建 dist，并在 DSH 中重新激活插件（client bundle 不热更新）。
  */
 window.__ModuleLoader__.load({
   id: '@mingmaple/dsh-handover',
@@ -14,11 +14,11 @@ window.__ModuleLoader__.load({
 
     const React = require("react");
     const h = React.createElement;
-    /** 参与槽位注册的服务；connection＝DSH 认证的 /api 载体（设置页取数的主通道）。 */
+    /** 参与槽位注册的服务；connection 为 DSH 认证的 /api 载体（设置页取数的主通道）。 */
     const inject = ["slots", "connection"];
     let connection = null;
 
-    /** 数据接口候选：绝对路径优先，再退相对（页面挂在子路径时仍能取到）。 */
+    /** 数据接口候选：优先绝对路径，其次相对路径（页面挂在子路径时仍可读取）。 */
     const ENDPOINTS = ["/dsh-handover/status.json", "dsh-handover/status.json"];
 
     const CSS_TAG_ID = "@mingmaple/dsh-handover/SettingsSection.css";
@@ -64,7 +64,7 @@ window.__ModuleLoader__.load({
       document.head.appendChild(tag);
     }
 
-    /** 带超时的 fetch（旧通道回退用；没有超时就会永远「读取中」）。 */
+    /** 带超时的 fetch（旧通道回退用；无超时则会一直停在「读取中」）。 */
     async function fetchWithTimeout(url, opts, ms) {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), ms || 8000);
@@ -75,7 +75,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 依次尝试候选地址取状态；全失败时抛出带全部原因的错。 */
+    /** 依次尝试候选地址读取状态；全部失败时抛出含全部原因的错。 */
     async function fetchStatus() {
       const reasons = [];
       for (const url of ENDPOINTS) {
@@ -90,10 +90,10 @@ window.__ModuleLoader__.load({
       throw new Error(reasons.join("；") || "无法取得状态");
     }
 
-    /** 通道诊断（显示于页面；出现异常时可直接定位，无需推测）。 */
+    /** 通道诊断（显示于页面；出现异常时可直接定位，无须推测）。 */
     const diag = { lastError: "" };
 
-    /** 页面级快照缓存：设置页切走再切回时先渲染旧读数，再后台刷新（不出现「正在读取」）。 */
+    /** 页面级快照缓存：设置页切走再切回时先渲染旧读数，随后后台刷新，不出现「正在读取」。 */
     const state = { last: null };
 
     /** 读数时间保留完整值（含年份与时区），与页头一致。 */
@@ -108,7 +108,7 @@ window.__ModuleLoader__.load({
 
     /**
      * 可折叠表格：先显示 pageSize 行，点击「再展开」继续追加 pageSize 行。
-     * 列宽由 widths 百分比给定（表头固定、不横向滚动）。
+     * 列宽由 widths 百分比给定（表头固定，不横向滚动）。
      */
     function Folded(props) {
       const rows = props.rows || [];
@@ -153,20 +153,21 @@ window.__ModuleLoader__.load({
       });
     }
 
-    /** 主通道：DSH 认证的 /api 载体（宿主 registerRpcCarrier 注册）。 */
+    /** 主通道：DSH 认证的 /api 载体（由宿主 registerRpcCarrier 注册）。 */
     async function rpc(method, payload, ms) {
       const conn = connection;
-      // 必须保留 this=connection.rpc：宿主用 this 拼目标，换成别的对象会得到
+      // 必须保留 this=connection.rpc：宿主用 this 拼接目标，换成其他对象会得到
       // "[object Object]/api" 并报 invalid RPC target。
       const rpcObj = conn && conn.rpc && typeof conn.rpc.call === "function" ? conn.rpc : null;
       if (!rpcObj) throw new Error("宿主没有 connection.rpc（载体=" + carrierKind() + "）");
-      // 不用 AbortController 主动中止：宿主处理可能超过 8 秒，只做与超时竞速，
-      // 让请求在宿主侧自然完成，慢一点也能拿到结果。
+      // 不主动中止请求：宿主处理可能超过 8 秒，此处仅与超时竞速，
+      // 请求在宿主侧自然完成，耗时较长也能取得结果。
       const ac = new AbortController();
       const limit = ms || 30000;
       const t0 = Date.now();
       try {
-        // 签名（与 dsh-im 一致）：connection.rpc.call(target, endpoint, call, signal)，且 this 必须是 connection.rpc。
+        // 调用签名（与 dsh-im 一致）：connection.rpc.call(target, endpoint, call, signal)。
+        // this 须为 connection.rpc。
         let r;
         try {
           r = await raceTimeout(
@@ -176,7 +177,7 @@ window.__ModuleLoader__.load({
           );
         } catch (e) {
           if (!/invalid RPC target/i.test(String(e && e.message ? e.message : e))) throw e;
-          // 退一步：有的宿主把 target 预置在 rpc 上，只收 (endpoint, call, signal)
+          // 回退处理：部分宿主将 target 预置在 rpc 上，只接受 (endpoint, call, signal)
           r = await raceTimeout(
             rpcObj.call("dsh-handover", { method: method, payload: payload || {} }, ac.signal),
             limit + 500,
@@ -194,7 +195,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 写操作：先载体，失败再退 HTTP；成功统一补 ok:true，失败抛错。 */
+    /** 写操作：先走载体，失败再回退 HTTP；成功统一补 ok:true，失败抛错。 */
     async function post(method, payload, ms) {
       try {
         const v = await rpc(method, payload, ms || 20000);
@@ -209,7 +210,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** POST JSON：同样先绝对路径再相对路径。 */
+    /** POST JSON：同样先绝对路径、后相对路径。 */
     async function postJson(pathname, payload) {
       const reasons = [];
       for (const base of ["", "."]) {
@@ -252,9 +253,9 @@ window.__ModuleLoader__.load({
       return v + " B";
     }
 
-    /** 设置页正身：只读，一个刷新按钮。 */
+    /** 设置页主体：只读，仅一个刷新按钮。 */
     function HandoverSection() {
-      // 首屏直接用上一次的读数（切走再切回不再出现「正在读取」），后台再刷新。
+      // 首屏直接使用上一次的读数（切走再切回不再出现「正在读取」），随后后台刷新。
       const [data, setData] = React.useState(state.last);
       const [err, setErr] = React.useState("");
       const [busy, setBusy] = React.useState(false);
@@ -272,7 +273,7 @@ window.__ModuleLoader__.load({
       const [extraMsg, setExtraMsg] = React.useState("");
       const [extraBad, setExtraBad] = React.useState(false);
       const [channel, setChannel] = React.useState("");
-      // 迁移：探针 / 复制 / 状态
+      // 迁移：预检、复制、状态
       const [mvTo, setMvTo] = React.useState("");
       const [mvBusy, setMvBusy] = React.useState(false);
       const [mvMsg, setMvMsg] = React.useState("");
@@ -342,7 +343,7 @@ window.__ModuleLoader__.load({
           .then(() => setWorking(false));
       }, [created]);
 
-      // 一键部署：建文件体系、注册「全局」工作区、建「全局」会话，一次做完。
+      // 一键部署：建立文件体系、注册「全局」工作区、创建「全局」会话，一次完成。
       const deployAll = React.useCallback(() => {
         setWorking(true); setDeployInfo(null); setSetupBad(false); setSetupMsg("");
         post("deploy", { parent: parent }, 180000)
@@ -366,7 +367,7 @@ window.__ModuleLoader__.load({
           .then(() => setWorking(false));
       }, [parent, load]);
 
-      // 工作区已接入但没有全局会话时，补建一个。
+      // 工作区已接入但尚无全局会话时，补建一个。
       const makeGlobalSession = React.useCallback(() => {
         setWorking(true); setGlobalBad(false); setGlobalMsg("");
         post("global-session", {}, 60000)
@@ -410,7 +411,7 @@ window.__ModuleLoader__.load({
           next[sid] = Object.assign({}, next[sid] || {}, patch);
           return next;
         });
-        // 改了角色就回到第一步，按钮重新显示「设置角色」。
+        // 修改角色后回到第一步，按钮重新显示「设置角色」。
         setRoleStage((prev) => {
           const next = Object.assign({}, prev || {});
           next[sid] = "";
@@ -464,7 +465,7 @@ window.__ModuleLoader__.load({
           if (!p) return;
           setMvProbe(p);
           setMvBad(!p.ok);
-          setMvMsg(p.ok ? "预检通过，可以开始复制。" : "预检未通过，原因见下。");
+          setMvMsg(p.ok ? "预检通过，可开始复制。" : "预检未通过，原因见下。");
         });
       }, [mvTo, callMove]);
 
@@ -488,7 +489,7 @@ window.__ModuleLoader__.load({
         });
       }, [callMove, refreshMove]);
 
-      // 压缩授权：只有用户在此授权，压缩才排得进；模型不能自批。
+      // 压缩授权：仅在用户于此授权后，压缩才可排入；模型不得自行批准。
       const [csSid, setCsSid] = React.useState("");
       const [csMsg, setCsMsg] = React.useState("");
       const doGrant = React.useCallback((kind) => {
@@ -516,7 +517,7 @@ window.__ModuleLoader__.load({
         setWorking(true); setCsMsg("");
         post("consent.revoke", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then(() => { setCsMsg("已撤销 " + sid + " 的" + (kind === "succeed" ? "换任" : "压缩") + "授权。"); load(); })
-          .catch(() => { /* 撤销失败不影响别的 */ })
+          .catch(() => { /* 撤销失败不影响其他操作 */ })
           .then(() => setWorking(false));
       }, [load]);
 
@@ -534,7 +535,7 @@ window.__ModuleLoader__.load({
         callMove("move.repair", {}, 20000).then((r) => {
           if (!r) return;
           setMvBad(false);
-          setMvMsg(r.already ? "原路径已经是链接，无需重建。" : "已重建链接：" + r.src + " 现指向 " + r.dst + "（未改动任何文件）");
+          setMvMsg(r.already ? "原路径已经是链接，无需重建。" : "已重建链接：" + r.src + " 现指向 " + r.dst + "（未改动任何文件）。");
           refreshMove();
         });
       }, [callMove, refreshMove]);
@@ -554,7 +555,7 @@ window.__ModuleLoader__.load({
         });
       }, [delWord, callMove, refreshMove]);
 
-      // 有缓存时先出一帧旧读数，再拉新数据；没有缓存才等一次。
+      // 有缓存时先渲染一帧旧读数，再拉取新数据；无缓存时才等待一次。
       React.useEffect(() => { installCss(); load(); }, []);
 
       const head = h("div", { className: "dshh-head" },
@@ -583,7 +584,7 @@ window.__ModuleLoader__.load({
       // 排序原则：高频操作在前，只读数据居中，说明文字在后。
       const sections = [];
 
-      // 一、首次安装与全局会话：未接入时给一键部署；已接入但还没有全局会话时给补建入口。
+      // 一、首次安装与全局会话：未接入时提供一键部署；已接入但尚无全局会话时提供补建入口。
       const setup = data.setup;
       const notReady = !ws || ws.found === false;
       const globalCount = Number(data.globalSessions || 0);
@@ -603,7 +604,7 @@ window.__ModuleLoader__.load({
               className: "dshh-input",
               type: "text",
               value: parent,
-              placeholder: "填写绝对路径：全局根 _Workspace 将建在该目录下",
+              placeholder: "填写绝对路径：全局根 _Workspace 将建立在该目录下",
               onChange: (e) => setParent(e.target.value),
             }),
             h("div", { className: "dshh-row" },
@@ -646,17 +647,17 @@ window.__ModuleLoader__.load({
       if (dutyRows.length) {
         authKids.push(h("div", { className: "dshh-muted" }, "点击「授权压缩」后，该会话 5 分钟内可压缩一次，用后失效；也可在会话中发送 /allow-compact。"));
         authKids.push(grantTable("compact"));
-        authKids.push(h("div", { className: "dshh-muted" }, "换任同样须授权：点击「授权换任」后 5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "换任亦须授权：点击「授权换任」后 5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
         authKids.push(grantTable("succeed"));
       } else {
-        authKids.push(h("div", { className: "dshh-muted" }, "暂无可选的在任会话；可在下方直接填会话 id 授权。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "暂无可选的在任会话；可在下方直接填写会话 id 授权。"));
       }
       authKids.push(h("div", { className: "dshh-row" },
         h("input", {
           className: "dshh-inputSm",
           type: "text",
           value: csSid,
-          placeholder: "或填写会话 id 或 8 位短号",
+          placeholder: "也可填写会话 id 或 8 位短号",
           onChange: (e) => setCsSid(e.target.value),
         }),
         h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权压缩"),
@@ -691,7 +692,7 @@ window.__ModuleLoader__.load({
           ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（" + st.dst + "）" : "") + (hasOlds ? "；旧备份保留，不影响使用" : "")
           : "正在读取迁移状态";
         const kids = [];
-        kids.push(h("div", { className: "dshh-muted" }, "切换只改名与建链接，不改动文件内容。"));
+        kids.push(h("div", { className: "dshh-muted" }, "切换只改名并建立链接，不改动文件内容。"));
         if (st && st.phase && st.phase.indexOf("switched") === 0) {
           kids.push(h("div", { className: "dshh-muted" }, "原路径为指向新位置的链接；若已删除，可用「重建链接」恢复。"));
         }
@@ -799,7 +800,7 @@ window.__ModuleLoader__.load({
         const task = draft.task !== undefined ? draft.task : (r.task || "");
         const wide = role === "project" || role === "misc";
         const stage = (roleStage && roleStage[r.sid]) || "";
-        // 已有在任全局时不再提供「全局」选项；当前就是全局的会话仍显示，避免看不出现状。
+        // 已有在任全局会话时不再提供「全局」选项；当前即为全局的会话仍显示，避免看不出当前状态。
         const canGlobal = Number(data.globalSessions || 0) === 0 || r.role === "global";
         const convert = (r.role === "project" || r.role === "misc") && wide && role !== r.role;
         const action = stage === "notified"
@@ -819,7 +820,7 @@ window.__ModuleLoader__.load({
                     return next;
                   });
                   setRoleBad(false);
-                  setRoleMsg("请确认角色与名称，再点击「确认设置」。项目与杂项互转默认先快照再移动。");
+                  setRoleMsg("请确认角色与名称，再点击「确认设置」。项目与杂项互转时，默认先快照再移动。");
                 },
               }, "设置角色");
         return h("tr", { key: i },

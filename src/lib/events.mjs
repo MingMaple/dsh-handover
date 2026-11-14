@@ -85,5 +85,5 @@ export function stalePressureNote(sessionId) {
   if (!st.lastSummaryMs) return '';
   const m = projCacheMtimeOf(sessionId);
   if (m === null || m >= st.lastSummaryMs) return '';
-  return '（压缩刚完成，投影缓存尚未刷新，水位读数滞后一轮；下一次请求后自动正常）';
+  return '（压缩刚完成，投影缓存尚未刷新，水位读数滞后一轮；下一次请求后恢复正常）';
 }

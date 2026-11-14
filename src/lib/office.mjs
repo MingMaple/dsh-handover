@@ -90,7 +90,7 @@ export function nextName(store, key) {
  */
 export function resolveOffice(store, query) {
   const q = String(query || '').trim();
-  if (!q) return { ok: false, reason: '空查询' };
+  if (!q) return { ok: false, reason: '查询为空' };
   const keys = Object.keys((store && store.lineages) || {});
   const lower = q.toLowerCase();
   let key = '';
@@ -151,7 +151,7 @@ export function formatRow(row, askedAs) {
   if (!cur || !cur.name) return (row && row.key ? row.key : '?') + '  — 当前空缺';
   const label = KIND_LABEL[row.kind] || row.kind || '-';
   // 只有「拿旧编号问现任」时才加来处标注；直接问类别名或现任名就不必重复。
-  const tail = askedAs && askedAs !== cur.name && askedAs !== row.key ? '（' + askedAs + ' → ' + row.key + '）' : '';
+  const tail = askedAs && askedAs !== cur.name && askedAs !== row.key ? '（' + askedAs + ' 指向 ' + row.key + '）' : '';
   return cur.name + '  ' + cur.sessionId + '  ' + label + (cur.since ? '  自 ' + cur.since : '') + tail;
 }
 

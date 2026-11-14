@@ -88,16 +88,16 @@ export function lintGlobal(file) {
   if (!chainLine) bad.push('§0 缺「链内代数」行');
   else {
     const hasDi = chainLine.indexOf('第') !== -1 && chainLine.indexOf('代') !== -1;
-    if (!hasDi) bad.push('链内代数不是「第 N 代」格式：' + chainLine.slice(0, 60));
+    if (!hasDi) bad.push('链内代数不符合「第 N 代」格式：' + chainLine.slice(0, 60));
   }
   const s2 = sectionLines(text, '下一步');
   if (!s2) bad.push('缺 ## 2. 下一步');
-  else if (tableRows(s2).length <= 1 && bulletRows(s2).length === 0) bad.push('§2 没列出任何条目');
+  else if (tableRows(s2).length <= 1 && bulletRows(s2).length === 0) bad.push('§2 未列出任何条目');
   const s7 = sectionLines(text, '会话 id 对照');
   if (!s7) bad.push('缺 ## 7. 会话 id 对照');
   else {
-    if (!s7.some((l) => l.trim().startsWith('|') && l.indexOf('session-') !== -1)) bad.push('§7 没有一行带 session id');
-    if (s7.some((l) => l.indexOf('待回填') !== -1)) bad.push('§7 还有「待回填」');
+    if (!s7.some((l) => l.trim().startsWith('|') && l.indexOf('session-') !== -1)) bad.push('§7 无任何带 session id 的行');
+    if (s7.some((l) => l.indexOf('待回填') !== -1)) bad.push('§7 仍留有「待回填」');
   }
   const ph = firstPlaceholder(text);
   if (ph) bad.push("残留模板占位符：" + ph);
@@ -112,15 +112,15 @@ export function lintProject(file) {
   const bad = [];
   const gap = [];
   const body = sectionLines(text, '正在做的事');
-  if (!body) gap.push("缺 ## 1. 正在做的事 一节（2026-10-12 起的强制项，本项目还没补）");
+  if (!body) gap.push("缺 ## 1. 正在做的事 一节");
   else {
     const core = body.filter((l) => l.trim() !== '' && !l.trim().startsWith('>'));
     // 只判「有没有实质内容」；不设字数下限（2026-11-11 口径：交接类文档不设体积上限）。
-    if (core.length === 0) bad.push("正在做的事 是空节（或只有引用块说明），没写实质内容");
+    if (core.length === 0) bad.push("正在做的事 为空节（或仅有引用块说明），无实质内容");
   }
   const nxt = sectionLines(text, '下一步') || sectionLines(text, '待办');
   if (!nxt) bad.push("缺「下一步待办」一节");
-  else if (tableRows(nxt).length <= 1 && bulletRows(nxt).length === 0) bad.push("「下一步待办」没列出任何条目");
+  else if (tableRows(nxt).length <= 1 && bulletRows(nxt).length === 0) bad.push("「下一步待办」未列出任何条目");
   const ph = firstPlaceholder(text);
   if (ph) bad.push("残留模板占位符：" + ph);
   if (bad.length) return { verdict: "不合格", reasons: bad };
@@ -151,6 +151,6 @@ export function renderLintProject(name, rows) {
     if (it.res.verdict === "不合格") fails++;
     else if (it.res.verdict === "缺节") gaps++;
   }
-  out.push("判定：" + list.length + " 个项目 —— 不合格 " + fails + " 个（要改）、缺节 " + gaps + " 个（新规范未铺开，属正常）");
+  out.push("判定：" + list.length + " 个项目 —— 不合格 " + fails + " 个（须修正）、缺节 " + gaps + " 个（新规范尚未铺开，属正常）");
   return out;
 }

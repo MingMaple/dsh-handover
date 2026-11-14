@@ -190,8 +190,8 @@ export function buildStatus(env, extra) {
   };
 
   if (!found) {
-    out.notes.push('未找到 _Control_Center：这个实例还没接入工作区。可在插件 config 里写 workspaceRoot。');
-    out.notes.push('插件本身已加载：工具与设置页不依赖工作区，只有闸门、交接、会话三段需要工作区。');
+    out.notes.push('未找到 _Control_Center：本实例尚未接入工作区。可在插件 config 中填写 workspaceRoot。');
+    out.notes.push('插件本身已加载：工具与设置页不依赖工作区，仅闸门、交接与会话三部分需要工作区。');
     out.setup = { steps: SETUP_STEPS };
     return out;
   }
@@ -323,7 +323,7 @@ export function buildStatus(env, extra) {
       cutoff: stampTz(wide.cutoffMs),
       silentHours: wide.silentHours,
       verdict: hot
-        ? hot + ' 个在任会话已过 ' + warn + '% 线，应先收齐交接，再换会话'
+        ? hot + ' 个在任会话已过 ' + warn + '% 线，应先收齐交接，再更换会话'
         : '没有在任会话超过 ' + warn + '% 线。',
     };
   }, { rows: [], notify: [], hot: 0, unknown: 0 });

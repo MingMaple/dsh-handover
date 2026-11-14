@@ -188,7 +188,7 @@ export function extractTarGz(file, destDir) {
       dirs++;
       return;
     }
-    if (e.type === '1' || e.type === '2') { skipped.push('链接条目不解：' + rel); return; }
+    if (e.type === '1' || e.type === '2') { skipped.push('链接条目不处理：' + rel); return; }
     if (e.type !== '0' && e.type !== '') { skipped.push('未知条目类型 ' + e.type + '：' + rel); return; }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, e.body);

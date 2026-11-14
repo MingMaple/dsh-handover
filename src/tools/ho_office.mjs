@@ -16,7 +16,7 @@ export function pmOfficeTool(env) {
   return {
     name: nameOf('office'),
     description:
-      '在任登记：query 查现任（默认）；action=register 由本会话首次注册自己的名字，注册后不得自行修改。',
+      '在任登记：query 查在任（缺省）；action=register 由本会话首次注册自身名称，注册后不得自行修改。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -34,7 +34,7 @@ export function pmOfficeTool(env) {
       const action = typeof args.action === 'string' && args.action ? args.action : 'read';
       if (action === 'register') {
         const meId = String(env.selfId(exec) || '');
-        if (!meId) throw new Error('无法获取本会话 id，不能注册');
+        if (!meId) throw new Error('无法取得本会话 id，不能注册');
         let info = null;
         try { info = env.roleOf(exec); } catch { info = null; }
         const role = info && info.role ? info.role : 'plain';
@@ -52,7 +52,7 @@ export function pmOfficeTool(env) {
         const lin = store.lineages[key];
         const cur = lin && lin.current;
         if (cur && cur.sessionId && String(cur.sessionId) !== meId) {
-          throw new Error('类别「' + key + '」已有在任会话：' + (cur.name || '') + '（' + cur.sessionId + '）。不得抢注；先由全局处理现任。');
+          throw new Error('类别「' + key + '」已有在任会话：' + (cur.name || '') + '（' + cur.sessionId + '）。不得抢注；先由全局处理在任会话。');
         }
         if (cur && String(cur.sessionId) === meId) {
           if (String(cur.name || '') === name) return { text: '已注册：' + name + '（' + key + '）。注册后不得自行修改。' };
@@ -65,7 +65,7 @@ export function pmOfficeTool(env) {
       const store = loadOffice(ws);
       const rows = rowsOf(store);
       if (!rows.length) {
-        return { text: '在任登记表还是空的（' + officePath(ws) + '）：先登记一次在任会话，再查。' };
+        return { text: '在任登记表为空（' + officePath(ws) + '）：先登记一次在任会话，再查询。' };
       }
       const raw = String(args.query || '').trim();
       const tokens = raw ? raw.split(/[\s,，、;；]+/).filter(Boolean) : [];

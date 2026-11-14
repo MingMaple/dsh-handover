@@ -122,7 +122,7 @@ export function renderRegistry(info, data) {
   lines.push('', '## 计划', '');
   if (data.plan) lines.push('- ' + wrap(data.plan) + '：当前行动计划');
   lines.push('');
-  lines.push('只给路径与用途：是否读正文由会话判断，不要无目的通读。');
+  lines.push('只给路径与用途：是否读正文由会话判断，不得无目的通读。');
   return lines.join(NL) + NL;
 }
 
@@ -144,7 +144,7 @@ export function readRegistry(ws, info) {
 export function pathProblem(ws, p) {
   const raw = normRel(p);
   if (!raw) return '路径为空';
-  if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return '要写工作区相对路径，不写绝对路径';
+  if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return '须写工作区相对路径，不得写绝对路径';
   const norm = path.normalize(raw).replace(/\\/g, '/');
   if (norm === '..' || norm.startsWith('../')) return '不得指向工作区之外';
   const abs = path.join(String(ws || ''), norm);

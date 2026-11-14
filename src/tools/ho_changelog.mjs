@@ -21,9 +21,9 @@ export function pmChangelogTool(env) {
       additionalProperties: false,
       required: ['summary'],
       properties: {
-        summary: { type: 'string', description: '这一行写什么（中文）' },
-        executor: { type: 'string', description: '执行者（默认本会话 id）' },
-        date: { type: 'string', description: '日期 YYYY-MM-DD（默认今天）' },
+        summary: { type: 'string', description: '本行内容（中文）' },
+        executor: { type: 'string', description: '执行者（缺省为本会话 id）' },
+        date: { type: 'string', description: '日期 YYYY-MM-DD（缺省为当天）' },
       },
     },
     output: textOutput(),
@@ -48,7 +48,7 @@ export function pmChangelogTool(env) {
       const date = args.date || stamp();
       const who = args.executor || env.selfId(exec) || '?';
       const summary = typeof args.summary === 'string' ? args.summary.trim() : '';
-      if (!summary) throw new Error('summary 不能为空（写清「改了什么、为什么」）');
+      if (!summary) throw new Error('summary 不能为空（写明变更内容与原因）');
       const safe = summary.split('|').join(String.fromCharCode(92) + '|');
       const row = '| ' + date + ' | ' + safe + ' | ' + who + ' |';
       lines.splice(sepIdx + 1, 0, row);

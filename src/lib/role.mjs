@@ -64,7 +64,7 @@ function writeRolesFile(cfg, data) {
 /** 写入/更新一条角色；返回写入后的条目。 */
 export function writeRole(cfg, sessionId, patch) {
   const sid = String(sessionId || '');
-  if (!sid) throw new Error('缺会话 id');
+  if (!sid) throw new Error('缺少会话 id');
   const data = readRoles(cfg);
   const prev = data.sessions[sid] || {};
   const next = Object.assign({}, prev, patch || {});

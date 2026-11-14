@@ -7,13 +7,13 @@ export function pmSucceedTool(env) {
   return {
     name: nameOf('succeed'),
     description:
-      '换任：校验本会话交接，建接任会话并登记在任；须当前用户先授权（/allow-succeed）。',
+      '换任：校验本会话交接，建立接任会话并登记在任；须由当前用户先行授权（/allow-succeed）。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        note: { type: 'string', description: '写进在任登记的备注（可选）' },
-        force: { type: 'boolean', description: '本会话水位未到线时仍换任（默认不传）' },
+        note: { type: 'string', description: '写入在任登记的备注（可选）' },
+        force: { type: 'boolean', description: '本会话水位未到线时仍执行换任（缺省不传）' },
       },
     },
     output: textOutput(),

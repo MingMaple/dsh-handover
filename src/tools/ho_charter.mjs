@@ -30,12 +30,12 @@ export function pmCharterTool(env) {
   return {
     name: nameOf('charter'),
     description:
-      '按节取规则正文，避免整篇读；doc="runtime" 取完整流程。只读。',
+      '按节取规则正文，避免整篇读取；doc="runtime" 取完整流程手册。只读。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        doc: { type: 'string', enum: DOC_KEYS, description: '默认 charter；runtime＝插件完整流程手册' },
+        doc: { type: 'string', enum: DOC_KEYS, description: '缺省 charter；runtime＝插件完整流程手册' },
         section: { type: 'string', description: '节标题片段；留空则只返回目录（## 行清单）' },
         maxLines: { type: 'number', description: '最多返回多少行（默认 120）' },
       },
@@ -68,7 +68,7 @@ export function pmCharterTool(env) {
         fromBundle = true;
       }
       // 口径：内置=默认本体，工作区同名文件=本地化覆盖。所以这里不写「没有/缺失」，只标注来源。
-      const note = fromBundle ? '（插件内置默认口径 · 要本地化就写到 ' + file + '）' : '';
+      const note = fromBundle ? '（插件内置默认口径；如需本地化，写入 ' + file + '）' : '';
       if (!section) {
         const heads = text.split(NL).filter((l) => l.startsWith("## "));
         return { text: [note, file, "共 " + heads.length + " 节：", ...heads.slice(0, max)].filter(Boolean).join(NL) };
@@ -78,12 +78,12 @@ export function pmCharterTool(env) {
         const cp = charterPath(ws);
         const src = isFile(cp) ? readUtf8(cp) : bundledTemplate('Charter.skeleton.md');
         const blk = canonicalBlock(src);
-        if (!blk) throw new Error("无法获取 §8.1.1.4 正文（结构变了）");
-        const head = isFile(cp) ? '' : '（工作区没有 ' + cp + ' —— 下面是插件自带骨架里的通用约束条。）' + NL + NL;
+        if (!blk) throw new Error("无法取得 §8.1.1.4 正文（结构已变更）");
+        const head = isFile(cp) ? '' : '（工作区无 ' + cp + '，以下为插件自带骨架中的通用约束条。）' + NL + NL;
         return { text: head + blk.body.slice(0, max).join(NL) };
       }
       const lines = sectionLines(text, section);
-      if (!lines) throw new Error("未找到节：" + section + "（可先不带 section 调一次看目录）");
+      if (!lines) throw new Error("未找到节：" + section + "（可先不带 section 调用一次，查看目录）");
       return { text: lines.slice(0, max).join(NL) };
     },
   };

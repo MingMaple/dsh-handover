@@ -162,7 +162,7 @@ function diagText(env, state, exec) {
   }
   out.push('工作区    ' + ws + (wsOk
     ? '  已接入'
-    : '  — 未接入（未找到 _Control_Center）：让当前用户走设置页「首次安装」，或本会话直接 ho_workspace(action="init", parent="<目录>", register=true)'));
+    : '  未接入（未找到 _Control_Center）：请当前用户在设置页执行「首次安装」，或由本会话直接 ho_workspace(action="init", parent="<目录>", register=true)'));
   try {
     const mv = typeof env.moveInfo === 'function' ? env.moveInfo() : null;
     if (mv) out.push('迁移      ' + mv.phase + ' · ' + mv.src + (mv.dst ? '  →  ' + mv.dst : ''));
@@ -171,7 +171,7 @@ function diagText(env, state, exec) {
   if (typeof env.handoverFor === 'function') {
     try {
       const hp = env.handoverFor(exec);
-      out.push('交接路径  ' + (hp && hp.path ? hp.path + '（' + hp.kind + '）' : '无 —— ' + ((hp && hp.reason) || '角色未定')));
+      out.push('交接路径  ' + (hp && hp.path ? hp.path + '（' + hp.kind + '）' : '无，' + ((hp && hp.reason) || '角色未定')));
     } catch (e) {
       out.push('交接路径  解析失败：' + (e && e.message ? e.message : e));
     }
@@ -190,7 +190,7 @@ function driftText(env, args, exec) {
     all: args.all === true,
   });
   const out = [];
-  out.push('交接匹配检查（跟着交接走；冗余 ' + res.slack + ' 轮）  工作区根 ' + ws);
+  out.push('交接匹配检查（以交接为准；容忍 ' + res.slack + ' 轮）  工作区根 ' + ws);
   out.push('  项目  会话类型 会话  当前轮  交接轮  Δ  判定');
   for (const r of res.rows) {
     const cells = [r.project, r.kind, r.sid.slice(-8), String(r.turns), r.handoverTurn === null ? '?' : String(r.handoverTurn), r.delta === null ? '?' : String(r.delta), r.verdict];
@@ -209,9 +209,9 @@ function tokensText(args) {
   for (const sid of list) {
     const full = sid.indexOf('session-') === 0 ? sid : 'session-' + sid;
     const log = findLog(full);
-    if (!log) { out.push(sid + '  ERR 日志找不到'); continue; }
+    if (!log) { out.push(sid + '  ERR 日志不存在'); continue; }
     const recs = decodeLog(log);
-    if (!recs) { out.push(sid + '  ERR 日志解不出'); continue; }
+    if (!recs) { out.push(sid + '  ERR 日志无法解码'); continue; }
     const m = analyzeLog(recs);
     const verdict = m.perStep > 2000 ? '偏贵（每步 >2k）' : m.heavyTurns > 0 ? '有超 20 步的轮' : '正常';
     out.push([sid.slice(-8), m.turns, m.steps, m.outTok, m.perStep, Math.round(m.maxResult / 1024) + 'KB', m.heavyTurns, verdict].join('  '));
@@ -224,7 +224,7 @@ export function pmStatusTool(env, state) {
   return {
     name: nameOf('status'),
     description:
-      '会话状态（只读）：view=phase 水位与建议（默认）、brief 起始简报、diag 插件自检、drift 交接漂移、tokens token 体检。',
+      '会话状态（只读）：view=phase 水位与建议（缺省）、brief 起始简报、diag 插件自检、drift 交接漂移、tokens token 体检。',
     parameters: {
       type: 'object',
       additionalProperties: false,

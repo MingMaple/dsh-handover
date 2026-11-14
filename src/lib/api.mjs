@@ -162,7 +162,7 @@ export function createApi(env, info) {
         if (!st || !st.isDirectory()) return bad('bad-request', '目录不存在或不是目录：' + target);
         const reg = env.registry && env.registry();
         if (!reg || typeof reg.create !== 'function') {
-          return { ok: false, error: { code: 'no-registry', message: 'workspaceRegistry 不可用', details: { hint: '请手工把这个路径粘进 DSH 的新建工作区：' + target } }, http: 501 };
+          return { ok: false, error: { code: 'no-registry', message: 'workspaceRegistry 不可用', details: { hint: '请手工将该路径粘贴到 DSH 的新建工作区：' + target } }, http: 501 };
         }
         const title = String(p.title || '').trim() || target.split(/[\\/]/).filter(Boolean).pop() || target;
         try {

@@ -99,7 +99,7 @@ export function renderAbsoluteRefs(res, opts) {
   if (!res.totalHits) {
     out.push('  未发现写死的本机绝对路径');
   } else {
-    out.push('  发现 ' + res.hits.length + ' 个文件里有 ' + res.totalHits + ' 处绝对路径（**插件不改写这些内容**）：');
+    out.push('  发现 ' + res.hits.length + ' 个文件中有 ' + res.totalHits + ' 处绝对路径（插件不改写这些内容）：');
     for (const h of res.hits.slice(0, o.max || 10)) {
       out.push('  ' + h.path);
       for (const it of h.items) out.push('      L' + it.line + ' [' + it.kind + '] ' + it.sample);

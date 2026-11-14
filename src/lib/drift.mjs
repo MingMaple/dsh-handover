@@ -61,5 +61,5 @@ export function computeDrift(opts) {
 export function driftVerdict(res) {
   return '判定：' + res.fresh + ' 个已最新、' + res.need + ' 个需刷交接' +
     (res.unknown ? '、' + res.unknown + ' 个需人工确认' : '') +
-    (res.need || res.unknown ? '；先让需刷的会话写交接，再搬' : '；可以直接搬');
+    (res.need || res.unknown ? '；先令需刷交接的会话写交接，再迁移' : '；可直接迁移');
 }

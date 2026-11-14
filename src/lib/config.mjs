@@ -15,8 +15,19 @@ export const DEFAULTS = {
   rolesPath: '',           // 留空 = ~/.dsh/storages/dsh-handover.roles.json
   // 续跑提示：{n} {max} {handover} {role} 会被替换成真值；{handover} 是本会话自己的交接绝对路径。
   // 只在助手登记压缩时选 resume=continue（默认）才投递；resume=wait 表示已收尾，不唤醒。
-  resumePrompt: '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已被摘要替换。按顺序执行：一、用 ho_handover(action=read) 取回本会话交接（{handover}）；二、用 ho_docmap(action="plan", mode="read") 读行动计划（没有计划则跳过）；三、按计划与交接 §2 继续；若 §2 已无待办，向当前用户一句话收尾并停止。不要复述交接内容，不要重做已完成的事。完整流程：ho_charter(doc="runtime")。',
-  resumePromptUnknown: '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已被摘要替换。本会话是普通会话，不参与交接；如需继续，请由全局会话为其指定角色。',
+  resumePrompt: [
+    '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已由摘要替换。',
+    '按以下顺序执行：',
+    '一、调用 ho_handover(action=read)，取回本会话交接（{handover}）。',
+    '二、调用 ho_docmap(action="plan", mode="read")，读取行动计划；未建立计划时跳过本步。',
+    '三、按交接 §2 与行动计划继续执行；§2 无待办时，向当前用户作一句总结后收尾并停止。',
+    '约束：不复述交接内容；不重做已完成事项。',
+    '完整流程：ho_charter(doc="runtime")。',
+  ].join(String.fromCharCode(10)),
+  resumePromptUnknown: [
+    '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已由摘要替换。',
+    '本会话为普通会话，不参与交接；如需继续，由全局会话为其指定角色。',
+  ].join(String.fromCharCode(10)),
   compactTimeoutMs: 120000,
   compactAttempts: 3,
   waitIdleMs: 180000,      // 等会话空闲的上限（超过就放弃并回告）

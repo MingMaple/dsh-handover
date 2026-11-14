@@ -77,9 +77,9 @@ function assertNotReplyingInCollab(state, sender, target) {
     || (Array.isArray(g.members) && g.members.indexOf(String(target)) !== -1);
   if (!inGroup) return;
   throw new Error(
-    '协作注册期间，被交办方不能向交办者或同组成员发明文消息（target=' + target + '）：'
-    + '完成即结束回合，最终回复就是结果，协调者会用 peer(action="collect") 取回。'
-    + '若需要请示，把问题写进最终回复并结束回合；普通对话不受此限制。',
+    '协作注册期间，被交办方不得向交办者或同组成员发送明文消息（target=' + target + '）：'
+    + '完成即结束回合，最终回复即为结果，协调者用 peer(action="collect") 取回。'
+    + '如需请示，将问题写入最终回复并结束回合；普通对话不受此限制。',
   );
 }
 
@@ -93,7 +93,7 @@ export function collabMemberReason(sid) {
     const g = groupOf(state, sid);
     if (!g) return '';
     if (String(sid) === String(g.coordinator)) return '';
-    return '协作注册期间，被交办方不能发明文消息：完成即结束回合，最终回复由协调者用 peer(action="collect") 取回。';
+    return '协作注册期间，被交办方不得发送明文消息：完成即结束回合，最终回复由协调者用 peer(action="collect") 取回。';
   } catch (error) { void error; }
   return '';
 }
@@ -117,7 +117,7 @@ function collabText(args, exec) {
   state.groups.push({ coordinator: caller, members, at: Date.now() });
   saveCollect(state);
   return '已注册协作：协调者 ' + caller + '，成员 ' + members.join('、')
-    + '。协作期间成员不能向协调者或同组成员发明文消息；collect 取回全部结果后自动解除。';
+    + '。协作期间成员不得向协调者或同组成员发送明文消息；collect 取回全部结果后自动解除。';
 }
 
 /** 助手文本：读目标日志里 since 之后的助手回复，不定长截断。 */
@@ -161,7 +161,7 @@ async function waitText(args) {
     await sleep(2000);
   }
   return '等待超时（' + String(Math.round(timeout / 1000)) + ' 秒）：' + sid + ' 状态 ' + lastError
-    + '。可再用 peer(action="status") 看状态，稍后重试 wait。';
+    + '。可先用 peer(action="status") 查看状态，稍后重试 wait。';
 }
 
 /**
@@ -206,9 +206,9 @@ async function collectText(args, exec) {
     if (Date.now() >= deadline) break;
     await sleep(COLLECT_POLL_MS);
   }
-  const lines = ['本轮没有完成的会话（等待 ' + String(Math.round(timeout / 1000)) + ' 秒）：'];
+  const lines = ['本轮没有完成的会话（已等待 ' + String(Math.round(timeout / 1000)) + ' 秒）：'];
   for (const sid of targets) lines.push('  ' + sid + '  ' + (running.get(sid) || 'running'));
-  lines.push('稍后重试 collect 即可；已完成的会立即返回。');
+  lines.push('可稍后重试 collect；已完成的会立即返回。');
   return lines.join(NL);
 }
 
@@ -335,7 +335,7 @@ async function newText(env, args, info) {
   // 会话创建仅属全局；杂项可以把会话建在 Misc 下（落到本任务体系内）。
   const wantsWorkspace = typeof args.workspace === 'string' && args.workspace.trim() !== '';
   if (wantsWorkspace && args.cwd !== undefined) {
-    throw new Error('peer(action="new")：传 workspace 时不要再传 cwd —— session.create 只接受其中之一（cwd 会自动取该工作区的 path）');
+    throw new Error('peer(action="new")：传 workspace 时不得再传 cwd，session.create 只接受其中之一（cwd 会自动取该工作区的 path）');
   }
   const targetText = String(args.workspace || args.cwd || '').toLowerCase();
   const allowed = info.role === 'global' || (info.role === 'misc' && targetText.indexOf('misc') !== -1);
@@ -374,22 +374,22 @@ export function pmPeerTool(env) {
   return {
     name: PEER_NAME,
     description:
-      '平级会话：action=list 一览、status 详情、send 投消息（wait=true 时同一轮等回复）、wait 等单个回复、collect 收集多个会话中先完成的最终回复、collab 注册或结束协作、peek 读历史、rename 改标题、new 新建。list、peek、rename 与 new 仅全局会话可用。',
+      '平级会话：action=list 会话一览、status 单会话详情、send 投递消息（wait=true 时同轮等待回复）、wait 等待单个回复、collect 收集多个会话中先完成的最终回复、collab 注册或结束协作、peek 读取历史、rename 修改标题、new 新建会话。list、peek、rename 与 new 仅全局会话可用。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ACTIONS, description: '要做的动作' },
+        action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
         session_id: { type: 'string', description: 'status、send、wait、peek、rename：目标会话 id' },
-        sessions: { type: 'array', items: { type: 'string' }, description: 'collect：要等的会话 id 列表；留空则取已交办的目标' },
+        sessions: { type: 'array', items: { type: 'string' }, description: 'collect：要等待的会话 id 列表；留空则取已交办的目标' },
         message: { type: 'string', description: 'send：要投递的正文' },
-        mode: { type: 'string', enum: ['queue', 'steer'], description: 'send：queue（默认）或 steer' },
-        wait: { type: 'boolean', description: 'send：发完在同一轮等回复（一对一对话用）' },
-        collabMode: { type: 'string', enum: ['start', 'end'], description: 'collab：start 注册协作（默认）、end 结束并解除限制' },
-        timeout_ms: { type: 'number', description: 'wait、collect：一次等待上限（毫秒，最低 120000，按任务预估设置）' },
-        since_ms: { type: 'number', description: 'wait、collect：从哪个时刻之后找回复（默认取交办时刻）' },
-        limit: { type: 'number', description: 'list：最多多少行（默认 40）；peek：最近多少条（默认 8，上限 40）' },
+        mode: { type: 'string', enum: ['queue', 'steer'], description: 'send：queue（缺省）或 steer' },
+        wait: { type: 'boolean', description: 'send：投递后在同一轮等待回复（一对一对话用）' },
+        collabMode: { type: 'string', enum: ['start', 'end'], description: 'collab：start 注册协作（缺省）、end 结束并解除限制' },
+        timeout_ms: { type: 'number', description: 'wait、collect：单次等待上限（毫秒，最低 120000，按任务预估设置）' },
+        since_ms: { type: 'number', description: 'wait、collect：从哪一时刻之后查找回复（缺省取交办时刻）' },
+        limit: { type: 'number', description: 'list：最多多少行（缺省 40）；peek：最近多少条（缺省 8，上限 40）' },
         include_subagents: { type: 'boolean', description: 'list：同时列出子会话' },
         title: { type: 'string', description: 'new、rename：显示标题' },
         workspace: { type: 'string', description: 'new：工作区 id、标题或路径（与 cwd 互斥）' },

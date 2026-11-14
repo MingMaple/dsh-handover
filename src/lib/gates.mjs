@@ -87,7 +87,7 @@ export function syncCheck(ws) {
     builtin = true;
   } else {
     return {
-      error: '这个实例还没接入工作区：读不到 ' + charter,
+      error: '本实例尚未接入工作区：读不到 ' + charter,
       path: charter,
       ok: false,
       noWorkspace: true,
@@ -95,7 +95,7 @@ export function syncCheck(ws) {
   }
   const blk = canonicalBlock(text);
   if (!blk || !blk.body || blk.body.length === 0) {
-    return { error: '无法获取 §8.1.1.4 的正文（结构可能变了）', path: charter, ok: false };
+    return { error: '无法取得 §8.1.1.4 的正文（结构可能已变更）', path: charter, ok: false };
   }
   const rows = [];
   let bad = 0;
@@ -119,19 +119,19 @@ export function syncCheck(ws) {
     verdict: bad === 0
 
       ? "全部落位。"
-      : bad + ' 个库有缺 —— 向对应项目会话派发（由它自己写进本库 RULES.md，全局不得改项目库内文件）。',
+      : bad + ' 个库有缺，向对应项目会话派发（由该会话写进本库 RULES.md；全局不得修改项目库内文件）。',
   };
 }
 
 export function renderSyncCheck(res) {
   const out = [];
   if (res.error) { out.push(res.error + '：' + res.path); return out; }
-  out.push('通用约束条同步复核  库数 ' + res.total + '  正文 ' + res.bodyLines + ' 行  来源 §8.1.1.4' + (res.builtin ? '（工作区没有 Workspace_Charter.md，用插件内置口径）' : ''));
+  out.push('通用约束条同步复核  库数 ' + res.total + '  正文 ' + res.bodyLines + ' 行  来源 §8.1.1.4' + (res.builtin ? '（工作区无 Workspace_Charter.md，采用插件内置口径）' : ''));
   for (const r of res.libraries) {
     const flag = r.ok ? '通过' : '未通过';
     out.push('  ' + r.name + '  标题 ' + (r.titleOk ? '通过' : '缺') + '  正文 ' + (r.total - r.missing.length) + '/' + r.total +
       '  水位自查 ' + (r.waterOk ? '通过' : '缺') + '  ' + flag);
-    for (const m of r.missing.slice(0, 3)) out.push("        缺: " + m.slice(0, 70));
+    for (const m of r.missing.slice(0, 3)) out.push("        缺：" + m.slice(0, 70));
   }
   const ps = res.profiles || [];
   if (ps.length) {
@@ -157,7 +157,7 @@ export function renderDocmapCheck(res) {
   const out = [];
   out.push('体系注册  任务 ' + res.rows.length + ' 个');
   if (!res.rows.length) {
-    out.push('  还没有任何任务注册（空注册不注入正文，属正常）');
+    out.push('  尚无任何任务注册（空注册不注入正文，属正常）');
     out.push('判定：无需检查');
     return out;
   }
@@ -167,6 +167,6 @@ export function renderDocmapCheck(res) {
   }
   out.push('判定：' + (res.missing === 0
     ? '全部落位。'
-    : res.missing + ' 条路径失效 —— 由该类别在任会话用 ho_docmap(action="write") 更新。'));
+    : res.missing + ' 条路径失效，由该类别在任会话用 ho_docmap(action="write") 更新。'));
   return out;
 }

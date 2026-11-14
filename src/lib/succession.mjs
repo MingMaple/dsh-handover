@@ -100,7 +100,7 @@ function appendSuccessionBlock(file, lines) {
 export async function runSuccession(env, exec, opts) {
   const o = opts || {};
   const note = typeof o.note === 'string' ? o.note.trim() : '';
-  const reject = (reason) => '换任未执行，未做任何写入。' + NL + reason;
+  const reject = (reason) => '换任未执行，未写入任何内容。' + NL + reason;
 
   // 1. 自身角色与类别：只认已登记的角色。
   const info = env.roleOf(exec) || {};
@@ -120,8 +120,8 @@ export async function runSuccession(env, exec, opts) {
     return reject([
       cs.reason + '。',
       '授权方式（任选其一）：',
-      '  ① 在聊天框发送 /allow-succeed（最快，仅授权本会话）；',
-      '  ② 在设置页的 dsh-handover 中，点击「授权」里的「授权换任」。',
+      '  ① 在聊天框发送 /allow-succeed（仅授权本会话，最为快捷）；',
+      '  ② 在设置页的 dsh-handover 中，点击「授权」内的「授权换任」。',
       '授权有效期 5 分钟，用后失效。',
     ].join(NL));
   }
@@ -129,7 +129,7 @@ export async function runSuccession(env, exec, opts) {
   // 3. 交接结构检查（只判结构，不判质量）。
   const hp = env.handoverFor(exec) || {};
   const handoverFile = hp.path ? String(hp.path) : '';
-  if (!handoverFile) return reject('没有交接路径：' + (hp.reason || '本会话角色未确定'));
+  if (!handoverFile) return reject('没有可用的交接路径：' + (hp.reason || '本会话角色未确定'));
   const problems = auditHandover(handoverFile);
   if (problems.length) {
     return reject(['交接结构未通过：' + handoverFile]
@@ -145,10 +145,10 @@ export async function runSuccession(env, exec, opts) {
   const lin = store.lineages[key];
   // 只有本类别的在任者本人可换任：既防旧会话复活，也防同项目的旁支会话抢先。
   if (!lin || !lin.current || !lin.current.sessionId) {
-    return reject('本类别（' + key + '）在在任登记表里还没有现任记录：先由全局建会话并登记，再换任。');
+    return reject('本类别（' + key + '）在在任登记表中尚无在任记录：先由全局建立会话并登记，再换任。');
   }
   if (String(lin.current.sessionId) !== String(selfId)) {
-    return reject('本会话不是在任者：本类别现任为 ' + String(lin.current.name || '（未命名）')
+    return reject('本会话不是在任者：本类别在任为 ' + String(lin.current.name || '（未命名）')
       + '（' + String(lin.current.sessionId) + '），不得换任。');
   }
   {
@@ -156,17 +156,17 @@ export async function runSuccession(env, exec, opts) {
     const closed = history.find((h) => h && String(h.sessionId || '') === String(selfId) && h.to);
     if (closed) {
       const curName = lin.current && lin.current.name ? lin.current.name : '（空缺）';
-      return reject('本类别已为本会话记过一次换任（' + String(closed.to || '') + '，现任 ' + curName + '），旧会话不得再次换任。');
+      return reject('本类别已为本会话记过一次换任（' + String(closed.to || '') + '，在任 ' + curName + '），旧会话不得再次换任。');
     }
   }
 
-  // 4.1 水位未到线：本会话就是在任者且水位低于提醒线时，换任通常是多余的。
+  // 4.1 水位未到线：本会话就是在任者且水位低于提醒线时，换任通常多余。
   // 放在授权与交接校验之后、任何写入之前；取不到水位就跳过。
   if (o.force !== true) {
     let pct = null;
     try { pct = typeof env.selfPct === 'function' ? env.selfPct(selfId) : null; } catch { pct = null; }
     if (pct !== null && pct !== undefined && Number(pct) < watermark(env.cfg).remindValue) {
-      return reject('本会话水位 ' + Number(pct).toFixed(1) + '%，尚未到线，通常无需换任；确需换任请传 force=true。');
+      return reject('本会话水位 ' + Number(pct).toFixed(1) + '%，未到提醒线，通常无需换任；确需换任请传 force=true。');
     }
   }
 
@@ -195,7 +195,7 @@ export async function runSuccession(env, exec, opts) {
     const base = promptFor(env, { ws, kind, project, task, title: name, sessionId: '', globalSessionId: globalId, extra: '' });
     prompt = base + NL + NL + [
       '接任交接：' + handoverFile,
-      '先读这份交接再动手；读毕向当前用户报告当前停在哪一步、交接列有哪些待办，然后等待当前用户指派任务。',
+      '先读这份交接，再开始作业。读毕向当前用户报告：当前停在哪一步；交接列有哪些待办。随后等待当前用户指派任务。',
     ].join(NL);
   } catch (e) {
     return reject('启动提示词生成失败：' + msgOf(e));
@@ -215,7 +215,7 @@ export async function runSuccession(env, exec, opts) {
   } catch (e) {
     return [
       '会话已建 ' + sessionId + '（' + name + '），但登记在任失败：' + msgOf(e),
-      '启动提示词尚未投递；先修好登记表，再用 peer（action="send"）通知它。',
+      '启动提示词尚未投递。先修好登记表，再用 peer（action="send"）通知该会话。',
     ].join(NL);
   }
 
@@ -253,8 +253,8 @@ export async function runSuccession(env, exec, opts) {
   out.push('换任完成：' + name + '（' + sessionId + '）');
   out.push('在任登记：' + key + (reg && reg.registry && reg.registry.changed && reg.registry.changed.length
     ? '，Registry.md 已同步在役列' : ''));
-  out.push('启动提示词：' + (delivered ? '已投递' : '未送达：' + deliveryError + '。会话已建，可用 peer（action="send"）补投'));
+  out.push('启动提示词：' + (delivered ? '已投递' : '未送达：' + deliveryError + '。会话已建，可用 peer（action="send"）补投。'));
   out.push('交接登记：' + appendNote);
-  out.push('本会话到此停止，等待当前用户在新会话中派任务。');
+  out.push('本会话到此停止，等待当前用户在新会话中指派任务。');
   return out.join(NL);
 }

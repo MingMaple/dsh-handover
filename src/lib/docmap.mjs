@@ -78,7 +78,7 @@ export function renderDocmap(info, entries) {
   const lines = ['# 文档定位（' + label + '）', '', '| ' + COLUMNS.join(' | ') + ' |', '|' + COLUMNS.map(() => '---').join('|') + '|'];
   for (const e of entries) lines.push('| `' + e.path + '` | ' + e.about + ' | ' + (e.when || '') + ' |');
   lines.push('');
-  lines.push('只指路：是否读正文由你判断，不要无目的通读。');
+  lines.push('只指路：是否读正文由会话判断，不得无目的通读。');
   return lines.join(NL) + NL;
 }
 
@@ -89,7 +89,7 @@ export function renderDocmap(info, entries) {
 export function docmapBlock(ws, info) {
   const map = readDocmap(ws, info);
   if (!map.entries.length) return '';
-  const lines = ['文档定位（' + lineageLabel(info) + '；只指路，是否读正文由你判断，不要无目的通读）'];
+  const lines = ['文档定位（' + lineageLabel(info) + '；只指路，是否读正文由会话判断，不得无目的通读）'];
   for (const e of map.entries) {
     lines.push('- ' + e.path + (e.about ? ' —— ' + e.about : '') + (e.when ? '（' + e.when + '）' : ''));
   }
@@ -100,7 +100,7 @@ export function docmapBlock(ws, info) {
 export function pathProblem(ws, p) {
   const raw = String(p || '').trim();
   if (!raw) return '路径为空';
-  if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return '要写工作区相对路径，不写绝对路径';
+  if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return '须写工作区相对路径，不得写绝对路径';
   const norm = path.normalize(raw).replace(/\\/g, '/');
   if (norm === '..' || norm.startsWith('../')) return '不得指向工作区之外';
   const abs = path.join(String(ws || ''), norm);

@@ -16,7 +16,7 @@ export async function newSessionIn(env, opts) {
   }
   const workspaceId = String(o.workspaceId || '');
   const cwd = String(o.cwd || '');
-  if (!workspaceId && !cwd) return { error: '建会话要么给 workspaceId，要么给 cwd' };
+  if (!workspaceId && !cwd) return { error: '建会话须给出 workspaceId 或 cwd' };
   let created = null;
   try {
     created = workspaceId ? await controller.create({ workspaceId }) : await controller.create({ cwd });
@@ -24,7 +24,7 @@ export async function newSessionIn(env, opts) {
     return { error: '建会话失败：' + String(e && e.message ? e.message : e) };
   }
   const sessionId = String((created && created.sessionId) || '');
-  if (!sessionId) return { error: 'create 没有返回 sessionId' };
+  if (!sessionId) return { error: 'create 未返回 sessionId' };
   const title = String(o.title || '');
   if (title) {
     try { if (typeof controller.rename === 'function') await controller.rename({ sessionId, title }); } catch { /* 改名失败可事后用 peer（action="rename"） */ }

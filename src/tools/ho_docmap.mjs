@@ -71,7 +71,7 @@ export function pmDocmapTool(env) {
         action: { type: 'string', enum: ACTIONS, description: '缺省 read' },
         entries: {
           type: 'array',
-          description: 'write：整份替换。每项 { path: 工作区相对路径, about: 用途, when: 何时读, section: structure|files }；section 缺省 files',
+          description: 'write：整份替换。每项 { path: 工作区相对路径, about: 用途, when: 读取时机, section: structure|files }；section 缺省 files',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -79,14 +79,14 @@ export function pmDocmapTool(env) {
             properties: {
               path: { type: 'string', description: '工作区相对路径，必须存在' },
               about: { type: 'string', description: '用途，一句话' },
-              when: { type: 'string', description: '什么时候该读（可选）' },
+              when: { type: 'string', description: '读取时机（可选）' },
               section: { type: 'string', enum: ['structure', 'files'], description: '目录结构或规范文件（缺省 files）' },
             },
           },
         },
         mode: { type: 'string', enum: ['read', 'write', 'archive'], description: 'action=plan 时的动作，缺省 read' },
-        text: { type: 'string', description: 'action=plan、mode=write 时的计划正文' },
-        task: { type: 'string', description: '全局会话操作某个任务时给任务名（项目与杂项省略）' },
+        text: { type: 'string', description: 'action=plan、mode=write 时的行动计划正文' },
+        task: { type: 'string', description: '全局会话操作某个任务时给任务名（项目与杂项会话省略）' },
       },
     },
     output: textOutput(),
@@ -131,7 +131,7 @@ export function pmDocmapTool(env) {
       if (action === 'check') {
         const res = lin.kind === 'global' ? checkRegistries(ws) : checkRegistries(ws, info);
         const out = ['体系注册体检  ' + (lin.kind === 'global' ? '全部任务' : label)];
-        if (!res.rows.length) out.push('  还没有任何任务注册（空注册不注入正文，属正常）');
+        if (!res.rows.length) out.push('  尚无任何任务注册（空注册不注入正文，属正常）');
         for (const r of res.rows) {
           out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists ? r.entries + ' 条' : '未设置') + '  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
           for (const b of r.bad.slice(0, 5)) out.push('        失效：' + b.path + ' —— ' + b.problem);
@@ -149,7 +149,7 @@ export function pmDocmapTool(env) {
         if (!rel) throw new Error('没有可用的计划路径：角色未定');
         if (mode === 'read') {
           const p = readPlan(ws, target);
-          if (!p.exists) return { text: '计划未建立：' + rel + NL + '层二任务先写计划，模板见 _Control_Center/templates/Plan.skeleton.md。' };
+          if (!p.exists) return { text: '计划未建立：' + rel + NL + '层二任务应先写行动计划，模板见 _Control_Center/templates/Plan.skeleton.md。' };
           if (p.error) throw new Error(p.error);
           return { text: p.text };
         }
@@ -158,7 +158,7 @@ export function pmDocmapTool(env) {
           return { text: archived ? '旧计划已归档：' + archived : '没有可归档的旧计划：' + rel };
         }
         const text = String(args.text || '');
-        if (!text.trim()) throw new Error('mode=write 需要 text（计划正文）');
+        if (!text.trim()) throw new Error('mode=write 需要 text（行动计划正文）');
         const r = writePlan(ws, target, text);
         let pointed = false;
         try { pointed = pointRegistryToPlan(ws, target); } catch { pointed = false; }
