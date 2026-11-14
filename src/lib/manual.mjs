@@ -60,7 +60,7 @@ function rhythmLines(cfg) {
   const w = watermark(cfg);
   return [
     '四、上下文与压缩',
-    '- 水位 ' + w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，由插件在系统提示中后台注入，不生成用户消息、不独立成轮。',
+    '- 水位跨 ' + w.remind + ' 与 ' + w.remind2 + ' 时，由插件在本会话的工具结果末尾各追加一次提醒；不修改系统提示段、不生成用户消息、不独立成轮。',
     '- 判断标准：' + w.remind + ' 档为完成剩余流程后不超过 ' + Math.round((cfg && cfg.margin1 !== undefined ? cfg.margin1 : 0.45) * 100) + '%；'
       + w.remind2 + ' 档为不超过 ' + Math.round((cfg && cfg.margin2 !== undefined ? cfg.margin2 : 0.55) * 100) + '%。',
     '- ' + handoverRuleText(cfg) + '当前用户可随时要求换任。',

@@ -31,7 +31,7 @@ export function watermark(cfg) {
 /** 一句式交接规则（全局与项目提示段共用）。 */
 export function handoverRuleText(cfg) {
   const w = watermark(cfg);
-  return '水位 ' + w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，' + w.handover + ' 后可压缩，' + w.hard + ' 硬上限；至多压缩 '
+  return w.handover + ' 后可压缩，' + w.hard + ' 为硬上限；至多压缩 '
     + w.max + ' 次，第 ' + (w.max + 1) + ' 次换任。';
 }
 
