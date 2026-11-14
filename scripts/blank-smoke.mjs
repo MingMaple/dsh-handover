@@ -611,6 +611,8 @@ ok(secNorm.indexOf('_Control_Center/standards/') !== -1, '项目提示段应给�
 ok(secNorm.indexOf('把某某写成规范') !== -1 && secNorm.indexOf('本会话所在的工作区') !== -1 && secNorm.indexOf('写入通用规范库') !== -1 && secNorm.indexOf('报全局') !== -1, '项目提示段应写明未指明写本库、通用规范库报全局', secNorm.slice(-400));
 console.log('项目提示段 token 实测：' + budget.estimateTokens(projText) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
 ok(projText.indexOf('纯窗口是否可能超过 40%') !== -1, '项目段应携带 1.0 子智能体判定线（纯窗口 40%）');
+ok(secNorm.indexOf('与水位无关') !== -1, '项目段应写明写计划与水位无关', secNorm.slice(0, 400));
+ok(secNorm.indexOf('行动计划 PLAN.md（任务根）') !== -1 && secNorm.indexOf('行动计划 PLAN.md（任务根）') < secNorm.indexOf('纯窗口是否可能超过 40%'), '项目段应是先计划、后判纯窗口', secNorm.slice(0, 400));
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
 {
   const man = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);
@@ -646,6 +648,7 @@ ok(!gCalls.sections.some((s) => s.name === 'dsh-handover:reminder'), '全局同�
 // 常驻段只放每轮判定，一次性流程下沉手册；参考值按加权 token 计，只打印实测值。
 console.log('全局提示段 token 实测：' + budget.estimateTokens(globText) + '（参考值 ' + budget.TOKEN_BUDGET.globalTokens + '，不判失败）');
 ok(globText.indexOf('纯窗口是否可能超过 40%') !== -1, '全局段应携带 1.0 子智能体判定线（纯窗口 40%）');
+ok(globText.indexOf('与水位无关') !== -1 && globText.indexOf('行动计划 PLAN.md（任务根）') < globText.indexOf('纯窗口是否可能超过 40%'), '全局段应是先计划、后判纯窗口');
 ok(globText.indexOf('send_message 续用') === -1, '全局段不得携带子智能体续用细节');
 // 真机最坏情形：长路径 + 迁移提示行
 {
