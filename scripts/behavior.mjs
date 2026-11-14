@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 1.0 行为测试（新增七类）：
  * 1. 35%/50% 提醒只注入一次，且不生成用户消息；
  * 2. 行动计划文件与「先交接、再计划、后执行」的阅读顺序；
@@ -319,6 +319,9 @@ section('8 会话协作收集');
   const peer = pmPeerTool({ controller: () => ({}) });
   ok(peer.parameters.properties.action.enum.indexOf('collect') !== -1, 'peer 动作含 collect');
   ok(peer.parameters.properties.action.enum.indexOf('wait') !== -1, 'peer 动作含 wait');
+  const { pmSessionsTool } = await imp('tools/ho_sessions.mjs');
+  const sessTool = pmSessionsTool({ cfg });
+  ok(Object.prototype.hasOwnProperty.call(sessTool.parameters.properties, 'project'), 'ho_sessions 声明 project 参数（role=project 必需）');
   const src = fs.readFileSync(path.join(repo, 'src', 'tools', 'peer.mjs'), 'utf8');
   ok(src.indexOf('WAIT_MIN_MS = 120000') !== -1, '等待下限为 120000 毫秒');
   ok(src.indexOf('COLLECT_POLL_MS = 30000') !== -1, 'collect 每 30 秒检查一次');
@@ -374,6 +377,14 @@ section('8 会话协作收集');
     const after = await peerCtl.execute({ action: 'send', session_id: 'session-coordz', message: '收尾回报' }, { agent: { session: { header: { id: 'session-done2' } } } });
     ok(/accepted=true/.test(after.text), '协作结果取完后限制自动解除', after.text.slice(0, 40));
     ok(collabMemberReason('session-done2') === '', '协作结果取完后守卫也解除');
+    await peerCtl.execute({ action: 'collab', sessions: ['session-workerx'] }, coordExec);
+    ok(collabMemberReason('session-workerx').indexOf('被交办方') !== -1, '重新登记协作后守卫再生效');
+    const ended = await peerCtl.execute({ action: 'collab', collabMode: 'end' }, coordExec);
+    ok(/已结束协作注册/.test(ended.text), 'collabMode=end 不列 sessions 也能结束协作', ended.text.slice(0, 40));
+    ok(collabMemberReason('session-workerx') === '', '结束协作后守卫解除');
+    let releasedText = '';
+    try { releasedText = (await peerCtl.execute({ action: 'send', session_id: 'session-coordx', message: '回报' }, workerExec)).text; } catch (e) { releasedText = String(e && e.message ? e.message : e); }
+    ok(/accepted=true/.test(releasedText), '结束协作后成员可向协调者发明文消息', releasedText.slice(0, 40));
   }
 }
 

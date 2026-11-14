@@ -102,7 +102,9 @@ export function collabMemberReason(sid) {
 function collabText(args, exec) {
   const caller = callerOf(exec);
   const state = loadCollect();
-  if (args.mode === 'end') {
+  // 结束模式取 collabMode（schema 参数名）；兼容早期把 mode 当结束开关的调用。
+  const ending = args.collabMode === 'end' || args.mode === 'end';
+  if (ending) {
     const before = groupsOf(state).length;
     state.groups = groupsOf(state).filter((g) => String(g.coordinator) !== String(caller));
     saveCollect(state);

@@ -73,6 +73,7 @@ export function pmSessionsTool(env) {
         warn: { type: 'number', description: 'list 预警阈值（默认 ' + watermark(env.cfg).remind + '）' },
         session_id: { type: 'string', description: 'role/order/place/archive/unarchive 的目标会话' },
         role: { type: 'string', enum: ['global', 'project', 'misc', 'plain'], description: 'role 要设成的角色；new 时也据此登记接任者角色' },
+        project: { type: 'string', description: '项目名（role=project 必填；new 时为换任项目）' },
         migrate: { type: 'string', enum: ['auto', 'direct'], description: 'role 时项目与杂项互转的方式：auto（缺省）先快照再移动；direct 直接建新体系' },
         from_task: { type: 'string', description: 'new 时把某个全局任务整体独立为项目或杂项会话（沿用现有体系，不重建、不重新注册）' },
         task: { type: 'string', description: '任务名（task-init 必填；role=misc 必填；new 时为换任项目）' },
