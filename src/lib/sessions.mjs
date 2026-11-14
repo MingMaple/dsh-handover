@@ -27,6 +27,21 @@ export function isBusy(data) {
   return pick(data, 'record', 'rows', 'sessionStats', 'val', 'openStep') !== null;
 }
 
+/**
+ * 会话最近活动时刻（epoch 毫秒）：与 DSH 侧栏口径一致，取会话摘要里的最后提示时刻。
+ * 投影缓存文件的 mtime 会在批量迁移或重建缓存时被统一改写，不能当作活动时间。
+ * 读不到时退回文件 mtime。
+ */
+function activityMsOf(data, fallback) {
+  const lastPrompt = pick(data, 'record', 'rows', 'sessionListMetadata', 'val', 'lastPromptAt');
+  const lastMessage = pick(data, 'record', 'rows', 'timeContext', 'val', 'lastMessageTime');
+  let max = Number(fallback) || 0;
+  for (const v of [lastPrompt, lastMessage]) {
+    if (typeof v === 'number' && v > max) max = v;
+  }
+  return max;
+}
+
 function cwdOf(data) {
   return pick(data, 'record', 'identity', 'cwd');
 }
@@ -135,7 +150,7 @@ export function scanSessions(opts) {
       project: pj.project,
       pct: pressurePct(f.data),
       state: isBusy(f.data) ? 'running' : 'idle',
-      mtime: f.mtimeMs,
+      mtime: activityMsOf(f.data, f.mtimeMs),
     });
   }
   rows.sort((a, b) => {
