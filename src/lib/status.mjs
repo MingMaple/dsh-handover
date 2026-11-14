@@ -252,7 +252,8 @@ export function buildStatus(env, extra) {
     const sidKey = (sid) => (/^session-/.test(String(sid)) ? String(sid) : 'session-' + String(sid));
     const archived = (sid) => wsIndex.archived.has(sidKey(sid));
     const stillThere = (sid) => live.size === 0 || live.has(sidKey(sid));
-    // 真实路径：旧根现为链接，靠 realpath 才能把老会话归到当前工作区。
+    // 分组只认 DSH 工作区登记表的 sessionIds，不按 cwd 推断归属。
+    // 未登记的会话归入「未分组」，与 DSH 侧栏一致；cwd 推断会把未分组会话误并入同名工作区。
     const realCache = new Map();
     const realOf = (p) => {
       const key = String(p || '').toLowerCase();
@@ -262,29 +263,12 @@ export function buildStatus(env, extra) {
       realCache.set(key, v);
       return v;
     };
-    const wsReal = wsIndex.list.map((w) => ({
-      w,
-      real: String(realOf(w.path) || w.path || '').replace(/\\/g, '/').toLowerCase(),
-    }));
-    const wsOf = (sid, cwd) => {
-      const direct = wsIndex.bySession.get(sidKey(sid));
-      if (direct) return direct;
-      // 未登记到工作区的会话：按 cwd（先取真实路径）最长前缀归到工作区。
-      const c = String(realOf(cwd) || cwd || '').replace(/\\/g, '/').toLowerCase();
-      if (!c) return null;
-      let best = null;
-      for (const item of wsReal) {
-        const wp = item.real;
-        if (!wp) continue;
-        if ((c === wp || c.indexOf(wp + '/') === 0) && (!best || wp.length > best.real.length)) best = item;
-      }
-      return best ? best.w : null;
-    };
+    const wsOf = (sid) => wsIndex.bySession.get(sidKey(sid)) || null;
     const mapRow = (r) => {
       const meta = sessionMeta(r.sid);
       const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
       const d = dutyOf(r.sid);
-      const w = wsOf(r.sid, meta.cwd);
+      const w = wsOf(r.sid);
       // 目录已不存在的老会话（旧树里删掉的项目库等）不再罗列。
       const cwdOk = !meta.cwd || !!realOf(meta.cwd);
       return {
@@ -315,8 +299,9 @@ export function buildStatus(env, extra) {
     };
     const all = wide.rows
       .filter((r) => r.kind === '平级' && !archived(r.sid) && stillThere(r.sid))
-      .map(mapRow)
-      .filter((r) => r.wsKey || r.cwdOk);
+      .map(mapRow);
+    // 不按 cwd 是否存在过滤：DSH 的工作区与会话列表只认会话本身与归档表。
+    // cwd 已删除的旧会话仍可能被打开或恢复，误删会把 DSH 中存在的会话藏掉。
     // 在任集合：全局、各项目、各杂项任务的现任各一行；普通会话不在登记表里，因此不出现。
     const rows = all.filter((r) => r.onduty).slice(0, 60);
     // 通知：每条登记的在任会话，若本轮仍活跃；已交出的会话即使更活跃也不通知。

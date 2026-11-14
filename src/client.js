@@ -791,7 +791,7 @@ window.__ModuleLoader__.load({
         if (rows.length) roleGroups.push({ key: w.key, title: w.title || w.path || '工作区', path: w.path || '', rows });
       }
       const restRows = byTime.filter((r) => !claimed[r.wsKey]);
-      if (restRows.length) roleGroups.push({ key: "", title: "未归属工作区", path: "", rows: restRows });
+      if (restRows.length) roleGroups.push({ key: "", title: "未分组", path: "", rows: restRows });
       const roleRow = (r, i) => {
         const draft = (roleSel && roleSel[r.sid]) || {};
         const role = draft.role !== undefined ? draft.role : (r.role || "plain");
