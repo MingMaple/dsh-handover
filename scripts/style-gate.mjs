@@ -10,7 +10,7 @@
  * src/**\/*.mjs、src/client.js。代码文件只看注释与字符串字面量；文档只看正文，
  * 不扫描 fenced code block 与行内代码段。
  *
- * 唯一例外 E-01：对外仓库 README.md 第 9 行的指定整行豁免 W-01；不得扩充。
+ * 唯一例外 E-01：对外仓库 README.md「为什么需要」一节的指定正文豁免 W-01；按节绑定，由 check-docs 逐字比对；不得扩充。
  *
  * 用法：node scripts/style-gate.mjs
  * 只读，不写任何文件；只用 node:fs 与 node:path，无第三方依赖。
@@ -22,7 +22,7 @@ import path from 'node:path';
 
 /* ============================== 常量表 ============================== */
 
-/** 唯一例外 E-01：对外 README 的指定句（原第 9 行；整句不计 W-01）；不得扩充。 */
+/** 唯一例外 E-01：对外 README「为什么需要」一节的指定句（用户指定保留；整句不计 W-01）；不得扩充。 */
 const E01_TEXT = '本插件一定能很好地帮助你。来试试吧；不满意，随时关闭插件并删除即可。';
 
 /** 规范正文与论文属规范性文本，条款本身会引用被禁词，整目录排除。 */
@@ -397,7 +397,7 @@ function wordHits(text, words) {
 
 /** 逐段判定阻断级条款（W-01、W-02、W-04、W-05、W-07、W-08）。 */
 function scanBlockRules(rel, seg, add) {
-  // E-01：仅 README.md 中与指定句逐字一致的那一句豁免 W-01（原第 9 行；行位置可随改版移动）。
+  // E-01：README.md「为什么需要」一节的指定句豁免 W-01（按节绑定，不按行号；该节正文由 check-docs 逐字比对）。
   const e01 = rel === 'README.md' && String(seg.raw || '').indexOf(E01_TEXT) !== -1;
   if (!e01) {
     for (const h of wordHits(seg.text, W01_WORDS)) {

@@ -22,6 +22,13 @@ const problems = [];
 const readmeLines = fs.readFileSync(readme, 'utf8').split(/\r?\n/).length;
 if (readmeLines > 200) problems.push('README 应不超过 200 行（当前 ' + readmeLines + ' 行）');
 
+// 1.1 README「为什么需要」一节为用户 2026-11-13 与 2026-11-15 两次指定的正文（例外 E-01）：逐字比对，改动即失败
+const WHY_PINNED = '单个会话的上下文越用越多，用到一定程度之后，出错的可能也会随之上升；可若这时压缩上下文，或者写好交接换一个会话，又会丢掉已经积累的信息。面对这样的两难，有没有更好的取舍？\n\n本插件一定能很好地帮助你。来试试吧；不满意，随时关闭插件并删除即可。';
+{
+  const m = fs.readFileSync(readme, 'utf8').match(/## 为什么需要\s*\n+([\s\S]*?)\n+## /);
+  const got = m ? m[1].trim() : '';
+  if (got !== WHY_PINNED) problems.push('README「为什么需要」一节为用户指定正文（E-01），不得改写');
+}
 // 2. 旧数与旧术语
 const FORBIDDEN = ['21 个工具', '27 个工具', '未分类', '追加系统提示词', '4,028', '4.6 KB', '每库 24 行', 'CHANGELOG'];
 // 审阅语境与内部用语：这些词只应出现在桌面审阅材料里，不能进对外文档与版本说明。
