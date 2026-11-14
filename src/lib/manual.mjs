@@ -29,7 +29,7 @@ const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/
 const DELEGATION_POINTER = '暂任与协作：规范在任务库 rules/Delegation_Rules.md，协作模板在 templates/Prompt_Templates.md。';
 
 /** 协作收结果的口径：被派方不发消息，协调方按完成顺序收集最终回复。 */
-const COLLAB_LINE = '协作收结果：派任务用 peer(action="send")；被派方完成即结束回合，不发确认或进度消息。协调方用 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复；timeout_ms 按任务预估设置，最低 120000。';
+const COLLAB_LINE = '协作收结果：进入协作前先 peer(action="collab", sessions=[…]) 注册；协作期间被交办方不能向交办者或同组成员发明文消息，工具端会拒绝，DSH 自带的 send_message 也由插件守卫拦住；普通对话不需要注册。协调方用 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复，timeout_ms 按任务预估设置、最低 120000；collect 取回全部结果后限制自动解除。';
 
 /** 写交接的固定流程（三档角色共用）：只写这一行，细则在规范与模板里。 */
 const HANDOVER_FLOW = '写交接按固定流程：先读上一份交接，再归档上一份，再读模板 _Control_Center/templates/Handover.md，最后 ho_handover(action="new") 新建空白写入；不得在旧文件上续写。';

@@ -164,9 +164,20 @@ function moveOfficeLineage(ws, prev, next) {
   const store = loadOffice(ws);
   const oldKey = lineageKeyOf(prev.kind || prev.role, prev.project, prev.task);
   const newKey = lineageKeyOf(next.kind || next.role, next.project, next.task);
-  if (!oldKey || !newKey || oldKey === newKey) return { moved: false };
+  if (!oldKey || !newKey) return { moved: false };
   const lin = store.lineages[oldKey];
   if (!lin) return { moved: false };
+  if (oldKey === newKey) {
+    // 同名互转：类别键不变，但类别、项目与任务字段要跟着改。
+    const copy = JSON.parse(JSON.stringify(lin));
+    copy.kind = next.kind || next.role;
+    copy.project = String(next.project || '');
+    copy.task = String(next.task || '');
+    store.lineages[oldKey] = copy;
+    backupOnce(path.join(String(ws || ''), '_Control_Center', 'records', 'Office.json'));
+    saveOffice(ws, store);
+    return { moved: false, updated: true, oldKey, newKey };
+  }
   if (store.lineages[newKey]) {
     throw new Error('名册里已有「' + newKey + '」：先在设置页清理或在职会话处理，再转换身份');
   }

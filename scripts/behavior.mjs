@@ -46,14 +46,14 @@ const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
 const { resolveConfig } = await imp('lib/config.mjs');
 const cfg = resolveConfig({ workspaceRoot: WS });
 const { reminderTextFor, readReminderState } = await imp('lib/reminder.mjs');
-const { planRelPath, readPlan, readRegistry } = await imp('lib/system.mjs');
+const { planRelPath, readPlan, readRegistry, syncGlobalRefs } = await imp('lib/system.mjs');
 const { pmDocmapTool } = await imp('tools/ho_docmap.mjs');
-const { registerHolder, loadOffice } = await imp('lib/office.mjs');
+const { registerHolder, loadOffice, syncHolderKind, removeHolder } = await imp('lib/office.mjs');
 const { writeRole } = await imp('lib/role.mjs');
 const { migrateIdentity } = await imp('lib/identity.mjs');
 const { writeHandover } = await imp('lib/handover-io.mjs');
 const { scopedManual } = await imp('lib/manual.mjs');
-const { pmPeerTool } = await imp('tools/peer.mjs');
+const { pmPeerTool, collabMemberReason } = await imp('tools/peer.mjs');
 
 function w(rel, text) {
   const p = path.join(WS, rel.split('/').join(path.sep));
@@ -191,6 +191,17 @@ section('4 身份互转');
   ok(!!loadOffice(WS).lineages['NewTask'], '在任登记已改到新类别');
 }
 {
+  registerHolder(WS, { kind: 'misc', task: 'SameX', name: 'SameX1', sessionId: 'session-samex1' });
+  registerHolder(WS, { kind: 'project', project: 'SameX', name: 'SameX2', sessionId: 'session-samex2' });
+  ok(loadOffice(WS).lineages.SameX.kind === 'project', '同名类别互转后名册类别跟着改');
+  removeHolder(WS, { kind: 'project', project: 'SameX', sessionId: 'session-samex2' });
+  ok(!loadOffice(WS).lineages.SameX, '注销登记会移除整条世系');
+  w('_Project_Meta/Skip/System.md', '# S\n');
+  w('_Project_Meta/Skip/.deregistered.json', '{}');
+  const skipReg = syncGlobalRefs(WS);
+  ok(!skipReg.rows.some((r) => r.task === 'Skip'), '注销标记后残留体系不进入总注册');
+}
+{
   w('_Misc/tasks/OldT/README.md', '# OldT\n');
   w('_Misc/tasks/OldT/Handover.md', '# 交接\n\n## 1 正在做的事\n内容\n\n## 2 下一步\n- 继续\n');
   registerHolder(WS, { kind: 'misc', task: 'OldT', name: 'OldT1', sessionId: 'session-id2' });
@@ -319,6 +330,26 @@ section('8 会话协作收集');
     fakeSession('session-done3', false, [ask(at), say(at + 3000, '第三个结果')]);
     const multi = await peer.execute({ action: 'collect', sessions: ['session-done2', 'session-done3'], timeout_ms: 120000, since_ms: 1 }, exec);
     ok(/已完成 2 个/.test(multi.text), '同时完成多个就一起返回', multi.text.slice(0, 40));
+    const peerCtl = pmPeerTool({ controller: () => ({ prompt: async () => ({ accepted: true }) }) });
+    const coordExec = { agent: { session: { header: { id: 'session-coordx' } } } };
+    const workerExec = { agent: { session: { header: { id: 'session-workerx' } } } };
+    await peerCtl.execute({ action: 'collab', sessions: ['session-workerx'] }, coordExec);
+    ok(collabMemberReason('session-workerx').indexOf('被交办方') !== -1, '协作成员被工具守卫识别');
+    ok(collabMemberReason('session-coordx') === '', '协调者不受协作守卫限制');
+    let blocked2 = '';
+    try { await peerCtl.execute({ action: 'send', session_id: 'session-coordx', message: '回报' }, workerExec); } catch (e) { blocked2 = String(e && e.message ? e.message : e); }
+    ok(/协作注册期间/.test(blocked2) && /被交办方/.test(blocked2), '协作注册期间被交办方不能向交办者发明文消息', blocked2.slice(0, 60));
+    const workerY = { agent: { session: { header: { id: 'session-workery' } } } };
+    await peerCtl.execute({ action: 'send', session_id: 'session-coordy', message: '问一句' }, { agent: { session: { header: { id: 'session-coordy' } } } });
+    const normalReply = await peerCtl.execute({ action: 'send', session_id: 'session-coordy', message: '答一句' }, workerY);
+    ok(/accepted=true/.test(normalReply.text), '普通对话仍允许明文回复', normalReply.text.slice(0, 40));
+    const coordZ = { agent: { session: { header: { id: 'session-coordz' } } } };
+    await peerCtl.execute({ action: 'collab', sessions: ['session-done2', 'session-done3'] }, coordZ);
+    const drained = await peerCtl.execute({ action: 'collect', sessions: ['session-done2', 'session-done3'], timeout_ms: 120000, since_ms: 1 }, coordZ);
+    ok(/已完成 2 个/.test(drained.text), '协作注册的成员结果一次取回', drained.text.slice(0, 40));
+    const after = await peerCtl.execute({ action: 'send', session_id: 'session-coordz', message: '收尾回报' }, { agent: { session: { header: { id: 'session-done2' } } } });
+    ok(/accepted=true/.test(after.text), '协作结果取完后限制自动解除', after.text.slice(0, 40));
+    ok(collabMemberReason('session-done2') === '', '协作结果取完后守卫也解除');
   }
 }
 

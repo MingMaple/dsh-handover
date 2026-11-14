@@ -21,7 +21,7 @@ import {
   projectName, pick, peerMarker, resolveWorkspaceId, findSessionLog, decodeSessionLog, conversation,
 } from '../lib/peer.mjs';
 
-export const ACTIONS = ['list', 'status', 'send', 'wait', 'collect', 'peek', 'rename', 'new'];
+export const ACTIONS = ['list', 'status', 'send', 'wait', 'collect', 'collab', 'peek', 'rename', 'new'];
 const GLOBAL_ONLY = ['list', 'peek', 'rename'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,9 +36,12 @@ function collectFile() {
 function loadCollect() {
   try {
     const data = JSON.parse(fs.readFileSync(collectFile(), 'utf8'));
-    if (data && typeof data === 'object' && data.cursors) return data;
+    if (data && typeof data === 'object' && data.cursors) {
+      if (!Array.isArray(data.groups)) data.groups = [];
+      return data;
+    }
   } catch (error) { void error; }
-  return { version: 1, cursors: {} };
+  return { version: 1, cursors: {}, groups: [] };
 }
 function saveCollect(data) {
   const file = collectFile();
@@ -57,6 +60,62 @@ function sinceOf(data, caller, target) {
 function setSince(data, caller, target, since) {
   if (!data.cursors[caller]) data.cursors[caller] = {};
   data.cursors[caller][target] = { since };
+}
+
+/** 协作注册：被交办方在协作期间不得向交办者或同组成员发明文消息；收集完自动解除。 */
+function groupsOf(state) {
+  return Array.isArray(state.groups) ? state.groups : [];
+}
+function groupOf(state, sid) {
+  return groupsOf(state).find((g) => String(sid) === String(g.coordinator) || (Array.isArray(g.members) && g.members.indexOf(String(sid)) !== -1)) || null;
+}
+function assertNotReplyingInCollab(state, sender, target) {
+  const g = groupOf(state, sender);
+  if (!g) return;
+  if (String(sender) === String(g.coordinator)) return;
+  const inGroup = String(target) === String(g.coordinator)
+    || (Array.isArray(g.members) && g.members.indexOf(String(target)) !== -1);
+  if (!inGroup) return;
+  throw new Error(
+    '协作注册期间，被交办方不能向交办者或同组成员发明文消息（target=' + target + '）：'
+    + '完成即结束回合，最终回复就是结果，协调者会用 peer(action="collect") 取回。'
+    + '若需要请示，把问题写进最终回复并结束回合；普通对话不受此限制。',
+  );
+}
+
+/**
+ * 供宿主工具守卫使用：某会话是协作成员（非协调者）时返回拒绝理由，否则空串。
+ * 用于拦住 DSH 自带的 send_message 等明文投递通道。
+ */
+export function collabMemberReason(sid) {
+  try {
+    const state = loadCollect();
+    const g = groupOf(state, sid);
+    if (!g) return '';
+    if (String(sid) === String(g.coordinator)) return '';
+    return '协作注册期间，被交办方不能发明文消息：完成即结束回合，最终回复由协调者用 peer(action="collect") 取回。';
+  } catch (error) { void error; }
+  return '';
+}
+
+/** 协作注册：开始或结束一组协作；结束即解除明文交流限制。 */
+function collabText(args, exec) {
+  const caller = callerOf(exec);
+  const state = loadCollect();
+  if (args.mode === 'end') {
+    const before = groupsOf(state).length;
+    state.groups = groupsOf(state).filter((g) => String(g.coordinator) !== String(caller));
+    saveCollect(state);
+    return '已结束协作注册（' + String(before - state.groups.length) + ' 组），明文交流限制已解除。';
+  }
+  const members = (Array.isArray(args.sessions) ? args.sessions : [])
+    .map((x) => String(x || '').trim()).filter(Boolean).filter((s) => s !== caller);
+  if (!members.length) throw new Error('peer(action="collab")：sessions 至少列一个协作会话');
+  state.groups = groupsOf(state).filter((g) => String(g.coordinator) !== String(caller));
+  state.groups.push({ coordinator: caller, members, at: Date.now() });
+  saveCollect(state);
+  return '已注册协作：协调者 ' + caller + '，成员 ' + members.join('、')
+    + '。协作期间成员不能向协调者或同组成员发明文消息；collect 取回全部结果后自动解除。';
 }
 
 /** 助手文本：读目标日志里 since 之后的助手回复，不定长截断。 */
@@ -131,6 +190,12 @@ async function collectText(args, exec) {
     }
     if (done.length) {
       for (const one of done) setSince(state, caller, one.sid, one.at);
+      const groups = groupsOf(state);
+      const g = groups.find((x) => String(x.coordinator) === caller);
+      if (g) {
+        g.members = (Array.isArray(g.members) ? g.members : []).filter((m) => !done.some((d) => d.sid === m));
+        if (!g.members.length) state.groups = groups.filter((x) => x !== g);
+      }
       saveCollect(state);
       const out = ['已完成 ' + String(done.length) + ' 个：'];
       for (const one of done) out.push('[' + one.sid + ']' + NL + one.text);
@@ -209,6 +274,8 @@ async function sendText(env, args, exec, info) {
   const sender = exec?.agent?.session?.header?.id ?? 'unknown';
   const marker = peerMarker(sender);
   const body = message.startsWith(marker) ? message : marker + NL + message;
+  const before = loadCollect();
+  assertNotReplyingInCollab(before, sender, target);
   const since = Date.now();
   const receipt = await controller.prompt(
     { requestId: randomUUID(), sessionId: target, mode, content: [{ type: 'text', text: body }] },
@@ -305,7 +372,7 @@ export function pmPeerTool(env) {
   return {
     name: PEER_NAME,
     description:
-      '平级会话：action=list 一览、status 详情、send 投消息（wait=true 时同一轮等回复）、wait 等单个回复、collect 收集多个会话中先完成的最终回复、peek 读历史、rename 改标题、new 新建。list、peek、rename 与 new 仅全局会话可用。',
+      '平级会话：action=list 一览、status 详情、send 投消息（wait=true 时同一轮等回复）、wait 等单个回复、collect 收集多个会话中先完成的最终回复、collab 注册或结束协作、peek 读历史、rename 改标题、new 新建。list、peek、rename 与 new 仅全局会话可用。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -317,6 +384,7 @@ export function pmPeerTool(env) {
         message: { type: 'string', description: 'send：要投递的正文' },
         mode: { type: 'string', enum: ['queue', 'steer'], description: 'send：queue（默认）或 steer' },
         wait: { type: 'boolean', description: 'send：发完在同一轮等回复（一对一对话用）' },
+        collabMode: { type: 'string', enum: ['start', 'end'], description: 'collab：start 注册协作（默认）、end 结束并解除限制' },
         timeout_ms: { type: 'number', description: 'wait、collect：一次等待上限（毫秒，最低 120000，按任务预估设置）' },
         since_ms: { type: 'number', description: 'wait、collect：从哪个时刻之后找回复（默认取交办时刻）' },
         limit: { type: 'number', description: 'list：最多多少行（默认 40）；peek：最近多少条（默认 8，上限 40）' },
@@ -337,6 +405,7 @@ export function pmPeerTool(env) {
       if (action === 'send') return { text: await sendText(env, args, exec, info) };
       if (action === 'wait') return { text: await waitText(args) };
       if (action === 'collect') return { text: await collectText(args, exec) };
+      if (action === 'collab') return { text: collabText(args, exec) };
       if (action === 'peek') return { text: await peekText(args) };
       if (action === 'rename') return { text: await renameText(env, args) };
       return { text: await newText(env, args, info) };

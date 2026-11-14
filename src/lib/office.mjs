@@ -165,6 +165,11 @@ export function registerHolder(ws, opts) {
     kind: o.kind, project: String(o.project || ''), task: String(o.task || ''),
     workspace: String(o.workspace || ''), current: null, history: [],
   });
+  // 同名类别互转（杂项与项目同名）必须改类别字段，否则名册一直停在旧类别。
+  lin.kind = o.kind;
+  lin.project = String(o.project || '');
+  lin.task = String(o.task || '');
+  if (o.workspace) lin.workspace = String(o.workspace);
   if (!Array.isArray(lin.history)) lin.history = [];
   const previous = lin.current && lin.current.name ? { ...lin.current } : null;
   if (previous) {
@@ -183,6 +188,41 @@ export function registerHolder(ws, opts) {
   let registry = { changed: [], error: '' };
   try { registry = syncRegistry(ws, store); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
   return { key, previous, current: lin.current, registry };
+}
+
+/**
+ * 只同步类别字段：现任是同一会话时更新 kind、project、task，不写历史。
+ * 返回是否更新。
+ */
+export function syncHolderKind(ws, opts) {
+  const o = opts || {};
+  const key = lineageKeyOf(o.kind, o.project, o.task);
+  if (!key) return false;
+  const store = loadOffice(ws);
+  const lin = store.lineages[key];
+  if (!lin || !lin.current || String(lin.current.sessionId) !== String(o.sessionId || '')) return false;
+  lin.kind = o.kind;
+  lin.project = String(o.project || '');
+  lin.task = String(o.task || '');
+  saveOffice(ws, store);
+  return true;
+}
+
+/**
+ * 注销登记：现任是该会话时删除整条世系（历史一并移除，文件体系不动）。
+ * 返回是否删除。
+ */
+export function removeHolder(ws, opts) {
+  const o = opts || {};
+  const key = lineageKeyOf(o.kind, o.project, o.task);
+  if (!key) return false;
+  const store = loadOffice(ws);
+  const lin = store.lineages[key];
+  if (!lin) return false;
+  if (o.sessionId && lin.current && String(lin.current.sessionId) !== String(o.sessionId)) return false;
+  delete store.lineages[key];
+  saveOffice(ws, store);
+  return true;
 }
 
 /**

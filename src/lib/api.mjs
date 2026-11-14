@@ -81,7 +81,11 @@ async function createGlobalSession(env, rootPath, title) {
     const reg = env.registry && env.registry();
     const list = reg && typeof reg.list === 'function' ? (reg.list() || []) : [];
     const norm = (s) => pathKey(String(s || ''));
-    const hit = list.find((w) => w && norm(w.path) === norm(rootPath));
+    const same = (a, b) => {
+      if (norm(a) === norm(b)) return true;
+      try { return norm(fs.realpathSync(String(a))) === norm(fs.realpathSync(String(b))); } catch { return false; }
+    };
+    const hit = list.find((w) => w && same(w.path, rootPath));
     if (hit) workspaceId = String(hit.id || '');
   } catch { workspaceId = ''; }
   const made = await newSessionIn(env, {

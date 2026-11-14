@@ -4,6 +4,7 @@
  */
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import { NL, readUtf8, isDir, isFile } from './text.mjs';
 import { handoverPathFor, assertProjectName, assertTaskName } from './role.mjs';
 import { readHandover } from './handover-io.mjs';
@@ -22,17 +23,22 @@ function normPath(p) {
   return pathKey(String(p || ''));
 }
 
+/** 路径比较：先比写法；再取 realpath 比，兼容旧的 junction 路径与真实路径。 */
+function sameLoosePath(a, b) {
+  if (normPath(a) === normPath(b)) return true;
+  try { return normPath(fs.realpathSync(String(a))) === normPath(fs.realpathSync(String(b))); } catch { return false; }
+}
+
 /** 在 ~/.dsh/storages/workspace.json 里按 id、标题、路径找 workspaceId。 */
 function findWorkspaceId(key) {
   const file = path.join(os.homedir(), '.dsh', 'storages', 'workspace.json');
   const data = JSON.parse(readUtf8(file));
   const tables = (data && data.tables && data.tables.workspaces) || {};
-  const want = normPath(key);
   for (const id of Object.keys(tables)) {
     const w = tables[id] || {};
     if (id === key) return id;
     if (w.title === key) return id;
-    if (normPath(w.path) === want) return id;
+    if (sameLoosePath(w.path, key)) return id;
   }
   return null;
 }
@@ -104,8 +110,8 @@ export function workspaceIdOfPath(env, p) {
   const want = normPath(p);
   if (!want || want === '-') return '';
   const hit = listWorkspaces(env).find((r) => {
-    const rp = normPath(String(r.path || ''));
-    return rp && rp !== '-' && rp === want;
+    const rp = String(r.path || '');
+    return rp && rp !== '-' && sameLoosePath(rp, p);
   });
   return hit ? String(hit.id || '') : '';
 }

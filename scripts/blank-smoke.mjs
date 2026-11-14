@@ -26,7 +26,23 @@ process.env.HOME = BLANK;
 const { apply, schedDepsFor } = await import(pathToFileURL(path.join(dist, 'index.mjs')).href);
 const reg = { tools: [], sections: [], logs: [], listeners: {} };
 const ctx = {
-  tools: { register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); }, restrict() { }, resolve: () => ({}), guard: (fn) => { reg.guardFn = fn; } },
+  tools: {
+    register: (t, o) => { reg.tools.push(t); (reg.toolOpts = reg.toolOpts || []).push(o); },
+    restrict() { },
+    resolve: () => ({}),
+    // 宿主允许注册多个守卫：按注册顺序依次判，任意一个拒绝即拒绝。
+    guard: (fn) => {
+      reg.guardFns = (reg.guardFns || []).concat([fn]);
+      reg.guardFn = (exec) => {
+        for (const g of reg.guardFns) {
+          let r;
+          try { r = g(exec); } catch (e) { return String(e && e.message ? e.message : e); }
+          if (r) return r;
+        }
+        return undefined;
+      };
+    },
+  },
   systemPrompt: { section: (s) => { reg.sections.push(s); return () => { reg.disposed = (reg.disposed || 0) + 1; }; } },
   sessionController: {
     create: async () => ({ sessionId: 'session-deploy-test' }),

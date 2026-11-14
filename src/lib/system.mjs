@@ -186,7 +186,9 @@ export function syncGlobalRefs(ws) {
     let names = [];
     try { names = fs.readdirSync(base); } catch { return; }
     for (const name of names) {
-      const file = path.join(base, name, REGISTRY_NAME);
+      const dir = path.join(base, name);
+      if (fs.existsSync(path.join(dir, '.deregistered.json'))) continue;
+      const file = path.join(dir, REGISTRY_NAME);
       if (!isFile(file)) continue;
       rows.push({ task: nameOf(name), kind: KIND_LABEL[kind] || kind, path: path.join(base, name, REGISTRY_NAME), mtime: 0 });
     }

@@ -24,7 +24,7 @@ import { pmProfileTool } from './tools/ho_profile.mjs';
 import { pmOfficeTool } from './tools/ho_office.mjs';
 import { pmSucceedTool } from './tools/ho_succeed.mjs';
 import { pmDocmapTool } from './tools/ho_docmap.mjs';
-import { pmPeerTool } from './tools/peer.mjs';
+import { pmPeerTool, collabMemberReason } from './tools/peer.mjs';
 import { resolveRegistry } from './lib/registry.mjs';
 import { registerStatusRoute } from './lib/webroute.mjs';
 import { createApi, statusSnapshot } from './lib/api.mjs';
@@ -43,8 +43,8 @@ import { stampTz } from './lib/brief.mjs';
 import { grantConsent, activeConsentsFor } from './lib/consent.mjs';
 import { systemBlock, registrySignature } from './lib/system.mjs';
 import { reminderTextFor } from './lib/reminder.mjs';
-import { migrateIdentity } from './lib/identity.mjs';
-import { loadOffice, lineageKeyOf } from './lib/office.mjs';
+import { migrateIdentity, removeRegistryProject } from './lib/identity.mjs';
+import { loadOffice, lineageKeyOf, syncHolderKind, removeHolder, registerHolder } from './lib/office.mjs';
 import { moveStatus } from './lib/mover.mjs';
 
 export const name = 'dsh-handover';
@@ -454,6 +454,35 @@ export function apply(ctx, config) {
     }
     try { writeRole(cfg, sid, { role, project, task, source: 'user' }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
+    // 注册同步：项目、杂项、全局更新名册类别；普通会话只清注册，文件与目录原地保留。
+    try {
+      const oldProjectDir = prevRole === 'project' && before.project ? path.join(ws, '_Project_Meta', String(before.project)) : '';
+      const oldTaskDir = prevRole === 'misc' && before.task ? path.join(ws, '_Misc', 'tasks', String(before.task)) : '';
+      const markerOf = (dir) => path.join(dir, '.deregistered.json');
+      if (role === 'project') {
+        fs.mkdirSync(path.join(ws, '_Project_Meta', project), { recursive: true });
+        try { fs.rmSync(markerOf(path.join(ws, '_Project_Meta', project)), { force: true }); } catch { /* ignore */ }
+      }
+      if (role === 'misc') {
+        fs.mkdirSync(path.join(ws, '_Misc', 'tasks', task), { recursive: true });
+        try { fs.rmSync(markerOf(path.join(ws, '_Misc', 'tasks', task)), { force: true }); } catch { /* ignore */ }
+      }
+      if (role === 'plain') {
+        for (const dir of [oldProjectDir, oldTaskDir]) {
+          if (!dir || !fs.existsSync(dir)) continue;
+          try { fs.writeFileSync(markerOf(dir), JSON.stringify({ at: new Date().toISOString(), sessionId: sid }), 'utf8'); } catch { /* ignore */ }
+        }
+        if (prevRole === 'project' && before.project) { try { removeRegistryProject(ws, String(before.project)); } catch { /* ignore */ } }
+        if (prevRole === 'project' || prevRole === 'misc' || prevRole === 'global') {
+          try { removeHolder(ws, { kind: prevRole, project: String(before.project || ''), task: String(before.task || ''), sessionId: sid }); } catch { /* ignore */ }
+        }
+      } else if (role === 'project' || role === 'misc' || role === 'global') {
+        const okKind = syncHolderKind(ws, { kind: role, project, task, sessionId: sid });
+        if (!okKind) {
+          registerHolder(ws, { kind: role, project, task, name: titleOf(sid) || (role === 'project' ? project : task), sessionId: sid });
+        }
+      }
+    } catch (e) { void e; }
     roleCache.delete(sid);
     const info = { role, project, task, source: 'store', sessionId: sid };
     let live = false;
@@ -660,6 +689,23 @@ export function apply(ctx, config) {
     } catch { /* 老版本没有 guard：退化为规则约束 */ }
   }
 
+  // ---------------- 协作守卫：协作注册期间，被交办方不得经由 DSH 自带的 send_message 发明文消息。
+  // 不改 DSH 本体，只挂一层工具守卫；普通会话与普通对话不受影响。
+  if (typeof ctx.tools.guard === 'function') {
+    try {
+      ctx.tools.guard((exec) => {
+        const nm = exec && exec.name;
+        if (nm !== 'send_message') return undefined;
+        const sid = env.selfId(exec) || '';
+        let why = '';
+        try { why = collabMemberReason(sid); } catch { why = ''; }
+        if (!why) return undefined;
+        guardLast = { sid, allow: false, source: '协作注册', title: titleOf(sid) };
+        return why;
+      });
+    } catch { /* 老版本没有 guard：退化为规则约束 */ }
+  }
+
   // ---------------- 会话生命周期：创建时装配提示段；开轮前按角色表核对一次
   // 工具可见性不在这里处理：0.2.2 起每步条件已按当前角色算好（见 visibleTo），换角色下一轮即生效。
   function scopedMetaOf(h, sid) {
@@ -834,5 +880,28 @@ export function apply(ctx, config) {
     }
   } catch (e) {
     initErrors.push('命令注册：' + msgOf(e));
+  }
+
+  // 插件重载后，已存在的会话不会自动重装提示段：把提醒段补注册上。
+  // 角色提示段（manual）由宿主按 agent 持有，同名段改不了文本；提醒段是新段，可以补上。
+  try {
+    const timer = setTimeout(() => {
+      Promise.resolve().then(async () => {
+        try {
+          const controller = typeof env.controller === 'function' ? env.controller() : null;
+          if (!controller || typeof controller.list !== 'function') return;
+          const rows = await controller.list();
+          for (const row of rows || []) {
+            if (!row || row.agentAvailable !== true) continue;
+            const info = env.infoOfSid(row.sessionId);
+            if (!info || ['global', 'project', 'misc'].indexOf(info.role) === -1) continue;
+            env.refreshPromptFor(row.sessionId);
+          }
+        } catch (e) { void e; }
+      });
+    }, 1500);
+    if (typeof ctx.effect === 'function') ctx.effect(() => () => clearTimeout(timer), 'dsh-handover: 启动补注册提醒段');
+  } catch (e) {
+    initErrors.push('启动补注册：' + msgOf(e));
   }
 }
