@@ -162,11 +162,9 @@ dsh plugin --profile web add @mingmaple/dsh-handover
 
 升级与搬动全局根目录见 [从 0.9.x 升级到 1.0.0](docs/migrate.md)；常见症状与处置见 [常见故障处理](docs/troubleshoot.md)。
 
-## 写作规范与门禁
+## 写作规范
 
 全部产出按 `_Control_Center/standards/写作规范/README.md` 的 W-01 至 W-42 执行；提示段只放一行指针，不注入规范正文。
-
-仓库门禁含文档校验与语体门禁：`npm run test:docs`、`npm run test:style`；阻断项为 0 方可提交。
 
 ## 边界与限制
 
@@ -179,19 +177,9 @@ dsh plugin --profile web add @mingmaple/dsh-handover
 - 卸载后残留仅 `~/.dsh/storages/dsh-handover.*` 与日志目录，删除即可清零。
 - 插件本体不含用户项目、会话或账号数据；用户数据与角色表保存在本机。
 
-## 开发与测试
+## 开发
 
-```bash
-npm test               # 开发自测：逐个工具跑只读用例
-npm run test:blank     # 空白环境验收
-npm run test:smoke     # 工具装配与界面冒烟
-npm run test:migrate   # 迁移与恢复端到端
-npm run test:docs      # 文档校验
-npm run test:style     # 语体门禁
-npm run test:behavior && npm run test:portability  # 行为与跨平台检查
-```
-
-源码在 `src/`；`dist/` 为构建产物，不入版本库。服务端代码替换 `dist/` 后，在插件列表停用再启用即生效。客户端构建产物不热更新，改设置页须重建并重启 DSH。
+源码在 `src/`；`dist/` 为构建产物，不入版本库。构建与校验命令见 `package.json` 的 `scripts`。服务端代码替换 `dist/` 后，在插件列表停用再启用即生效。客户端构建产物不热更新，改设置页须重建并重启 DSH。
 
 ## 许可
 
