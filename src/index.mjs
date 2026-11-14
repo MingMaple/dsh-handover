@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-handover —— 全局运行期插件。
  * 判据进代码、流程进工具；规则正文留磁盘，需要时用 ho_charter 取节（完整流程 doc="runtime"）。
  * 按会话角色载入工具与提示段：全局 14 个工具、项目 11、杂项 10、普通 0。
@@ -42,7 +42,7 @@ import { routeWorkspace } from './lib/workspace.mjs';
 import { stampTz } from './lib/brief.mjs';
 import { grantConsent, activeConsentsFor } from './lib/consent.mjs';
 import { systemBlock, registrySignature } from './lib/system.mjs';
-import { reminderTextFor } from './lib/reminder.mjs';
+import { reminderTailNote } from './lib/reminder.mjs';
 import { migrateIdentity, removeRegistryProject } from './lib/identity.mjs';
 import { loadOffice, lineageKeyOf, syncHolderKind, removeHolder, registerHolder } from './lib/office.mjs';
 import { moveStatus } from './lib/mover.mjs';
@@ -105,7 +105,6 @@ export function apply(ctx, config) {
   // 更早的内核忽略注册选项，只能退回 agent 作用域的 restrict；两条路径按能力二选一，不并行。
   const perStep = (() => { try { return !!(ctx.tools && typeof ctx.tools.resolve === 'function'); } catch { return false; } })();
   const sectionDispose = new Map();       // sessionId → 撤销提示段
-  const reminderDispose = new Map();      // sessionId → 撤销一次性提醒段
   const systemSig = new Map();            // sessionId → 上次装配时的体系注册签名（热更新）
   const consentSig = new Map();           // sessionId → 上次装配时的授权签名（授权出现或过期时重装）
   const legacyRestrict = new Map();       // sessionId → 撤销限制（仅无按步解析的内核）
@@ -356,32 +355,8 @@ export function apply(ctx, config) {
         if (!/already registered/.test(msgOf(e))) initErrors.push('角色提示段：' + msgOf(e));
       }
     }
-    applyReminderSection(agent, sid, info);
   }
 
-  /**
-   * 一次性提醒段：text 为函数，宿主每次装配系统提示时调用；命中阈值后写入状态并返回文本。
-   * 该段不生成用户消息、不独立成轮，符合 1.0 的后台提醒口径。
-   */
-  function applyReminderSection(agent, sid, info) {
-    const old = reminderDispose.get(sid);
-    if (typeof old === 'function') { try { old(); } catch { /* 旧段已失效 */ } }
-    reminderDispose.delete(sid);
-    const role = info && info.role ? info.role : 'plain';
-    if (role !== 'global' && role !== 'project' && role !== 'misc') return;
-    const sc = agent && agent.ctx ? agent.ctx : null;
-    if (!sc || !sc.systemPrompt || typeof sc.systemPrompt.section !== 'function') return;
-    try {
-      reminderDispose.set(sid, sc.systemPrompt.section({
-        name: 'dsh-handover:reminder',
-        order: 101,
-        text: reminderTextFor(cfg, sid),
-        interpolate: false,
-      }));
-    } catch (e) {
-      if (!/already registered/.test(msgOf(e))) initErrors.push('提醒段：' + msgOf(e));
-    }
-  }
 
   /** 旧内核（没有按步解析）才用的限制式裁剪。 */
   function applyLegacyRestrict(agent, sid, info) {
@@ -610,6 +585,28 @@ export function apply(ctx, config) {
       return allow ? allow.has(name) : true;
     };
   }
+  /**
+   * 提醒尾注入：插件工具返回结果后，在文本末尾贴一条 [System Note: …]。
+   * 只改这一次工具结果：不动系统提示词（不改写前缀缓存）、不写会话事件、不另起消息、不打断工具。
+   */
+  function withReminderTail(def) {
+    if (!def || typeof def.execute !== 'function') return def;
+    const run = def.execute.bind(def);
+    return {
+      ...def,
+      async execute(args, exec) {
+        const res = await run(args, exec);
+        try {
+          const sid = env.selfId(exec);
+          if (sid && res && typeof res.text === 'string' && res.text !== '') {
+            const note = reminderTailNote(cfg, sid);
+            if (note) return { ...res, text: res.text + String.fromCharCode(10, 10) + note };
+          }
+        } catch { /* 追加失败不影响工具结果 */ }
+        return res;
+      },
+    };
+  }
   const tools = [
     pmStatusTool(env, { schedulerReady: () => scheduler !== null, schedulerError: () => schedulerError }),
     pmGateTool(env),
@@ -632,7 +629,7 @@ export function apply(ctx, config) {
       // 名字以工厂自带的为准；工厂没写才用位置表补，且顺序错位时报出来（不再静默错名）。
       if (!tools[i].name) tools[i].name = NAMES[key];
       else if (tools[i].name !== NAMES[key]) initErrors.push('工具名错位：数组第 ' + i + ' 项是 ' + tools[i].name + '，位置表期望 ' + NAMES[key]);
-      ctx.tools.register(tools[i], { when: visibleTo(tools[i].name) });
+      ctx.tools.register(withReminderTail(tools[i]), { when: visibleTo(tools[i].name) });
       registered.add(tools[i].name);
     } catch (e) {
       initErrors.push(key + '：' + msgOf(e));
@@ -642,7 +639,7 @@ export function apply(ctx, config) {
   const peerTools = [pmPeerTool(env)];
   for (const t of peerTools) {
     try {
-      ctx.tools.register(t, { when: visibleTo(t && t.name ? String(t.name) : '') });
+      ctx.tools.register(withReminderTail(t), { when: visibleTo(t && t.name ? String(t.name) : '') });
       if (t && t.name) registered.add(t.name);
     } catch (e) {
       initErrors.push((t && t.name ? String(t.name) : 'peer') + '：' + msgOf(e));
@@ -722,7 +719,11 @@ export function apply(ctx, config) {
       onAgentEvent('agent/created', (payload) => {
         try {
           const agent = payload && payload.agent ? payload.agent : null;
-          if (agent) applyRoleTo(agent);
+          if (agent) {
+            const h = agent.session && agent.session.header ? agent.session.header : null;
+            const sid0 = String((h && h.id) || agent.id || '');
+            applyRoleTo(agent);
+          }
         } catch (e) { env.log('角色装配失败：' + msgOf(e)); }
       });
       onAgentEvent('agent/disposed', (payload) => {
@@ -734,9 +735,6 @@ export function apply(ctx, config) {
           const d = sectionDispose.get(sid);
           if (typeof d === 'function') { try { d(); } catch { /* ignore */ } }
           sectionDispose.delete(sid);
-          const rd = reminderDispose.get(sid);
-          if (typeof rd === 'function') { try { rd(); } catch { /* ignore */ } }
-          reminderDispose.delete(sid);
           const ld = legacyRestrict.get(sid);
           if (typeof ld === 'function') { try { ld(); } catch { /* ignore */ } }
           legacyRestrict.delete(sid);
@@ -749,12 +747,13 @@ export function apply(ctx, config) {
       // 状态切到 running 时核一次，提示段与旧内核的限制同角色表对齐。
       onAgentEvent('agent/status', (payload) => {
         try {
-          if (!payload || payload.status !== 'running') return;
+          if (!payload) return;
           const agent = payload.agent || null;
           if (!agent) return;
           const h = agent.session && agent.session.header ? agent.session.header : null;
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
+          if (payload.status !== 'running') return;
           const info = infoFor(sid, scopedMetaOf(h, sid));
           // 角色没变也要看授权签名与体系注册签名：授权到达、注册改写后，下一轮就该看见新内容。
           let sig = '';
@@ -782,7 +781,13 @@ export function apply(ctx, config) {
       if (!agents || typeof agents.list !== 'function') return 0;
       let n = 0;
       for (const a of agents.list()) {
-        try { applyRoleTo(a); n++; } catch { /* 单个会话装配失败不影响插件激活 */ }
+        try {
+          // 插件重载时正在跑的会话不会再收到 running 事件，这里补记轮内状态，
+          // 否则提醒要等下一轮才会判定。
+          const h = a && a.session && a.session.header ? a.session.header : null;
+          const sid = String((h && h.id) || (a && a.id) || '');
+          applyRoleTo(a); n++;
+        } catch { /* 单个会话装配失败不影响插件激活 */ }
       }
       if (n > 0) env.log('补装配 ' + n + ' 个活体会话');
       return n;

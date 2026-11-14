@@ -6,6 +6,7 @@ import { readHandover, rewriteHandover } from '../lib/handover-io.mjs';
 import { eventsOf, countCompactions } from '../lib/events.mjs';
 import { decide } from '../lib/phase.mjs';
 import { checkConsent, consumedConsent } from '../lib/consent.mjs';
+import { markSkipNext } from '../lib/reminder.mjs';
 
 export function pmCheckpointTool(env) {
   return {
@@ -116,6 +117,8 @@ export function pmCheckpointTool(env) {
         out.push('注意成本：当前水位 ' + (Math.round(ratio * 1000) / 10) + '% 低于可压缩线 ' + Math.round(handoverRatio * 100) + '% —— 属于提前压缩，会白付一次摘要调用，且本轮前缀缓存失效。');
       }
       consumedConsent(meId);
+      // 压缩后第一轮的水位读数是压缩前的旧投影，跳过那一轮提醒判定，免得用虚高读数用掉一次性提醒。
+      markSkipNext(meId);
       const n = count.used + 1;
       const resume = args.resume === 'wait' ? 'wait' : 'continue';
       env.schedule(meId, n, { resume });

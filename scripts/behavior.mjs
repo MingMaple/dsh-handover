@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 1.0 行为测试（新增七类）：
  * 1. 35%/50% 提醒只注入一次，且不生成用户消息；
  * 2. 行动计划文件与「先交接、再计划、后执行」的阅读顺序；
@@ -45,7 +45,7 @@ function section(t) { console.log(''); console.log('== ' + t + ' =='); }
 const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
 const { resolveConfig } = await imp('lib/config.mjs');
 const cfg = resolveConfig({ workspaceRoot: WS });
-const { reminderTextFor, readReminderState } = await imp('lib/reminder.mjs');
+const { reminderTailNote, checkReminder, markSkipNext, readReminderState } = await imp('lib/reminder.mjs');
 const { planRelPath, readPlan, readRegistry, syncGlobalRefs } = await imp('lib/system.mjs');
 const { pmDocmapTool } = await imp('tools/ho_docmap.mjs');
 const { registerHolder, loadOffice, syncHolderKind, removeHolder } = await imp('lib/office.mjs');
@@ -67,57 +67,81 @@ function cachePressure(sid, pct) {
   fs.writeFileSync(path.join(dir, sid + '.json'), JSON.stringify(data), 'utf8');
 }
 
-// ---------- 1 提醒只注入一次，且不是用户消息
+// ---------- 1 提醒尾注入：贴工具结果末尾、只投一次、不写会话事件
 section('1 一次性后台提醒');
 w('Projects/Demo/README.md', '# Demo\n');
 writeRole({}, 'session-plan', { role: 'project', project: 'Demo' });
 registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-plan' });
 {
   cachePressure('session-b1', 36);
-  const text = reminderTextFor(cfg, 'session-b1');
-  const first = text();
-  ok(/35%/.test(first), '36% 时返回 35% 提醒', first.slice(0, 40));
+  const first = checkReminder(cfg, 'session-b1');
+  ok(/35%/.test(first), '36% 时给出 35% 提醒', first.slice(0, 40));
   ok(/45%/.test(first), '35% 档写明 45% 判断标准');
-  ok(text() === '', '同一会话第二次不再注入');
+  ok(checkReminder(cfg, 'session-b1') === '', '同一会话第二次不再提醒');
   ok(readReminderState().sessions['session-b1'].r35 === true, '提醒状态已落盘');
+  const note = reminderTailNote(cfg, 'session-b2');
+  ok(note === '', '未到线时没有尾巴');
 }
 {
   cachePressure('session-b2', 55);
-  const text = reminderTextFor(cfg, 'session-b2');
-  const first = text();
-  ok(/35%/.test(first) && /50%/.test(first), '一次跨过两线时两条提醒各出现一次', first.slice(0, 40));
-  ok(/55%/.test(first), '50% 档写明 55% 判断标准');
-  ok(text() === '', '两线提醒后不再重复');
+  const note = reminderTailNote(cfg, 'session-b2');
+  ok(note.indexOf('[System Note: ') === 0, '到线时给出 System Note 尾巴', note.slice(0, 30));
+  ok(/35%/.test(note) && /50%/.test(note), '一次跨过两线时两条提醒都在尾巴里');
+  ok(/55%/.test(note), '50% 档写明 55% 判断标准');
+  ok(note.endsWith(']'), '尾巴以 ] 收口');
+  ok(reminderTailNote(cfg, 'session-b2') === '', '两线提醒后不再重复');
 }
 {
+  cachePressure('session-b3', 60);
+  markSkipNext('session-b3');
+  ok(reminderTailNote(cfg, 'session-b3') === '', '压缩后第一次判定跳过');
+  ok(readReminderState().sessions['session-b3'].r35 !== true, '跳过那次不写已提醒状态');
+  ok(/55%/.test(reminderTailNote(cfg, 'session-b3')), '下一次才判定');
+}
+{
+  cachePressure('session-plan', 40);
   const prompts = [];
   const sections = [];
+  const definitions = [];
+  const handlers = new Map();
   const sysPrompt = { section: (s) => { sections.push(s); return () => {}; } };
   const agent = {
     id: 'session-plan',
     status: 'idle',
-    session: { header: { id: 'session-plan', cwd: WS, title: 'Demo1' } },
+    session: {
+      header: { id: 'session-plan', cwd: WS, title: 'Demo1' },
+      append: () => { throw new Error('不得往会话日志写事件'); },
+    },
     ctx: { systemPrompt: sysPrompt },
   };
   const ctx = {
-    tools: { register: () => {}, guard: () => {}, resolve: () => {} },
+    tools: { register: (d) => { definitions.push(d); }, guard: () => {}, resolve: () => {} },
     systemPrompt: sysPrompt,
     sessionController: { prompt: async (r) => { prompts.push(r); return { accepted: true }; } },
     agents: { list: () => [agent], get: () => agent },
     logger: { warn: () => {}, info: () => {} },
     effect: (fn) => fn(),
-    on: () => {},
+    on: (name, fn) => { handlers.set(name, fn); },
     get: () => null,
     inject: () => {},
   };
   const { apply } = await imp('index.mjs');
   apply(ctx, { workspaceRoot: WS });
   ok(prompts.length === 0, '插件装配不向会话投递用户消息', String(prompts.length));
-  const reminderSection = sections.find((s) => s.name === 'dsh-handover:reminder');
-  ok(!!reminderSection && typeof reminderSection.text === 'function', '提醒段注册为动态提示段（每次装配现算）');
+  ok(!sections.find((s) => s.name === 'dsh-handover:reminder'), '不再注册动态提醒提示段（不改系统提示词）');
   const manualSection = sections.find((s) => s.name === 'dsh-handover:manual');
-  ok(!!manualSection && /层级二/.test(String(manualSection.text)) && manualSection.text.indexOf('32%') === -1, '项目提示段含两级流程且无 32% 线');
-  ok(!!manualSection && manualSection.text.indexOf('体系注册') !== -1, '项目提示段注入体系注册内容');
+  ok(!!manualSection && /层级二/.test(String(manualSection.text)), '项目提示段仍正常注册');
+  const tool = definitions.find((d) => d && d.name === 'ho_status');
+  ok(!!tool && typeof tool.execute === 'function', '工具定义已注册');
+  if (tool) {
+    const fake = { agent };
+    const res = await tool.execute({ view: 'phase' }, fake);
+    ok(typeof res.text === 'string' && res.text.indexOf('[System Note: ') > 0, '工具结果末尾带上 System Note');
+    ok(/35%/.test(res.text), '尾巴带 35% 提醒');
+    ok(!/不得往会话日志写事件/.test(res.text), '没有写会话事件');
+    const again = await tool.execute({ view: 'phase' }, fake);
+    ok(String(again.text).indexOf('[System Note: ') === -1, '同一会话下一次工具结果不再重复');
+  }
 }
 
 // ---------- 2 行动计划与阅读顺序

@@ -600,7 +600,7 @@ ok(gateFor('ho_changelog')(projExec) === false, '项目角色不可见 ho_change
 ok(calls.sections.length >= 1 && calls.sections.some((s) => s.name === 'dsh-handover:manual'), '应注册同名提示段遮蔽兜底段', JSON.stringify(calls.sections.map((s) => s.name)));
 const projSec = calls.sections.find((s) => s.name === 'dsh-handover:manual');
 const projText = String(projSec && projSec.text || '');
-ok(calls.sections.some((s) => s.name === 'dsh-handover:reminder' && typeof s.text === 'function'), '应注册一次性提醒段（动态文本）');
+ok(!calls.sections.some((s) => s.name === 'dsh-handover:reminder'), '不再注册动态提醒段（提醒改走工具结果尾注入）');
 const secNorm = projText.replace(/\\/g, '/');
 ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '项目提示段应含自己的路径', secNorm.slice(0, 200));
 ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明任务完成不向全局报告', secNorm.slice(0, 400));
@@ -642,7 +642,7 @@ ok(gCalls.restrict === 0, '全局角色不应被裁剪', String(gCalls.restrict)
 ok(gCalls.sections.some((s) => s.name === 'dsh-handover:manual'), '全局也应遮蔽兜底段', JSON.stringify(gCalls.sections.map((s) => s.name)));
 const globSec = gCalls.sections.find((s) => s.name === 'dsh-handover:manual');
 const globText = String(globSec && globSec.text || '');
-ok(gCalls.sections.some((s) => s.name === 'dsh-handover:reminder' && typeof s.text === 'function'), '全局也应注册一次性提醒段');
+ok(!gCalls.sections.some((s) => s.name === 'dsh-handover:reminder'), '全局同样不注册动态提醒段');
 // 常驻段只放每轮判定，一次性流程下沉手册；参考值按加权 token 计，只打印实测值。
 console.log('全局提示段 token 实测：' + budget.estimateTokens(globText) + '（参考值 ' + budget.TOKEN_BUDGET.globalTokens + '，不判失败）');
 ok(globText.indexOf('纯窗口是否可能超过 40%') !== -1, '全局段应携带 1.0 子智能体判定线（纯窗口 40%）');
