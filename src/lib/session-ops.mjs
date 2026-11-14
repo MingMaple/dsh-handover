@@ -14,11 +14,12 @@ import { sendPrompt } from './prompt.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { lineageKeyOf, loadOffice, registerHolder } from './office.mjs';
 import { migrateIdentity } from './identity.mjs';
+import { pathKey } from './pathkey.mjs';
 
 const FENCE = String.fromCharCode(96, 96, 96);
 
 function normPath(p) {
-  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return pathKey(String(p || ''));
 }
 
 /** 在 ~/.dsh/storages/workspace.json 里按 id、标题、路径找 workspaceId。 */

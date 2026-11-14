@@ -12,6 +12,7 @@
 - 规则文件取回：`ho_charter(doc="handover_rules" | "migration_rules" | "misc_standard" | "delegation_rules" | "writing_rules")`；`doc="charter"` 取工作区 Charter。
 - 内置兜底：工作区没有对应规则文件时，工具返回插件内置版本并注明来源，换到空白机器也不会得到空壳。
 - 未接入工作区时（读不到 `_Control_Center`），插件本体仍可用；闸门、交接体检与会话水位三项无数据。
+- 插件服务端是纯 Node，Windows、macOS 与 Linux 同一套代码；路径比较按平台折叠大小写，归档优先 7-Zip，没有时用内置 tar.gz。
 
 ## 2. 角色
 

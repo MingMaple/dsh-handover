@@ -45,7 +45,8 @@
     "test:migrate": "node scripts/e2e-migration.mjs",
     "test:docs": "node scripts/check-docs.mjs",
     "test:style": "node scripts/style-gate.mjs",
-    "test:behavior": "node scripts/behavior.mjs"
+    "test:behavior": "node scripts/behavior.mjs",
+    "test:portability": "node scripts/portability.mjs"
   },
   "dsh": {
     "bundle": {

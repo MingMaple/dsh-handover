@@ -243,6 +243,19 @@
 2. 用 `ho_workspace(action="move-status")` 查看迁移阶段。
 3. 新位置也不存在时，先确认数据位置，再决定是否回退。
 
+## 跨平台相关
+
+现象：在 Linux 或 macOS 上，7-Zip 探测失败、迁移后路径比较异常，或提示里出现 Windows 专有词。
+
+原因：配置了只适用于 Windows 的 7-Zip 路径；同一条路径用不同大小写写法时被误判为相同或不同。
+
+处置：
+
+1. 不配置 `sevenZipPath` 时，插件按常见位置与 PATH 探测 `7z`、`7zz`、`7za`；定制安装再填绝对路径。
+2. 路径比较由 `lib/pathkey.mjs` 统一处理：Windows 与 macOS 折叠大小写，Linux 保留；不要另写比较逻辑。
+3. 迁移后的旧路径在 Windows 是 junction，在 POSIX 是目录符号链接；删除链接即可回退。
+4. 没有 7-Zip 时用 `format=tar` 或保持 `auto`，内置归档器功能等价。
+
 ## 语体门禁或文档校验不通过
 
 现象：`npm run test:style` 或 `npm run test:docs` 非零退出。

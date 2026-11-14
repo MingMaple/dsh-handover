@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { pathKey } from './pathkey.mjs';
 
 const MARKER_NAME = 'dsh-handover.move.json';
 const HELPER_NAME = 'dsh-handover.move.mjs';
@@ -25,7 +26,10 @@ const STAMP_REL = path.join('_Temp', '_Global', 'Scratch', '.dsh-handover-verifi
 
 function msgOf(e) { return String(e && e.message ? e.message : e); }
 function tail(p) { return String(p || '').replace(/[\\/]+$/, ''); }
-function canon(p) { return tail(path.resolve(String(p || ''))).toLowerCase(); }
+function canon(p) {
+  const t = tail(path.resolve(String(p || '')));
+  return process.platform === 'win32' ? t.toLowerCase() : t;
+}
 function samePath(a, b) { return !!a && !!b && canon(a) === canon(b); }
 function isInside(parent, child) {
   const p = canon(parent) + path.sep;
@@ -176,7 +180,7 @@ export async function probeMove({ src, to }) {
   // 语义：to＝目标**父目录**（把整个根目录搬进去）；basename 与当前根同名则直接当新根。
   const toRaw = tail(path.resolve(raw));
   const rootName = path.basename(s);
-  const t = path.basename(toRaw).toLowerCase() === rootName.toLowerCase() ? toRaw : path.join(toRaw, rootName);
+  const t = pathKey(path.basename(toRaw)) === pathKey(rootName) ? toRaw : path.join(toRaw, rootName);
   if (samePath(t, s)) problems.push('目标与当前根相同');
   else if (isInside(s, t)) problems.push('目标在当前根内部：' + t);
   else if (isInside(t, s)) problems.push('目标是当前根的上级目录：' + t);
@@ -275,7 +279,7 @@ function alive(pid) {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
 }
-function stamp(text) { return String(text || '').replace(/[\\/]+$/, '').toLowerCase(); }
+function stamp(text) { const t = String(text || '').replace(/[\\/]+$/, ''); return process.platform === 'win32' ? t.toLowerCase() : t; }
 function stop(m) { log('[中止] ' + m); process.exit(1); }
 
 (async () => {

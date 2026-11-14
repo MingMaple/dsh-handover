@@ -176,6 +176,7 @@ dsh plugin --profile web add @mingmaple/dsh-handover
 - 会话水位依赖宿主保存的会话状态文件布局；字段变化时用 `ho_status(view="diag")` 排查。
 - 项目名不超过 24 个字符，任务名不超过 40 个字符。名字不含路径分隔符与控制字符，不以点或空格结尾，不使用设备保留名。
 - 插件重载后，已存在的会话沿用旧提示段文本；需要新文本时重启 DSH 或新建会话。
+- 服务端是纯 Node ESM，不调用 PowerShell、cmd 或 bash；Windows、macOS 与 Linux 同一套代码。路径大小写按平台处理，7-Zip 缺失时用内置 tar.gz。
 - 卸载后残留仅 `~/.dsh/storages/dsh-handover.*` 与日志目录，删除即可清零。
 - 插件本体不含用户项目、会话或账号数据；用户数据与角色表保存在本机。
 
@@ -188,7 +189,7 @@ npm run test:smoke     # 工具装配与界面冒烟
 npm run test:migrate   # 迁移与恢复端到端
 npm run test:docs      # 文档校验
 npm run test:style     # 语体门禁
-npm run test:behavior  # 行为测试
+npm run test:behavior && npm run test:portability  # 行为与跨平台检查
 ```
 
 源码在 `src/`；`dist/` 为构建产物，不入版本库。服务端代码替换 `dist/` 后，在插件列表停用再启用即生效。客户端构建产物不热更新，改设置页须重建并重启 DSH。

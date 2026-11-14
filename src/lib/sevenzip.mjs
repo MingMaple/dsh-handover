@@ -6,7 +6,14 @@ import { spawnSync } from 'node:child_process';
 const CANDIDATES = [
   'C:\\Program Files\\7-Zip\\7z.exe',
   'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+  '/usr/bin/7z',
+  '/usr/local/bin/7z',
+  '/opt/homebrew/bin/7z',
+  '/usr/bin/7za',
+  '/usr/local/bin/7za',
+  '/opt/homebrew/bin/7zz',
 ];
+const BARE = new Set(['7z', '7zz', '7za']);
 
 function run7z(bin, args, opts) {
   const res = spawnSync(bin, args, { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(opts || {}) });
@@ -38,8 +45,10 @@ export function sevenZipBin(configured) {
   if (configured) cands.push(configured);
   for (const c of CANDIDATES) cands.push(c);
   cands.push('7z');
+  cands.push('7zz');
+  cands.push('7za');
   for (const c of cands) {
-    if (c !== '7z' && !fs.existsSync(c)) continue;
+    if (!BARE.has(c) && !fs.existsSync(c)) continue;
     const r = run7z(c, ['i']);
     if (r.code === 0) { probed = c; return c; }
   }

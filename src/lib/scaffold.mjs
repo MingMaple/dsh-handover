@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathKey } from './pathkey.mjs';
 
 /** 插件自带的模板目录（dist/templates 或 src/templates）。 */
 const TPL = new URL('../templates/', import.meta.url);
@@ -133,7 +134,7 @@ export function createGlobalWorkspace(parentInput, opts) {
   if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1 || name === '.' || name === '..') {
     return { ok: false, error: '根目录名不能带路径分隔符：' + name };
   }
-  const sameName = path.basename(t.parent).toLowerCase() === name.toLowerCase();
+  const sameName = pathKey(path.basename(t.parent)) === pathKey(name);
   const root = sameName ? t.parent : path.join(t.parent, name);
 
   let existed = false;

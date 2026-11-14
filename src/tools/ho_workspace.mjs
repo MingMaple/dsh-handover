@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { nameOf } from '../lib/names.mjs';
 import path from 'node:path';
+import { pathKey } from '../lib/pathkey.mjs';
 import { textOutput } from '../lib/output.mjs';
 import { NL } from '../lib/text.mjs';
 import { workspaceRows } from '../lib/registry.mjs';
@@ -208,7 +209,7 @@ export function pmWorkspaceTool(env) {
         if (!key) throw new Error('delete 需要 workspace（id、标题、路径）');
         let list = [];
         try { list = reg.list() || []; } catch { list = []; }
-        const norm = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+        const norm = (s) => pathKey(String(s || ''));
         const hit = list.find((w) => String(w.id) === key || w.title === key || norm(w.path) === norm(key));
         if (!hit) throw new Error('找不到工作区：' + key);
         if (String(hit.title || '').indexOf('全局') !== -1) throw new Error(BAD);
@@ -253,9 +254,9 @@ export function pmWorkspaceTool(env) {
 
       if (action === 'move-switch') {
         const r = stageSwitch({ relaunch: args.relaunch === true });
-        if (r.already) { out.push('已经是切换态（旧路径就是 junction），无需再切。'); return { text: out.join(NL) }; }
+        if (r.already) { out.push('已经是切换态（旧路径就是链接），无需再切。'); return { text: out.join(NL) }; }
         out.push('已派出后台切换助手（pid ' + r.pid + '）。');
-        out.push('  它会在你**完全退出 DSH** 后自动完成：旧目录改名、原位建 junction、校验指向' + (r.relaunch ? '，然后重新启动 DSH' : '') + '。');
+        out.push('  它会在你**完全退出 DSH** 后自动完成：旧目录改名、原位建链接、校验指向' + (r.relaunch ? '，然后重新启动 DSH' : '') + '。');
         out.push('  日志：' + r.log);
         out.push('  提醒：从现在起不要改这个工作区里的文件（改动只会落在还活着的旧目录上）。');
         return { text: out.join(NL) };

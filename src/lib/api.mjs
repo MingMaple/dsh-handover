@@ -5,6 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathKey } from './pathkey.mjs';
 import { isDir } from './text.mjs';
 import { buildStatus } from './status.mjs';
 import { createGlobalWorkspace } from './scaffold.mjs';
@@ -79,7 +80,7 @@ async function createGlobalSession(env, rootPath, title) {
   try {
     const reg = env.registry && env.registry();
     const list = reg && typeof reg.list === 'function' ? (reg.list() || []) : [];
-    const norm = (s) => String(s || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const norm = (s) => pathKey(String(s || ''));
     const hit = list.find((w) => w && norm(w.path) === norm(rootPath));
     if (hit) workspaceId = String(hit.id || '');
   } catch { workspaceId = ''; }

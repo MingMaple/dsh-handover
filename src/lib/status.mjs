@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathKey } from './pathkey.mjs';
 import { syncCheck } from './gates.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
 import { scanSessions } from './sessions.mjs';
@@ -256,7 +257,7 @@ export function buildStatus(env, extra) {
     // 未登记的会话归入「未分组」，与 DSH 侧栏一致；cwd 推断会把未分组会话误并入同名工作区。
     const realCache = new Map();
     const realOf = (p) => {
-      const key = String(p || '').toLowerCase();
+      const key = pathKey(String(p || ''));
       if (realCache.has(key)) return realCache.get(key);
       let v = '';
       try { v = fs.realpathSync(String(p || '')); } catch { v = ''; }

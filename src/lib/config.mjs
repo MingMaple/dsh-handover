@@ -27,7 +27,7 @@ export const DEFAULTS = {
   reuseCheck: true,        // 建新会话前查在任会话水位（低于 handoverRatio 拒绝，建议复用）
   prepackMinAgeMin: 90,    // 打包前要求会话静止分钟数
   packFormat: 'auto',      // 归档格式：auto（有 7-Zip 用 7z，否则内置 tar.gz）、7z、tar
-  sevenZipPath: '',        // 留空则自动探测 C:\Program Files\7-Zip\7z.exe
+  sevenZipPath: '',        // 留空则自动探测：常见安装位置（Windows、macOS、Linux）与 PATH 上的 7z
 };
 
 export function resolveConfig(raw) {
