@@ -929,7 +929,7 @@ const roleDetails = [];
   if (n.type === 'details') roleDetails.push(n);
   (n.kids || []).forEach(walk);
 })(roleCard);
-ok(roleDetails.length === 2, '会话角色应按工作区分组（全局＋未归属）', String(roleDetails.length));
+ok(roleDetails.length === 2, '会话角色应按工作区分组（全局＋未分组）', String(roleDetails.length));
 ok(roleDetails.every((d) => d.props.open !== true), '工作区分组默认收起');
 const roleText = textOf(roleCard).join(' ');
 ok(roleText.indexOf('全局（3 个会话）') !== -1 && roleText.indexOf('未分组（10 个会话）') !== -1, '分组标题应带会话数，未登记会话归入未分组', roleText.slice(0, 200));

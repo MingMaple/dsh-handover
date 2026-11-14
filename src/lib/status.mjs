@@ -281,7 +281,7 @@ export function buildStatus(env, extra) {
         projectName: info.project,
         task: info.task,
         cwdOk,
-        // 工作区分组：没有登记归属时留空，客户端归入「未归属工作区」。
+        // 工作区分组：只认 DSH 工作区登记；未登记时留空，客户端归入「未分组」。
         wsKey: w ? w.key : '',
         wsTitle: w ? w.title : '',
         wsPath: w ? w.path : String(meta.cwd || ''),
