@@ -771,22 +771,26 @@ window.__ModuleLoader__.load({
               h("div", { className: "dshh-wrap" }, kids)))));
       }
 
-      // 四、会话角色：按 DSH 工作区分组，默认全部折叠；组内按全局、项目、杂项、普通排列。
-      const ROLE_ORDER = { global: 0, project: 1, misc: 2, plain: 3 };
-      const byRole = byActivity.slice().sort((a, b) => {
-        const ra = ROLE_ORDER[a.role] === undefined ? 9 : ROLE_ORDER[a.role];
-        const rb = ROLE_ORDER[b.role] === undefined ? 9 : ROLE_ORDER[b.role];
-        return ra !== rb ? ra - rb : String(b.seen || "").localeCompare(String(a.seen || ""));
-      });
+      // 四、会话角色：按 DSH 工作区分组，默认全部折叠；组内会话按时间倒序（与 DSH 侧栏一致）。
+      // 分组顺序取 status payload 的 workspaces（即 workspace.json 的 workspaceIds 权威展示顺序）。
+      const timeDesc = (a, b) => {
+        const am = Number(a.mtime);
+        const bm = Number(b.mtime);
+        if (Number.isFinite(am) && Number.isFinite(bm) && am !== bm) return bm - am;
+        const s = String(b.seen || '').localeCompare(String(a.seen || ''));
+        if (s !== 0) return s;
+        return String(a.sid || '').localeCompare(String(b.sid || ''));
+      };
+      const byTime = byActivity.slice().sort(timeDesc);
       const wsList = (ss && Array.isArray(ss.workspaces)) ? ss.workspaces : [];
       const roleGroups = [];
       const claimed = {};
       for (const w of wsList) {
-        const rows = byRole.filter((r) => r.wsKey === w.key);
+        const rows = byTime.filter((r) => r.wsKey === w.key);
         claimed[w.key] = true;
-        if (rows.length) roleGroups.push({ key: w.key, title: w.title || w.path || "工作区", path: w.path || "", rows });
+        if (rows.length) roleGroups.push({ key: w.key, title: w.title || w.path || '工作区', path: w.path || '', rows });
       }
-      const restRows = byRole.filter((r) => !claimed[r.wsKey]);
+      const restRows = byTime.filter((r) => !claimed[r.wsKey]);
       if (restRows.length) roleGroups.push({ key: "", title: "未归属工作区", path: "", rows: restRows });
       const roleRow = (r, i) => {
         const draft = (roleSel && roleSel[r.sid]) || {};

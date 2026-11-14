@@ -991,14 +991,32 @@ ok(clientSrc.indexOf('delWord.trim() !== "删除"') !== -1, '删除旧备份须�
 // 保留的旧备份不算待处理：迁移卡只在妨碍使用的情形下提示。
 ok(clientSrc.indexOf('(st.phase === "switched" && (st.olds || []).length)') === -1, '保留的旧备份不得计入待处理');
 ok(clientSrc.indexOf('旧备份保留，不影响使用') !== -1, '迁移完成后应注明旧备份不影响使用');
-// 角色顺序：全局、项目、杂项、普通（表格与下拉同序）。
+// 角色下拉顺序保持全局、项目、杂项、普通；会话行本身按时间倒序，不再按角色排列。
 {
   const g = clientSrc.indexOf('value: "global"');
   const p = clientSrc.indexOf('value: "project"');
   const m = clientSrc.indexOf('value: "misc"');
   const n = clientSrc.indexOf('value: "plain"');
   ok(g !== -1 && p !== -1 && m !== -1 && n !== -1 && g < p && p < m && m < n, '角色下拉应为全局、项目、杂项、普通', JSON.stringify({ g, p, m, n }));
-  ok(clientSrc.indexOf('ROLE_ORDER') !== -1, '会话角色应按角色顺序排列');
+  ok(clientSrc.indexOf('ROLE_ORDER') === -1 && clientSrc.indexOf('byTime') !== -1, '会话角色组内应按时间倒序，不再按角色排列');
+}
+
+// 组内顺序实测：夹具中全局组按时间应为 全局1、Demo1、Demo2。
+{
+  const first = roleDetails[0];
+  const rows = [];
+  (function collect(n) {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(collect); return; }
+    if (n.type === 'tr') {
+      const cells = (n.kids || []).filter((k) => k && k.type === 'td');
+      if (cells.length >= 2) rows.push(textOf(cells[0]).join(''));
+      return;
+    }
+    if (typeof n.type === 'function') { collect(n.type(n.props || {})); return; }
+    (n.kids || []).forEach(collect);
+  })(first);
+  ok(JSON.stringify(rows.slice(0, 3)) === JSON.stringify(['全局1', 'Demo1', 'Demo2']), '角色组内会话应按时间倒序排列', JSON.stringify(rows.slice(0, 3)));
 }
 
 // 未接入工作区：一键部署卡片置顶。
