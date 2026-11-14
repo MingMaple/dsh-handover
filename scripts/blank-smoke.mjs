@@ -613,7 +613,7 @@ console.log('项目提示段 token 实测：' + budget.estimateTokens(projText) 
 ok(projText.indexOf('纯窗口是否可能超过 40%') !== -1, '项目段应携带 1.0 子智能体判定线（纯窗口 40%）');
 ok(secNorm.indexOf('写计划就把拆子智能体安排进去') !== -1, '项目段应写明超过 40% 时计划里引入子智能体', secNorm.slice(0, 400));
 ok(secNorm.indexOf('超过时，写计划就把拆子智能体安排进去') < secNorm.indexOf('写行动计划 PLAN.md（任务根）'), '项目段应是先判纯窗口、再写一次计划', secNorm.slice(0, 400));
-ok(secNorm.indexOf('子智能体按成本灵活使用') !== -1 && secNorm.indexOf('并发 ≤3') !== -1 && secNorm.indexOf('判断不清默认自己做完') !== -1, '项目段应携带子智能体灵活使用约定', secNorm.slice(0, 500));
+ok(secNorm.indexOf('子智能体') !== -1 && secNorm.indexOf('并发 ≤3') !== -1 && secNorm.indexOf('交回原作者续用') !== -1, '项目段应携带子智能体硬线（并发与续用）', secNorm.slice(0, 500));
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
 {
   const man = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);
@@ -650,7 +650,7 @@ ok(!gCalls.sections.some((s) => s.name === 'dsh-handover:reminder'), '全局同�
 console.log('全局提示段 token 实测：' + budget.estimateTokens(globText) + '（参考值 ' + budget.TOKEN_BUDGET.globalTokens + '，不判失败）');
 ok(globText.indexOf('纯窗口是否可能超过 40%') !== -1, '全局段应携带 1.0 子智能体判定线（纯窗口 40%）');
 ok(globText.indexOf('写计划就把拆子智能体安排进去') < globText.indexOf('写行动计划 PLAN.md（任务根）'), '全局段应是先判纯窗口、再写一次计划');
-ok(globText.indexOf('子智能体按成本灵活使用') !== -1 && globText.indexOf('并发 ≤3') !== -1, '全局段应携带子智能体灵活使用约定');
+ok(globText.indexOf('并发 ≤3') !== -1 && globText.indexOf('交回原作者续用') !== -1, '全局段应携带子智能体硬线（并发与续用）');
 ok(globText.indexOf('list_agents') === -1, '全局段不携带子智能体检索细节（细则在运行时手册）');
 // 真机最坏情形：长路径 + 迁移提示行
 {
