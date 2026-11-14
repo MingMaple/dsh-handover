@@ -21,6 +21,7 @@ import { watermark } from '../lib/facts.mjs';
 import { eventsOf, countCompactions } from '../lib/events.mjs';
 import { findLog, decodeLog, turnStarts } from '../lib/zstd-log.mjs';
 import { activeConsentsFor, formatConsentLine } from '../lib/consent.mjs';
+import { readReminderState } from '../lib/reminder.mjs';
 
 export const VIEWS = ['phase', 'brief', 'diag', 'drift', 'tokens'];
 
@@ -74,7 +75,7 @@ function phaseText(env, args, exec) {
 function briefText(env, args, exec) {
   const ws = env.resolveWs(exec);
   const w = watermark(env.cfg);
-  const warn = typeof args.threshold === 'number' ? args.threshold : w.warnValue;
+  const warn = typeof args.threshold === 'number' ? args.threshold : w.remindValue;
   const gate = syncCheck(ws);
   const meId = env.selfId(exec);
   const self = readSelfPressure(env.cacheDir(), meId);
@@ -138,6 +139,10 @@ function diagText(env, state, exec) {
   out.push('压缩      ' + st.used + '/' + env.cfg.maxCompactions + ' 次；锁 ' + st.lock + '；来源 ' + st.source);
   const pct = env.selfPct(meId);
   out.push('水位      ' + (pct === null ? '读不到' : pct.toFixed(1) + '%') + (typeof env.staleNote === 'function' ? env.staleNote(exec) : ''));
+  try {
+    const rec = readReminderState().sessions[String(meId || '')] || {};
+    out.push('提醒      35%=' + (rec.r35 ? '已提醒' : '未提醒') + '  50%=' + (rec.r50 ? '已提醒' : '未提醒'));
+  } catch { /* 提醒状态读不到不影响自检 */ }
   const ws = env.resolveWs(exec);
   let wsOk = false;
   try { wsOk = fs.existsSync(path.join(ws, '_Control_Center')); } catch { wsOk = false; }
@@ -162,7 +167,7 @@ function diagText(env, state, exec) {
     const mv = typeof env.moveInfo === 'function' ? env.moveInfo() : null;
     if (mv) out.push('迁移      ' + mv.phase + ' · ' + mv.src + (mv.dst ? '  →  ' + mv.dst : ''));
   } catch { /* ignore */ }
-  out.push('配置      warn=' + env.cfg.warnRatio + ' handover=' + env.cfg.handoverRatio + ' hard=' + env.cfg.hardRatio + ' max=' + env.cfg.maxCompactions);
+  out.push('配置      remind=' + env.cfg.remindRatio + '·' + env.cfg.remind2Ratio + ' handover=' + env.cfg.handoverRatio + ' pureWindow=' + env.cfg.pureWindowRatio + ' hard=' + env.cfg.hardRatio + ' max=' + env.cfg.maxCompactions);
   if (typeof env.handoverFor === 'function') {
     try {
       const hp = env.handoverFor(exec);
@@ -225,7 +230,7 @@ export function pmStatusTool(env, state) {
       additionalProperties: false,
       properties: {
         view: { type: 'string', enum: VIEWS, description: '缺省 phase' },
-        threshold: { type: 'number', description: 'view=brief：预警阈值百分比（默认 ' + w.warnValue + '）' },
+        threshold: { type: 'number', description: 'view=brief：预警阈值百分比（默认 ' + w.remindValue + '）' },
         simulateRatio: { type: 'number', description: 'view=phase：演练用比例替代真实水位（0-1），不写任何状态' },
         sessions: { type: 'array', items: { type: 'string' }, description: 'view=tokens：会话 id 列表' },
         slack: { type: 'number', description: 'view=drift：容忍轮数（默认 3）' },

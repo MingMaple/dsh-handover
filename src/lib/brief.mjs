@@ -41,8 +41,10 @@ export function composeBrief(input) {
     out.push('水位   无法读取，需人工判断');
   } else {
     const pct = (input.selfUsed / input.selfWin) * 100;
-    const warn = cfg.warnRatio === undefined ? 0.32 : cfg.warnRatio;
-    out.push("水位   " + pct.toFixed(1) + "%（" + thousands(input.selfUsed) + " / " + thousands(input.selfWin) + "）→ " + (pct >= warn * 100 ? "已过阈值，该写交接" : "可继续"));
+    const r1 = (cfg.remindRatio === undefined ? 0.35 : cfg.remindRatio) * 100;
+    const r2 = (cfg.remind2Ratio === undefined ? 0.5 : cfg.remind2Ratio) * 100;
+    const tail = pct >= r2 ? '已过 50% 档，做完当前小步骤即停' : pct >= r1 ? '已过 35% 档，该收束并刷新交接' : '可继续';
+    out.push("水位   " + pct.toFixed(1) + "%（" + thousands(input.selfUsed) + " / " + thousands(input.selfWin) + "）→ " + tail);
   }
   const gate = input.gate;
   if (!gate || gate.error) {
@@ -59,7 +61,7 @@ export function composeBrief(input) {
     const skipProjects = new Set(scan.skip.map((r) => r.project));
     out.push("活跃   " + notifProjects.size + " 个项目，需要通知 " + scan.notify.length + " 个会话：" + (scan.notify.length ? scan.notify.map((r) => r.project + "(" + sidShort(r.sid) + ",在任)").join("、") : "无"));
     out.push("沉默   " + skipProjects.size + " 个项目，跳过 " + scan.skip.length + " 个会话（不唤醒，省 token）");
-    if (scan.hot.length) out.push("预警   " + scan.hot.length + " 个会话已进预警区（≥" + Math.round(scan.warn) + "%）—— 全为已交出的旧会话则可忽略");
+    if (scan.hot.length) out.push("预警   " + scan.hot.length + " 个会话已过 35% 线 —— 全为已交出的旧会话则可忽略");
   }
   if (input.drift) {
     out.push('Δ交接  ' + driftVerdict(input.drift));
@@ -69,6 +71,6 @@ export function composeBrief(input) {
     out.push('Δ交接  读不到（会话日志不可用）');
   }
   if (input.advice && input.advice.text) out.push('阶段   ' + input.advice.text);
-  out.push('提示   ' + (input.ok ? '按「活跃」名单逐个用 peer（action="send"）广播本会话 id 并记回 §3；可正常开始作业' : '本会话已过阈值或闸门异常，应先收齐交接，再开展新任务'));
+  out.push('提示   ' + (input.ok ? '按「活跃」名单逐个用 peer（action="send"）广播本会话 id 并记回 §3；可正常开始作业' : '本会话已过 35% 线或闸门异常，应先收齐交接，再开展新任务'));
   return out;
 }

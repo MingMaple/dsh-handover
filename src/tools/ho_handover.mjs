@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { readHandover, writeHandover, archiveStamp, archiveFileName } from '../lib/handover-io.mjs';
-import { archiveDirFor } from '../lib/role.mjs';
+import { archiveDirFor, assertTaskName } from '../lib/role.mjs';
 
 function noPath(input) {
   const reason = input && input.reason ? input.reason : '未知原因';
@@ -23,7 +23,7 @@ export function pmHandoverTool(env) {
   return {
     name: nameOf('handover'),
     description:
-      '读写、追加、归档本会话自己的交接；写前备份、写后按角色体检。',
+      '读写、追加、归档交接；项目与杂项读写自己的交接，全局可用 task 指向某个全局任务。写前备份、写后按角色体检。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -32,16 +32,31 @@ export function pmHandoverTool(env) {
         action: { type: 'string', enum: ['read', 'write', 'append', 'archive'], description: 'read | write | append | archive' },
         text: { type: 'string', description: 'write/append 时的正文（read/archive 忽略）' },
         path: { type: 'string', description: '覆盖默认路径（演练或强制指定时用）' },
+        task: { type: 'string', description: '全局会话读写某个全局任务的交接：_Control_Center/tasks/<任务>/Handover.md' },
       },
     },
     output: textOutput(),
     async execute(args, exec) {
       const ws = env.resolveWs(exec);
       const info = env.roleOf(exec);
-      const target = args.path
-        ? { path: args.path, kind: info.role === 'project' ? 'project' : info.role === 'misc' ? 'misc' : 'global', role: info.role, project: info.project, task: info.task }
-        : env.handoverFor(exec);
+      const taskName = String(args.task || '').trim();
+      let target = null;
+      if (taskName) {
+        if (info.role !== 'global') throw new Error('task 参数只对全局会话开放');
+        assertTaskName(taskName);
+        target = {
+          path: path.join(ws, '_Control_Center', 'tasks', taskName, 'Handover.md'),
+          kind: 'project', role: 'global-task', task: taskName,
+        };
+      } else {
+        target = args.path
+          ? { path: args.path, kind: info.role === 'project' ? 'project' : info.role === 'misc' ? 'misc' : 'global', role: info.role, project: info.project, task: info.task }
+          : env.handoverFor(exec);
+      }
       if (!target || !target.path) return { text: noPath(target) };
+      const snapOpts = taskName
+        ? { kind: target.kind, info: { role: 'misc', task: taskName }, snapshotDir: path.join(ws, '_Temp', '_Global', 'tasks', taskName, 'Snapshots') }
+        : { kind: target.kind, info };
 
       if (args.action === "read") {
         const r = readHandover(target.path);
@@ -52,7 +67,7 @@ export function pmHandoverTool(env) {
         const src = readHandover(target.path);
         if (src.text === null) throw new Error("要归档的交接不存在：" + target.path);
         const stampText = archiveStamp(new Date());
-        const dir = archiveDirFor(ws, info);
+        const dir = taskName ? path.join(ws, '_Archives', '_Global', 'tasks', taskName, 'Handover') : archiveDirFor(ws, info);
         fs.mkdirSync(dir, { recursive: true });
         // 命名按 Handover_Rules §4.2：<原文件名>_<YYYYMMDD_HHMMSS>.md；同一秒重复归档加 -2、-3。
         let dest = path.join(dir, archiveFileName(target.path, stampText));
@@ -72,9 +87,10 @@ export function pmHandoverTool(env) {
         throw new Error("未知 action：" + String(args.action) + "（只能是 read | write | append | archive）");
       }
       if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("write/append 需要 text");
-      const res = writeHandover(ws, target.path, args.text, args.action === "append" ? "append" : "write", { kind: target.kind, info });
+      const res = writeHandover(ws, target.path, args.text, args.action === "append" ? "append" : "write", snapOpts);
       const out = [];
-      out.push("已写入 " + res.path + "（" + res.bytes + " B）· 角色 " + info.role + (target.kind !== 'global' ? "（" + (info.project || info.task) + "）" : ""));
+      const scope = taskName ? '全局任务「' + taskName + '」' : (target.kind !== 'global' ? '（' + (info.project || info.task) + '）' : '');
+      out.push("已写入 " + res.path + "（" + res.bytes + " B）· 角色 " + (taskName ? 'global-task' : info.role) + scope);
       out.push("备份 " + (res.backup || "（原文件不存在，无需备份）"));
       out.push("体检 " + res.verdict + (res.reasons.length ? "" : " · 结构齐备"));
       for (const r of res.reasons) out.push("  - " + r);

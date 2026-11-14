@@ -16,6 +16,8 @@ import { readRoles, resolveRole, ROLE_LABEL, sessionMeta } from './role.mjs';
 import { listConsent } from './consent.mjs';
 import { listProfiles } from './profile.mjs';
 import { loadOffice, readRegistryProjects, KIND_LABEL } from './office.mjs';
+import { checkRegistries } from './system.mjs';
+import { legacyInfo } from './legacy.mjs';
 
 function guard(fn, fallback) {
   try { return fn(); } catch (e) { return { ...fallback, error: String(e && e.message ? e.message : e) }; }
@@ -143,7 +145,7 @@ export function buildStatus(env, extra) {
   const info = extra || {};
   const ws = routeWorkspace(env);
   const found = hasCenter(ws);
-  const warn = Math.round((env.cfg.warnRatio || 0.32) * 100);
+  const warn = Math.round((env.cfg.remindRatio || 0.35) * 100);
   const duty = loadDuty(ws);
   const onDuty = (sid) => (duty.map.size ? duty.map.has(String(sid || '')) : true);
   const dutyOf = (sid) => duty.map.get(String(sid || '')) || null;
@@ -159,10 +161,11 @@ export function buildStatus(env, extra) {
     },
     workspace: { root: ws, found },
     ratios: guard(() => ({
-      warn: Math.round((env.cfg.warnRatio !== undefined ? env.cfg.warnRatio : 0.32) * 100),
+      remind: Math.round((env.cfg.remindRatio !== undefined ? env.cfg.remindRatio : 0.35) * 100),
+      remind2: Math.round((env.cfg.remind2Ratio !== undefined ? env.cfg.remind2Ratio : 0.5) * 100),
       handover: Math.round((env.cfg.handoverRatio !== undefined ? env.cfg.handoverRatio : 0.35) * 100),
       hard: Math.round((env.cfg.hardRatio !== undefined ? env.cfg.hardRatio : 0.85) * 100),
-    }), { warn: 32, handover: 35, hard: 85 }),
+    }), { remind: 35, remind2: 50, handover: 35, hard: 85 }),
     guardLast: guard(() => env.guardLast(), null),
     extraPrompt: guard(() => (typeof env.extraPrompt === 'function' ? env.extraPrompt() : ''), ''),
     extraPromptEnabled: guard(() => (typeof env.extraPromptEnabled === 'function' ? env.extraPromptEnabled() : false), false),
@@ -219,6 +222,18 @@ export function buildStatus(env, extra) {
       fail: bad.length,
     };
   }, { global: { verdict: '读不到', reasons: [] }, projects: [], misc: [], fail: 0 });
+
+  out.systems = guard(() => {
+    const r = checkRegistries(ws);
+    return { rows: r.rows.map((x) => ({ label: x.label, rel: x.rel, exists: x.exists, entries: x.entries, bad: x.bad.length })), missing: r.missing };
+  }, { rows: [], missing: 0 });
+
+  try {
+    const legacy = legacyInfo(ws);
+    if (legacy.exists) {
+      out.notes.push('检测到旧文档定位（_Control_Center/records/docmap/）：执行 ho_workspace(action="migrate") 并入体系注册。');
+    }
+  } catch { /* 旧目录检查失败不影响整页 */ }
 
   out.sessions = guard(() => {
     const wide = scanSessions({
@@ -322,8 +337,8 @@ export function buildStatus(env, extra) {
       cutoff: stampTz(wide.cutoffMs),
       silentHours: wide.silentHours,
       verdict: hot
-        ? hot + ' 个在任会话已进预警区（不低于 ' + warn + '%），应先收齐交接，再换会话'
-        : '没有在任会话进入预警区。',
+        ? hot + ' 个在任会话已过 ' + warn + '% 线，应先收齐交接，再换会话'
+        : '没有在任会话超过 ' + warn + '% 线。',
     };
   }, { rows: [], notify: [], hot: 0, unknown: 0 });
 

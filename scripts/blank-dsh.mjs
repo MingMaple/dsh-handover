@@ -86,12 +86,18 @@ ok(fs.existsSync(WS), '全局根已建', WS);
 for (const rel of [
   '_Control_Center/records/Global_Handover.md',
   '_Control_Center/records/Global_Changelog.md',
+  '_Control_Center/records/systems.md',
   '_Control_Center/rules/Workspace_Charter.md',
   '_Control_Center/templates/Prompt_Templates.md',
+  '_Control_Center/templates/Plan.skeleton.md',
+  '_Control_Center/templates/System.skeleton.md',
   '_Control_Center/rules/Handover_Rules.md',
   '_Control_Center/rules/Migration_Rules.md',
   '_Control_Center/rules/Misc_Task_Standard.md',
+  '_Control_Center/rules/Delegation_Rules.md',
   '_Control_Center/user/Writing_Rules.md',
+  '_Control_Center/standards/写作规范/README.md',
+  '_Control_Center/standards/写作规范/依据_论文.md',
 ]) {
   ok(fs.existsSync(path.join(WS, rel)), '铺好 ' + rel);
 }
@@ -119,6 +125,7 @@ const calls = [
   ['ho_backup', { action: 'check', items: ['global'] }],
   ['ho_changelog', { summary: '空白验收写入一行' }],
   ['ho_workspace', { action: 'list' }],
+  ['ho_workspace', { action: 'migrate' }],
   ['ho_docmap', { action: 'read' }],
   ['peer', { action: 'list' }],
   ['peer', { action: 'status', session_id: 'session-blank-test' }],
@@ -137,11 +144,12 @@ for (const rel of [
   '_Control_Center/rules/Handover_Rules.md',
   '_Control_Center/rules/Migration_Rules.md',
   '_Control_Center/rules/Misc_Task_Standard.md',
+  '_Control_Center/rules/Delegation_Rules.md',
   '_Control_Center/user/Writing_Rules.md',
   '_Control_Center/templates/Prompt_Templates.md',
   '_Control_Center/records/Global_Changelog.md',
 ]) fs.rmSync(path.join(WS, rel), { force: true });
-for (const doc of ['handover_rules', 'migration_rules', 'misc_standard', 'writing_rules']) {
+for (const doc of ['handover_rules', 'migration_rules', 'misc_standard', 'delegation_rules', 'writing_rules']) {
   const r = await run('ho_charter', { doc }, WS, 'session-blank-test', '空白验收');
   ok(!r.err && r.text.length > 50 && /内置/.test(r.text), 'ho_charter doc=' + doc + ' 用内置默认', r.err || String(r.text.length));
 }

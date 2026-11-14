@@ -1,8 +1,8 @@
 /**
- * 逐角色的系统提示段与一次性引导。
- * 职责边界：本文件只写会话定位、写入范围、交接路径、水位与换任、向全局汇报。
- * 其他行为约束（不虚构、最小改动、文风等）不属于本插件，由用户按需通过「全局前置提示词」注入。
- * 文字一律标准书面语；代码里不用反引号拼提示词。
+ * 逐角色的系统提示段与一次性引导（1.0）。
+ * 职责边界：本文件只写会话定位、写入范围、任务流程、水位与压缩、交接与体系注册、暂任与协作。
+ * 其他行为约束由用户通过「全局前置提示词」注入。
+ * 所有角色共用同一份任务流程文本，避免同一规则多处维护。
  */
 import { handoverPathFor, scopeLabel } from './role.mjs';
 import { handoverRuleText, watermark } from './facts.mjs';
@@ -10,61 +10,91 @@ import { consentPromptLines } from './consent.mjs';
 
 const NL = String.fromCharCode(10);
 
-/** 完整流程的指针句（三档角色共用）。 */
+/** 插件完整手册的指针（三档角色共用）。 */
 const RUNTIME_POINTER = '细节按节取：ho_charter(doc="runtime", section=…)。';
 
-/**
- * 通用规范的位置与查找范围（三档角色共用，必须同一句）。
- * 规范按名字被引用，本库（会话所在的工作区）与全局规范库都在范围内；细节写在规范库的 README 里。
- */
+/** 通用规范的位置与查找范围（三档角色共用，必须同一句）。 */
 const STANDARDS_POINTER = '通用规范在 _Control_Center/standards/（每条一个子目录）；当前用户提到「按某某规范进行」时，本库（本会话所在的工作区）与该目录都算查找范围。';
 
-/**
- * 写入范围（三档角色共用前一句）：未指明写本库；明确「写入通用规范库」一类要求才写规范库。
- * 后一句按角色分叉：全局直接写，项目与杂项报全局。
- */
+/** 写入范围：未指明写本库；明确写通用规范才写规范库。 */
 const STANDARDS_WRITE_PREFIX = '当前用户提到「把某某写成规范」时：未指明范围就写本库；';
 const STANDARDS_WRITE_TARGET = '说「写入通用规范库」「写成通用规范」「写成共用规范」的';
 const STANDARDS_WRITE_GLOBAL = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，写 _Control_Center/standards/。';
 const STANDARDS_WRITE_SCOPED = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，不得写 _Control_Center，报全局。';
 
-/**
- * 复用准则：全局、项目、杂项三处必须同一句。
- * 派活与新建会话前先查在任，低水位在任直接复用；确需另建才新建。
- */
+/** 写作规范指针：只有一行，不注入正文。 */
+const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/README.md（W-01 至 W-42）；全部产出按它执行。';
+
+/** 暂任与协作的落点：规范与提示词随任务库独立。 */
+const DELEGATION_POINTER = '暂任与协作：规范在任务库 rules/Delegation_Rules.md，协作模板在 templates/Prompt_Templates.md。';
+
+/** 复用准则：全局、项目、杂项三处同一句。 */
 function reuseRule(cfg) {
   return '指派任务或新建会话前，先用 ho_office（空参数）查一次在任；同一类别已有在任且其水位低于 '
-    + watermark(cfg).warn + ' 时，直接用 peer（action="send"）复用，不新建；确需另建（原会话不可用、需并行、当前用户明确要求）时才新建。';
+    + watermark(cfg).handover + ' 时，直接用 peer（action="send"）复用，不新建；确需另建（原会话不可用、需并行、当前用户明确要求）时才新建。';
 }
 
-/** 全局会话的常驻段：五节骨架（身份、权限、节奏、交接、按需取用）。 */
+/** 两级任务流程全文（三档角色共用）。 */
+function workflowLines(cfg) {
+  return [
+    '三、任务流程',
+    '- 层级一（轻量）：单文件修改、局部命名、语法修复、格式化、内容读取，直接执行，跳过计划与查证。',
+    '- 当前用户说「讨论一下」，或你已就流程问过当前用户时，执行前须再确认；当前用户明确「直接做」除外。',
+    '- 层级二（繁重）：新增功能、多文件联动、重构、架构或接口变更，按下述顺序执行。',
+    '- 先判断纯窗口是否可能超过 40%（不计当前占用）。超过时，计划改为引入子智能体，你只做统筹与收尾；子智能体提示词由你放入规范文件地址与体系说明，插件不向其上下文注入内容。',
+    '- 写行动计划 PLAN.md（任务根），随后回看上下文核对；发现缺口时给出方案询问当前用户，优劣不明时并列全部方案。',
+    '- 当前用户确认后执行。余量不足时先刷新交接，再请求压缩或换任；恢复后按「先读交接、再读计划、后执行」。',
+    '- 每轮只做与当前任务直接相关的事；未经要求的检查不设立，工具正常返回即予采信。',
+  ];
+}
+
+/** 上下文与压缩段落（三档角色共用）。 */
+function rhythmLines(cfg) {
+  const w = watermark(cfg);
+  return [
+    '四、上下文与压缩',
+    '- 水位 ' + w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，由插件在系统提示中后台注入，不生成用户消息、不独立成轮。',
+    '- 判断标准：' + w.remind + ' 档为完成剩余流程后不超过 ' + Math.round((cfg && cfg.margin1 !== undefined ? cfg.margin1 : 0.45) * 100) + '%；'
+      + w.remind2 + ' 档为不超过 ' + Math.round((cfg && cfg.margin2 !== undefined ? cfg.margin2 : 0.55) * 100) + '%。',
+    '- ' + handoverRuleText(cfg) + '用户可随时要求换任。',
+    '- 压缩前先刷新交接；压缩后先读交接、再读计划、后执行。',
+    '- 压缩须当前用户点击「授权压缩」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。',
+    '- 关键步骤传 at_risk=true 暂缓；85% 硬上限保留。',
+  ];
+}
+
+/** 全局会话的常驻段：身份、权限、流程、节奏、交接与体系、按需取用。 */
 export function globalManual(opts) {
   const o = opts || {};
   const lines = [
     'dsh-handover 运行期（全局）',
     '',
     '一、身份',
-    '本会话为全局管理会话，协调会话、维护规则与交接。',
+    '本会话为全局管理会话，协调会话、维护登记与交接。',
     '',
     '二、权限',
     '可写 _Control_Center、_Project_Meta 与项目结构；Projects 及各项目库内文件只读，不得代写；项目内作业不代办。',
-    '新建会话与设定角色仅属全局；会话间可直接 peer（action="send"）；换任须当前用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed，不再请求全局。',
+    '新建会话与设定角色仅属全局；会话间可直接 peer（action="send"）；换任须当前用户授权（/allow-succeed 或设置页）后由在任会话调用 ho_succeed。',
     reuseRule(o.cfg),
     '',
-    '三、节奏',
-    handoverRuleText(o.cfg),
-    '压缩须当前用户点击「授权压缩」，再写交接并 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait，不再唤醒。confirm 仅表意图，授权以点击为准。关键步骤传 at_risk=true 暂缓。',
+    ...workflowLines(o.cfg),
     '',
-    '四、交接',
+    ...rhythmLines(o.cfg),
+    '',
+    '五、交接与体系',
     '交接：_Control_Center/records/Global_Handover.md。',
+    '体系注册：_Control_Center/records/systems.md 只列各任务体系文件的路径；本段只注入这些引用，不注入各任务正文。',
+    '全局任务库：_Control_Center/tasks/<任务名>/；每个任务有独立交接与计划，任务可一键独立为项目或杂项会话。',
+    WRITING_POINTER,
+    DELEGATION_POINTER,
     '',
-    '五、按需取用',
+    '六、按需取用',
     RUNTIME_POINTER,
     STANDARDS_POINTER,
     STANDARDS_WRITE_GLOBAL,
   ];
-  const dm = docmapBlock(o);
-  if (dm.length) lines.push('', ...dm);
+  const sys = o.system || '';
+  if (sys) lines.push('', sys);
   const cs = consentBlock(o);
   if (cs.length) lines.push('', ...cs);
   const mv = moveLine(o);
@@ -72,13 +102,15 @@ export function globalManual(opts) {
   return lines.join(NL);
 }
 
-/** 项目与杂项会话的提示段：只写本角色自己的写入范围、交接与水位。 */
+/** 项目与杂项会话的提示段：写入范围、交接、流程、体系注册内容、规范指针。 */
 export function scopedManual(info, opts) {
   const o = opts || {};
   const hp = handoverPathFor(o.ws, info);
   const label = scopeLabel(info);
   const lines = [
     'dsh-handover 运行期（' + label + '）',
+    '',
+    '一、身份与边界',
     info.role === 'project'
       ? '只可写本库与元数据目录，不得写 _Control_Center 及其他项目。'
       : '只可写本任务目录与元数据目录，不得写 _Control_Center、Projects 及其他任务。',
@@ -93,16 +125,25 @@ export function scopedManual(info, opts) {
       : '临时与归档：_Temp/_Misc/' + info.task + '/Snapshots/、_Archives/_Misc/' + info.task + '/。',
     hp.path
       ? '交接：' + hp.path + '（ho_handover 默认）。'
-      : '交接路径未解析（缺角色或项目名），请先在设置页设定角色。',
-    handoverRuleText(o.cfg) + '压缩须当前用户点击「授权压缩」，再由本会话执行 ho_checkpoint(confirm=true)；收尾时传 resume=wait，不再唤醒。',
-    '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).warn + ' 且已写交接、需当前用户决定、全局口径有误时向全局报告；任务完成不报全局。',
-    reuseRule(o.cfg),
+      : '交接路径未解析（缺角色或名称），请先在设置页设定角色。',
+    '名称已注册，不得自行修改；需要改名由全局处理。',
+    '',
+    ...workflowLines(o.cfg),
+    '',
+    ...rhythmLines(o.cfg),
+    '',
+    '五、交接与体系',
+    '会话间可直接 peer（action="send"）；默认沉默：仅在水位 ' + watermark(o.cfg).remind + ' 且已写交接、需当前用户决定、全局口径有误时向全局报告；任务完成不报全局。',
+    WRITING_POINTER,
+    DELEGATION_POINTER,
+    '',
+    '六、按需取用',
     RUNTIME_POINTER,
     STANDARDS_POINTER,
     STANDARDS_WRITE_SCOPED,
   ];
-  const dm = docmapBlock(o);
-  if (dm.length) lines.push('', ...dm);
+  const sys = o.system || '';
+  if (sys) lines.push('', sys);
   const cs = consentBlock(o);
   if (cs.length) lines.push('', ...cs);
   const mv = moveLine(o);
@@ -117,12 +158,6 @@ function moveLine(opts) {
   return '已迁移至 ' + (mv.dst || '?') + '；' + (mv.src || '?') + ' 现为链接，勿再手工迁移。';
 }
 
-/** 文档定位（docmap）注入：空 map 不占位。 */
-function docmapBlock(opts) {
-  const m = opts && opts.docmap;
-  return m ? [m] : [];
-}
-
 /** 用户已授权的提示行：每种有效授权一行，无授权不占位。 */
 function consentBlock(opts) {
   try { return consentPromptLines(opts && opts.consents); } catch { return []; }
@@ -135,40 +170,31 @@ export function manualFor(info, opts) {
   return '';
 }
 
-/** 「整理所属文件」一次性指令：设定项目或杂项角色后投递，唤醒它自己做。 */
-export function organizeMessageFor(info, opts) {
+/**
+ * 设定角色后投递的一次性首轮消息：讨论体系、注册名称；互转时先说明迁移结果。
+ * 由 applyRole 在写角色表之后投递，不改变角色本身。
+ */
+export function firstRoundMessageFor(info, opts) {
   const o = opts || {};
   const role = info && info.role ? info.role : 'plain';
   if (role === 'plain') return '';
-  const head = '【dsh-handover 角色设定】本会话已设定为「' + scopeLabel(info) + '」。请按下列结构核对自身文件：缺失的目录应建立，位置不当的文件应归位；既有文件就地保留，不得删除或修改内容。';
-  if (role === 'project') {
-    const p = info.project;
-    return [
-      head,
-      '先通读本库，确定本项目的骨架：代码与文档主体、必需文件、临时与归档位置。构建型、动画型等项目不必套用插件类项目的文档集。',
-      '把结论写入 _Project_Meta/' + p + '/project.profile.json；字段格式见 ho_profile(action=presets)。',
-      '写入后调用 ho_profile(action=register) 校验并登记；返回缺失项时按清单补齐。',
-      '约束：仅可改动本库与 _Project_Meta/' + p + '/；不得改动 _Control_Center 及其他项目；移动较大文件前先执行 ho_backup(action="snapshot")。可用工具：ho_backup、ho_handover、ho_status、ho_checkpoint、ho_profile、peer（action="send"）。',
-      '完成后以一句话向当前用户说明「注册了哪些骨架项、仍缺哪些」，无需每轮回执。',
-    ].join(NL);
+  const label = scopeLabel(info);
+  const lines = [];
+  lines.push('【dsh-handover 角色设定】本会话已设为「' + label + '」。');
+  if (o.previousRole === 'project' || o.previousRole === 'misc') {
+    if (o.previousRole !== role) {
+      lines.push(o.migrate === 'direct'
+        ? '已按「直接建」处理：旧文件未搬动，请按体系模板建立本任务体系。'
+        : '已按标准流程完成迁移：' + (o.moveNote || '旧库已快照后移动，位置见交接。'));
+      lines.push('若当前用户希望改用另一种方式，请说明差异，不要自行再搬一次。');
+    } else {
+      lines.push('角色未变：沿用既有体系与注册名。');
+    }
+  } else {
+    lines.push('首轮固定事项：一、了解本会话既有产出与任务；二、读体系模板并初拟体系；三、与当前用户二选一——全权交你直接建成并注册，或讨论定稿后建成并注册。');
   }
-  if (role === 'misc') {
-    const t = info.task;
-    return [
-      head,
-      '先通读本任务目录，确定本任务的骨架：工作文件、规则文件、交接、快照与归档位置。',
-      '把结论写入 _Misc/tasks/' + t + '/task.profile.json；字段格式见 ho_profile(action=presets)。',
-      '写入后调用 ho_profile(action=register) 校验并登记。',
-      '约束：仅可改动 _Misc/tasks/' + t + '/、_Temp/_Misc/' + t + '/、_Archives/_Misc/' + t + '/；_Control_Center、Projects 与其他任务不得写入。工具：ho_backup、ho_handover、ho_status、ho_checkpoint、ho_profile、peer（action="send"）。',
-      '完成后以一句话说明改动即可。',
-    ].join(NL);
-  }
-  return [
-    head,
-    '- _Control_Center/{records,rules,standards,user,templates,tools} — 交接、规则、通用规范、写作规范、模板、脚本。',
-    '- _Project_Meta/Registry.md 与各项目元数据目录。',
-    '- Projects/、_Misc/tasks/、_Archives/、_Temp/ — 只维护结构，不代写项目库内文件。',
-    '约束：项目库内文件由该项目会话自行整理；骨架由项目自己注册，缺则派发，不代写。',
-    '完成后以一句话汇报即可。',
-  ].join(NL);
+  lines.push('名称：' + (o.name ? '本会话注册名为「' + o.name + '」，不得自行修改。' : '本会话尚无注册名。与当前用户确认名称后，用 ho_office(action="register", name="…") 注册；注册后不得自行修改，改名须找全局。'));
+  lines.push('体系注册：用 ho_docmap(action="write", entries=[…]) 写入目录结构、规范文件与计划；模板见任务库 rules 与 templates 目录。');
+  lines.push('约束：只改动本会话所属范围；不每轮回执，不发送确认类消息。');
+  return lines.join(NL);
 }

@@ -64,20 +64,19 @@ export function pmCheckpointTool(env) {
         out.push('下一步：用 ho_handover(action=write) 写交接，再由全局 ho_sessions(action="new") 建新会话。');
         return { text: out.join(NL) };
       }
-      if (adv.action === "pause" && args.at_risk === true && args.force !== true) {
-        out.push("已暂停（关键步骤）：" + adv.reason);
-        out.push("到阶段边界再调一次 ho_checkpoint（不带 at_risk 或带 force）。");
+      if (args.at_risk === true && args.force !== true && ratio !== null && ratio < (env.cfg.hardRatio || 0.85)) {
+        out.push("已暂停（关键步骤）：水位 " + ratioText + "，先完成当前小步骤再压；到阶段边界再调一次 ho_checkpoint（不带 at_risk 或带 force）。");
         return { text: out.join(NL) };
       }
       if (adv.action === "continue" && args.force !== true) {
-        out.push("水位未到线（" + ratioText + "）：不压。");
-        out.push("需要强制演练可加 force=true。");
+        out.push("水位未到可压缩线（" + ratioText + "）：不压。");
+        out.push("需要提前压缩时，先向当前用户说明理由并取得授权，再加 force=true；用户主动要求时同样处理。");
         return { text: out.join(NL) };
       }
       // 判断逻辑不动；只有判定可以压缩之后，才停下来问用户。
       if (args.confirm !== true) {
         out.push('判定：可以压缩（' + adv.reason + '）。');
-        out.push('水位 ' + ratioText + '，已压缩 ' + count.used + '/3。');
+        out.push('水位 ' + ratioText + '，已压缩 ' + count.used + '/' + env.cfg.maxCompactions + '。');
         out.push('压缩会丢历史并自动续跑 —— 先问当前用户「要压缩吗？」，回答同意后再调 ho_checkpoint(confirm=true)；不同意就保持原样。');
         return { text: out.join(NL) };
       }
@@ -107,13 +106,13 @@ export function pmCheckpointTool(env) {
       if (!cs.ok) {
         out.push('交接已写好，但**没有排压缩**：' + cs.reason + '。');
         out.push('授权方式（任选其一）：① 在聊天框发送 /allow-compact（最快，仅授权本会话）；② 在设置页的 dsh-handover 中点击「授权压缩」一次。授权有效期 5 分钟，其后须再调用 ho_checkpoint(confirm=true)。');
-        out.push('如此设限的原因：压缩会丢弃历史，而参数由 AI 自行填写——惟有当前用户在设置页当面点击的那一次，方视为同意。');
+        out.push('如此设限的原因：压缩会丢弃历史，而参数由 AI 自行填写；惟有当前用户点击的那一次，方视为同意。');
         return { text: out.join(NL) };
       }
-      // 成本提示：低于交接线强行压缩会白付一次摘要，且本轮前缀缓存失效。
+      // 成本提示：低于可压缩线强行压缩会白付一次摘要，且本轮前缀缓存失效。
       const handoverRatio = (env.cfg && env.cfg.handoverRatio) || 0.35;
       if (ratio !== null && ratio < handoverRatio) {
-        out.push('注意成本：当前水位 ' + (Math.round(ratio * 1000) / 10) + '% 低于交接线 ' + Math.round(handoverRatio * 100) + '% —— 属于提前压缩，会白付一次摘要调用，且本轮前缀缓存失效。');
+        out.push('注意成本：当前水位 ' + (Math.round(ratio * 1000) / 10) + '% 低于可压缩线 ' + Math.round(handoverRatio * 100) + '% —— 属于提前压缩，会白付一次摘要调用，且本轮前缀缓存失效。');
       }
       consumedConsent(meId);
       const n = count.used + 1;

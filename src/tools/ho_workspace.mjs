@@ -1,4 +1,4 @@
-/** ho_workspace —— 工作区生命周期：list / create / delete / init（首次建体系）＋ 全局根目录迁移。 */
+/** ho_workspace —— 工作区生命周期：list / create / delete / init / scaffold / migrate（旧体系迁移）＋ 全局根目录迁移。 */
 import fs from 'node:fs';
 import { nameOf } from '../lib/names.mjs';
 import path from 'node:path';
@@ -6,6 +6,8 @@ import { textOutput } from '../lib/output.mjs';
 import { NL } from '../lib/text.mjs';
 import { workspaceRows } from '../lib/registry.mjs';
 import { createGlobalWorkspace, ensureScaffold } from '../lib/scaffold.mjs';
+import { legacyInfo, migrateLegacyDocmaps } from '../lib/legacy.mjs';
+import { syncGlobalRefs } from '../lib/system.mjs';
 import { probeMove, startMove, moveStatus, cleanupOld, stageSwitch, repairLink, stageRetarget } from '../lib/mover.mjs';
 import { currentRoot } from '../lib/api.mjs';
 
@@ -37,7 +39,7 @@ export function pmWorkspaceTool(env) {
   return {
     name: nameOf('workspace'),
     description:
-      '工作区：init 首次建全局体系、scaffold 补齐缺失目录与说明、list、create、delete、move-* 搬整个全局根目录。删除只删注册。',
+      '工作区：init 首次建全局体系、scaffold 补齐缺失目录与说明、migrate 旧体系迁移、list、create、delete、move-* 搬整个全局根目录。删除只删注册。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -45,8 +47,8 @@ export function pmWorkspaceTool(env) {
       properties: {
         action: {
           type: 'string',
-          enum: ['init', 'scaffold', 'list', 'create', 'delete', 'move-probe', 'move', 'move-switch', 'move-status', 'move-retarget', 'move-repair', 'move-cleanup'],
-          description: 'init / scaffold / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup',
+          enum: ['init', 'scaffold', 'migrate', 'list', 'create', 'delete', 'move-probe', 'move', 'move-switch', 'move-status', 'move-retarget', 'move-repair', 'move-cleanup'],
+          description: 'init / scaffold / migrate / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup',
         },
         parent: { type: 'string', description: 'init 用：目标父目录绝对路径（不存在会创建）；全局根建在它里面' },
         name: { type: 'string', description: 'init 用：全局根目录名，默认 _Workspace' },
@@ -129,7 +131,36 @@ export function pmWorkspaceTool(env) {
         out.push('  新建目录 ' + r.created.length + ' 个：' + (r.created.length ? r.created.join('、') : '（无缺失）'));
         out.push('  新建文件 ' + r.written.length + ' 个：' + (r.written.length ? r.written.join('、') : '（无缺失）'));
         out.push('  已存在未覆盖 ' + r.skipped.length + ' 个' + (r.skipped.length ? '：' + r.skipped.join('、') : ''));
+        if (r.missingTemplates && r.missingTemplates.length) {
+          out.push('  内置模板缺失 ' + r.missingTemplates.length + ' 个（未写空文件）：' + r.missingTemplates.join('、'));
+        }
         out.push('只新建、不覆盖、不删：已有文件的内容一字未改。');
+        const legacy = legacyInfo(root);
+        if (legacy.exists) out.push('提示：检测到旧文档定位（' + legacy.dir + '），执行 ho_workspace(action="migrate") 并入体系注册。');
+        return { text: out.join(NL) };
+      }
+
+      if (action === 'migrate') {
+        const root = currentRoot(env);
+        if (!root) throw new Error('未找到全局根（工作区未接入）');
+        const pre = legacyInfo(root);
+        if (!pre.exists) {
+          out.push('没有旧文档定位：' + pre.dir);
+          out.push('判定：无需迁移。');
+          return { text: out.join(NL) };
+        }
+        const r = migrateLegacyDocmaps(root);
+        out.push('旧文档定位迁移：' + (r.ok ? '完成' : '部分完成'));
+        out.push('  已并入体系注册 ' + r.converted.length + ' 份' + (r.converted.length ? '：' + r.converted.join('、') : ''));
+        out.push('  全局旧内容保留为工作区文档清单 ' + r.kept.length + ' 份' + (r.kept.length ? '：' + r.kept.join('、') : ''));
+        if (r.archived) out.push('  旧目录已归档（未删除）：' + r.archived);
+        for (const p of r.problems || []) out.push('  未迁移：' + p);
+        try {
+          const g = syncGlobalRefs(root);
+          out.push('  全局总注册已重建：' + g.rows.length + ' 个任务');
+        } catch (e) {
+          out.push('  全局总注册重建失败：' + String(e && e.message ? e.message : e));
+        }
         return { text: out.join(NL) };
       }
 
@@ -283,7 +314,7 @@ export function pmWorkspaceTool(env) {
         return { text: out.join(NL) };
       }
 
-      throw new Error('action 只能是 init / scaffold / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup');
+      throw new Error('action 只能是 init / scaffold / migrate / list / create / delete / move-probe / move / move-switch / move-status / move-retarget / move-repair / move-cleanup');
     },
   };
 }

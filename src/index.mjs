@@ -35,13 +35,16 @@ import {
   ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
   readRoles, writeRole, assertProjectName, assertTaskName,
 } from './lib/role.mjs';
-import { manualFor, organizeMessageFor } from './lib/manual.mjs';
+import { manualFor, firstRoundMessageFor } from './lib/manual.mjs';
 import { sendPrompt } from './lib/prompt.mjs';
 import { resolveShortSid } from './lib/api.mjs';
 import { routeWorkspace } from './lib/workspace.mjs';
 import { stampTz } from './lib/brief.mjs';
 import { grantConsent, activeConsentsFor } from './lib/consent.mjs';
-import { docmapBlock } from './lib/docmap.mjs';
+import { systemBlock, registrySignature } from './lib/system.mjs';
+import { reminderTextFor } from './lib/reminder.mjs';
+import { migrateIdentity } from './lib/identity.mjs';
+import { loadOffice, lineageKeyOf } from './lib/office.mjs';
 import { moveStatus } from './lib/mover.mjs';
 
 export const name = 'dsh-handover';
@@ -102,6 +105,8 @@ export function apply(ctx, config) {
   // 更早的内核忽略注册选项，只能退回 agent 作用域的 restrict；两条路径按能力二选一，不并行。
   const perStep = (() => { try { return !!(ctx.tools && typeof ctx.tools.resolve === 'function'); } catch { return false; } })();
   const sectionDispose = new Map();       // sessionId → 撤销提示段
+  const reminderDispose = new Map();      // sessionId → 撤销一次性提醒段
+  const systemSig = new Map();            // sessionId → 上次装配时的体系注册签名（热更新）
   const consentSig = new Map();           // sessionId → 上次装配时的授权签名（授权出现或过期时重装）
   const legacyRestrict = new Map();       // sessionId → 撤销限制（仅无按步解析的内核）
   const appliedRole = new Map();          // sessionId → 上次装配的角色
@@ -328,25 +333,53 @@ export function apply(ctx, config) {
     if (typeof old === 'function') { try { old(); } catch { /* 旧段已失效 */ } }
     sectionDispose.delete(sid);
     let text = '';
+    let ws = '';
     try {
-      const ws = workspaceForAgent(agent);
-      // 文档定位与授权状态都是「按会话现算」的：写盘后重装一次即可生效，不另开注入点。
-      const docmap = docmapBlock(ws, info);
+      ws = workspaceForAgent(agent);
+      // 体系注册与授权状态都是「按会话现算」的：写盘后重装一次即可生效，不另开注入点。
+      const system = systemBlock(ws, info);
       const consents = activeConsentsFor(sid);
-      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null, docmap, consents });
+      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null, system, consents });
       consentSig.set(sid, consents.map((r) => r.kind + ':' + r.until).join('|'));
+      systemSig.set(sid, registrySignature(ws, info));
     } catch (e) {
       initErrors.push('角色提示段：' + msgOf(e));
       return;
     }
     const sc = agent && agent.ctx ? agent.ctx : null;
-    if (!text || !sc || !sc.systemPrompt || typeof sc.systemPrompt.section !== 'function') return;
+    if (text && sc && sc.systemPrompt && typeof sc.systemPrompt.section === 'function') {
+      try {
+        sectionDispose.set(sid, sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
+      } catch (e) {
+        // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍在（宿主按 agent 持有，插件卸载不移除），
+        // 既无法移除也不能重复注册：视为已就位，沿用旧文本；换文本需重启 DSH 或让会话重建。
+        if (!/already registered/.test(msgOf(e))) initErrors.push('角色提示段：' + msgOf(e));
+      }
+    }
+    applyReminderSection(agent, sid, info);
+  }
+
+  /**
+   * 一次性提醒段：text 为函数，宿主每次装配系统提示时调用；命中阈值后写入状态并返回文本。
+   * 该段不生成用户消息、不独立成轮，符合 1.0 的后台提醒口径。
+   */
+  function applyReminderSection(agent, sid, info) {
+    const old = reminderDispose.get(sid);
+    if (typeof old === 'function') { try { old(); } catch { /* 旧段已失效 */ } }
+    reminderDispose.delete(sid);
+    const role = info && info.role ? info.role : 'plain';
+    if (role !== 'global' && role !== 'project' && role !== 'misc') return;
+    const sc = agent && agent.ctx ? agent.ctx : null;
+    if (!sc || !sc.systemPrompt || typeof sc.systemPrompt.section !== 'function') return;
     try {
-      sectionDispose.set(sid, sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
+      reminderDispose.set(sid, sc.systemPrompt.section({
+        name: 'dsh-handover:reminder',
+        order: 101,
+        text: reminderTextFor(cfg, sid),
+        interpolate: false,
+      }));
     } catch (e) {
-      // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍在（宿主按 agent 持有，插件卸载不移除），
-      // 既无法移除也不能重复注册：视为已就位，沿用旧文本；换文本需重启 DSH 或让会话重建。
-      if (!/already registered/.test(msgOf(e))) initErrors.push('角色提示段：' + msgOf(e));
+      if (!/already registered/.test(msgOf(e))) initErrors.push('提醒段：' + msgOf(e));
     }
   }
 
@@ -379,7 +412,7 @@ export function apply(ctx, config) {
     roleState.last = { sid, role: info.role, at: stampTz(Date.now()) };
   }
 
-  /** 设定角色：写角色表 → 存活会话当场换提示段（工具在下一步按新角色重算）→ 可选投整理指令。 */
+  /** 设定角色：写角色表 → 身份互转（如需）→ 存活会话当场换提示段 → 投首轮指令。 */
   async function applyRole(input) {
     const i = input || {};
     const sid = String(i.sessionId || '').trim();
@@ -393,6 +426,32 @@ export function apply(ctx, config) {
     // 名字要落成目录：不合法就当场拒绝，别等写角色表或拼路径时才失败。
     if (role === 'project') { try { assertProjectName(project); } catch (e) { return { ok: false, error: msgOf(e) }; } }
     if (role === 'misc') { try { assertTaskName(task); } catch (e) { return { ok: false, error: msgOf(e) }; } }
+    const ws = routeWorkspace(env);
+    // 无全局时才允许把会话设为全局；已有现任时只允许同一会话重复确认。
+    if (role === 'global') {
+      try {
+        const cur = loadOffice(ws).lineages['全局'] && loadOffice(ws).lineages['全局'].current;
+        if (cur && cur.sessionId && String(cur.sessionId) !== sid) {
+          return { ok: false, error: '已有全局在任：' + (cur.name || '') + '（' + cur.sessionId + '）。同一时刻只允许一个全局会话，须先在设置页处理现任。' };
+        }
+      } catch { /* 登记表读不到时不阻断，按首次设定处理 */ }
+    }
+    const before = readRoles(cfg).sessions[sid] || {};
+    const prevRole = String(before.role || '');
+    let migration = null;
+    // 项目与杂项互转：先快照再移动，或按用户选择直接建。
+    if ((prevRole === 'project' || prevRole === 'misc') && (role === 'project' || role === 'misc') && prevRole !== role) {
+      try {
+        migration = migrateIdentity({
+          ws,
+          prev: { role: prevRole, project: String(before.project || ''), task: String(before.task || '') },
+          next: { role, project, task },
+          mode: i.migrate === 'direct' ? 'direct' : 'auto',
+        });
+      } catch (e) {
+        return { ok: false, error: '身份互转未完成：' + msgOf(e) };
+      }
+    }
     try { writeRole(cfg, sid, { role, project, task, source: 'user' }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
     roleCache.delete(sid);
@@ -404,7 +463,18 @@ export function apply(ctx, config) {
     } catch { /* 活体装配失败不影响写盘 */ }
     let delivered = false;
     let error = '';
-    const msg = organizeMessageFor(info, { ws: routeWorkspace(env) });
+    let registeredName = '';
+    try {
+      const lin = { project: role === 'project' ? project : '', task: role === 'misc' ? task : '', kind: role };
+      const cur = loadOffice(ws).lineages[lineageKeyOf(lin.kind, lin.project, lin.task)];
+      if (cur && cur.current && String(cur.current.sessionId) === sid) registeredName = String(cur.current.name || '');
+    } catch { /* 读不到登记表时不写名字 */ }
+    const msg = firstRoundMessageFor(info, {
+      previousRole: prevRole,
+      migrate: i.migrate === 'direct' ? 'direct' : 'auto',
+      moveNote: migration ? migration.summary : '',
+      name: registeredName,
+    });
     if (i.wake !== false && msg) {
       try {
         const r = await sendPrompt(env.controller(), sid, msg, 'queue');
@@ -413,7 +483,12 @@ export function apply(ctx, config) {
         error = msgOf(e);
       }
     }
-    return { ok: true, role, project, task, live, delivered, error };
+    return {
+      ok: true, role, project, task, live, delivered, error,
+      migrated: migration ? migration.mode : '',
+      migrationSummary: migration ? migration.summary : '',
+      registeredName,
+    };
   }
   env.applyRole = applyRole;
 
@@ -613,10 +688,14 @@ export function apply(ctx, config) {
           const d = sectionDispose.get(sid);
           if (typeof d === 'function') { try { d(); } catch { /* ignore */ } }
           sectionDispose.delete(sid);
+          const rd = reminderDispose.get(sid);
+          if (typeof rd === 'function') { try { rd(); } catch { /* ignore */ } }
+          reminderDispose.delete(sid);
           const ld = legacyRestrict.get(sid);
           if (typeof ld === 'function') { try { ld(); } catch { /* ignore */ } }
           legacyRestrict.delete(sid);
           appliedRole.delete(sid);
+          systemSig.delete(sid);
           roleCache.delete(sid);
         } catch { /* ignore */ }
       });
@@ -631,10 +710,12 @@ export function apply(ctx, config) {
           const sid = String((h && h.id) || agent.id || '');
           if (!sid) return;
           const info = infoFor(sid, scopedMetaOf(h, sid));
-          // 角色没变也要看授权签名：用户刚从设置页或斜杠命令授权时，下一轮就该看见那一行。
+          // 角色没变也要看授权签名与体系注册签名：授权到达、注册改写后，下一轮就该看见新内容。
           let sig = '';
           try { sig = activeConsentsFor(sid).map((r) => r.kind + ':' + r.until).join('|'); } catch { sig = ''; }
-          if (appliedRole.get(sid) === info.role && consentSig.get(sid) === sig) return;
+          let sysSig = '';
+          try { sysSig = registrySignature(workspaceForAgent(agent), info); } catch { sysSig = ''; }
+          if (appliedRole.get(sid) === info.role && consentSig.get(sid) === sig && systemSig.get(sid) === sysSig) return;
           env.log('开轮前换装：' + sid + ' · 已装 ' + (appliedRole.get(sid) || '-') + ' · 目标 ' + info.role);
           applyRoleTo(agent, info);
         } catch (e) { env.log('开轮前装配失败：' + msgOf(e)); }

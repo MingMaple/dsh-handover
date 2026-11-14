@@ -1,8 +1,12 @@
 /** dsh-handover 配置：全部可被 profile patch 的 config 覆盖。 */
 export const DEFAULTS = {
   workspaceRoot: '',            // 留空则从会话 cwd 推导（向上找 _Control_Center 目录）
-  warnRatio: 0.32,
-  handoverRatio: 0.35,
+  remindRatio: 0.35,            // 35% 一次性后台提醒（不再设 32% 提醒线）
+  remind2Ratio: 0.50,           // 50% 一次性后台提醒
+  margin1: 0.45,                // 35% 档判断余量：完成剩余流程后不超过 45%
+  margin2: 0.55,                // 50% 档判断余量：完成剩余流程后不超过 55%
+  pureWindowRatio: 0.40,        // 纯窗口线：繁重任务预计超过 40% 时引入子智能体
+  handoverRatio: 0.35,          // 35% 后可压缩；更早仅助手建议或用户主动并授权
   hardRatio: 0.85,
   maxCompactions: 3,
   autoResume: true,
@@ -11,7 +15,7 @@ export const DEFAULTS = {
   rolesPath: '',           // 留空 = ~/.dsh/storages/dsh-handover.roles.json
   // 续跑提示：{n} {max} {handover} {role} 会被替换成真值；{handover} 是本会话自己的交接绝对路径。
   // 只在助手登记压缩时选 resume=continue（默认）才投递；resume=wait 表示已收尾，不唤醒。
-  resumePrompt: '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已被摘要替换。第一步：ho_handover(action=read) 取回本会话的交接（{handover}）；然后按 §2「下一步」继续（若 §2 已无待办，向当前用户一句话收尾并停止）。不要复述交接内容，不要重做已完成的事。完整流程：ho_charter(doc="runtime")。',
+  resumePrompt: '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已被摘要替换。按顺序执行：一、用 ho_handover(action=read) 取回本会话交接（{handover}）；二、用 ho_docmap(action="plan", mode="read") 读行动计划（没有计划则跳过）；三、按计划与交接 §2 继续；若 §2 已无待办，向当前用户一句话收尾并停止。不要复述交接内容，不要重做已完成的事。完整流程：ho_charter(doc="runtime")。',
   resumePromptUnknown: '【dsh-handover 自动续跑·第 {n}/{max} 次压缩】压缩已完成，历史已被摘要替换。本会话是普通会话，不参与交接；如需继续，请由全局会话为其指定角色。',
   compactTimeoutMs: 120000,
   compactAttempts: 3,
@@ -20,7 +24,7 @@ export const DEFAULTS = {
   wakeAuthority: 'on',     // 会话守卫硬拦：on / off（off＝连 peer 的 new 动作也不拦）
   directPeer: 'on',        // 会话之间直接 peer（action="send"）：on 允许（不经全局转述）；off 退回「只能向全局报告」的旧口径
   roleGating: 'on',        // 按角色裁剪工具与提示段：on / off（off＝所有会话都看得见全部工具）
-  reuseCheck: true,        // 建新会话前查在任会话水位（低于 warnRatio 拒绝）
+  reuseCheck: true,        // 建新会话前查在任会话水位（低于 handoverRatio 拒绝，建议复用）
   prepackMinAgeMin: 90,    // 打包前要求会话静止分钟数
   packFormat: 'auto',      // 归档格式：auto（有 7-Zip 用 7z，否则内置 tar.gz）、7z、tar
   sevenZipPath: '',        // 留空则自动探测 C:\Program Files\7-Zip\7z.exe

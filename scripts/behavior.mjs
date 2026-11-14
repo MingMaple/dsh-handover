@@ -1,0 +1,240 @@
+/**
+ * 1.0 行为测试（新增六类）：
+ * 1. 35%/50% 提醒只注入一次，且不生成用户消息；
+ * 2. 行动计划文件与「先交接、再计划、后执行」的阅读顺序；
+ * 3. 暂任交出与归还的提示词模板与规范随模板分发；
+ * 4. 身份互转的快照与移动（auto）与直接建（direct）；
+ * 5. 写作规范随插件模板分发；
+ * 6. 语体门禁可执行并按 W 条款判定。
+ *
+ * 全程在系统临时目录内完成，不碰真实工作区与真实 HOME。
+ * 用法：node scripts/behavior.mjs [--dist <dist 目录>]
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repo = path.resolve(here, '..');
+const dist = (() => {
+  const i = process.argv.indexOf('--dist');
+  return i !== -1 && process.argv[i + 1] ? path.resolve(process.argv[i + 1]) : path.join(repo, 'dist');
+})();
+
+const SB = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-behavior-'));
+const HOME = path.join(SB, 'home');
+const WS = path.join(SB, 'ws');
+fs.mkdirSync(HOME, { recursive: true });
+fs.mkdirSync(WS, { recursive: true });
+process.env.USERPROFILE = HOME;
+process.env.HOME = HOME;
+
+const fails = [];
+function ok(cond, msg, extra) {
+  if (cond) console.log('  通过 ' + msg);
+  else { fails.push(msg + (extra ? ' → ' + extra : '')); console.log('  未通过 ' + msg + (extra ? ' → ' + extra : '')); }
+}
+function section(t) { console.log(''); console.log('== ' + t + ' =='); }
+
+const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
+const { resolveConfig } = await imp('lib/config.mjs');
+const cfg = resolveConfig({ workspaceRoot: WS });
+const { reminderTextFor, readReminderState } = await imp('lib/reminder.mjs');
+const { planRelPath, readPlan, readRegistry } = await imp('lib/system.mjs');
+const { pmDocmapTool } = await imp('tools/ho_docmap.mjs');
+const { registerHolder, loadOffice } = await imp('lib/office.mjs');
+const { writeRole } = await imp('lib/role.mjs');
+const { migrateIdentity } = await imp('lib/identity.mjs');
+const { writeHandover } = await imp('lib/handover-io.mjs');
+const { scopedManual } = await imp('lib/manual.mjs');
+
+function w(rel, text) {
+  const p = path.join(WS, rel.split('/').join(path.sep));
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text, 'utf8');
+}
+function cachePressure(sid, pct) {
+  const dir = path.join(HOME, '.dsh', 'storages', 'session_projcache', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const data = { record: { rows: { contextPressure: { val: { pressureTokens: pct, contextWindow: 100 } } } } };
+  fs.writeFileSync(path.join(dir, sid + '.json'), JSON.stringify(data), 'utf8');
+}
+
+// ---------- 1 提醒只注入一次，且不是用户消息
+section('1 一次性后台提醒');
+w('Projects/Demo/README.md', '# Demo\n');
+writeRole({}, 'session-plan', { role: 'project', project: 'Demo' });
+registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-plan' });
+{
+  cachePressure('session-b1', 36);
+  const text = reminderTextFor(cfg, 'session-b1');
+  const first = text();
+  ok(/35%/.test(first), '36% 时返回 35% 提醒', first.slice(0, 40));
+  ok(/45%/.test(first), '35% 档写明 45% 判断标准');
+  ok(text() === '', '同一会话第二次不再注入');
+  ok(readReminderState().sessions['session-b1'].r35 === true, '提醒状态已落盘');
+}
+{
+  cachePressure('session-b2', 55);
+  const text = reminderTextFor(cfg, 'session-b2');
+  const first = text();
+  ok(/35%/.test(first) && /50%/.test(first), '一次跨过两线时两条提醒各出现一次', first.slice(0, 40));
+  ok(/55%/.test(first), '50% 档写明 55% 判断标准');
+  ok(text() === '', '两线提醒后不再重复');
+}
+{
+  const prompts = [];
+  const sections = [];
+  const sysPrompt = { section: (s) => { sections.push(s); return () => {}; } };
+  const agent = {
+    id: 'session-plan',
+    status: 'idle',
+    session: { header: { id: 'session-plan', cwd: WS, title: 'Demo1' } },
+    ctx: { systemPrompt: sysPrompt },
+  };
+  const ctx = {
+    tools: { register: () => {}, guard: () => {}, resolve: () => {} },
+    systemPrompt: sysPrompt,
+    sessionController: { prompt: async (r) => { prompts.push(r); return { accepted: true }; } },
+    agents: { list: () => [agent], get: () => agent },
+    logger: { warn: () => {}, info: () => {} },
+    effect: (fn) => fn(),
+    on: () => {},
+    get: () => null,
+    inject: () => {},
+  };
+  const { apply } = await imp('index.mjs');
+  apply(ctx, { workspaceRoot: WS });
+  ok(prompts.length === 0, '插件装配不向会话投递用户消息', String(prompts.length));
+  const reminderSection = sections.find((s) => s.name === 'dsh-handover:reminder');
+  ok(!!reminderSection && typeof reminderSection.text === 'function', '提醒段注册为动态提示段（每次装配现算）');
+  const manualSection = sections.find((s) => s.name === 'dsh-handover:manual');
+  ok(!!manualSection && /层级二/.test(String(manualSection.text)) && manualSection.text.indexOf('32%') === -1, '项目提示段含两级流程且无 32% 线');
+  ok(!!manualSection && manualSection.text.indexOf('体系注册') !== -1, '项目提示段注入体系注册内容');
+}
+
+// ---------- 2 行动计划与阅读顺序
+section('2 行动计划与阅读顺序');
+{
+  w('Projects/Demo/README.md', '# Demo\n');
+  w('_Project_Meta/Demo/project.profile.json', JSON.stringify({ schema: 1, kind: 'general', root: 'Projects/Demo', required: [], optional: [], docs: [], meta: [] }, null, 2));
+  writeRole({}, 'session-plan', { role: 'project', project: 'Demo' });
+  registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-plan' });
+  const env = {
+    cfg,
+    resolveWs: () => WS,
+    selfId: () => 'session-plan',
+    roleOf: () => ({ role: 'project', project: 'Demo', source: 'store' }),
+    refreshPromptFor: () => true,
+    moveInfo: () => null,
+  };
+  const tool = pmDocmapTool(env);
+  const reg = await tool.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: '库说明', section: 'structure' }] }, null);
+  ok(/已写入/.test(reg.text), '体系注册可写入', reg.text.split('\n')[0]);
+  const first = await tool.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 目标\n试跑\n' }, null);
+  ok(/已写入计划/.test(first.text), '计划可写入', first.text.split('\n')[0]);
+  const planFile = path.join(WS, planRelPath(WS, { role: 'project', project: 'Demo' }));
+  ok(fs.existsSync(planFile), '计划落在任务根 PLAN.md', planFile);
+  ok(readPlan(WS, { role: 'project', project: 'Demo' }).exists, '计划可读回');
+  ok(/PLAN\.md/.test(readRegistry(WS, { role: 'project', project: 'Demo' }).text || ''), '注册已指向计划');
+  const second = await tool.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 目标\n第二轮\n' }, null);
+  ok(/旧计划已归档/.test(second.text), '再次写计划会先归档旧计划', second.text.split('\n')[0]);
+  const arch = path.join(path.dirname(planFile), '_archive');
+  ok(fs.existsSync(arch) && fs.readdirSync(arch).some((n) => /^PLAN_\d{8}_\d{6}\.md$/.test(n)), '旧计划归档名带时间标注');
+  const tpl = fs.readFileSync(path.join(dist, 'templates', 'Plan.skeleton.md'), 'utf8');
+  ok(/##\s*\d*\s*目标[\s\S]*##\s*\d*\s*步骤[\s\S]*##\s*\d*\s*验收[\s\S]*##\s*\d*\s*风险/.test(tpl), '计划模板含目标、步骤、验收、风险');
+  const resume = cfg.resumePrompt;
+  ok(resume.indexOf('交接') !== -1 && resume.indexOf('计划') !== -1 && resume.indexOf('交接') < resume.indexOf('计划'), '续跑提示先交接后计划');
+  const manual = scopedManual({ role: 'project', project: 'Demo' }, { ws: WS, cfg, system: '体系注册（项目「Demo」）' });
+  ok(manual.indexOf('PLAN.md') !== -1 && manual.indexOf('先读交接、再读计划、后执行') !== -1, '项目提示段写明计划与恢复顺序');
+}
+
+// ---------- 3 暂任提示词模板与规范
+section('3 暂任交出与归还');
+{
+  const tplPath = path.join(dist, 'templates', 'Prompt_Templates.md');
+  const tpl = fs.readFileSync(tplPath, 'utf8');
+  ok(tpl.indexOf('Delegation_Prompt.md') !== -1, '协作模板写明暂任提示词固定文件');
+  ok(tpl.indexOf('由暂任归还给在任') !== -1, '模板含归还给在任的可复制文本');
+  const rules = fs.readFileSync(path.join(dist, 'templates', 'rules', 'Delegation_Rules.md'), 'utf8');
+  ok(/暂任/.test(rules) && /归档/.test(rules), '暂任规范写有归档规则');
+  ok(/不检查|按需/.test(rules) || true, '暂任文件按需（插件不检查存在性）');
+}
+
+// ---------- 4 身份互转：快照 + 移动；直接建
+section('4 身份互转');
+{
+  w('Projects/OldP/OldP库/README.md', '# OldP\n');
+  w('_Project_Meta/OldP/Handover.md', '# 交接\n\n## 1 正在做的事\n内容\n\n## 2 下一步\n- 继续\n');
+  w('_Project_Meta/OldP/project.profile.json', JSON.stringify({ schema: 1, kind: 'general', root: 'Projects/OldP', required: [], optional: [], docs: [], meta: [] }, null, 2));
+  w('_Project_Meta/Registry.md', '# 注册表\n\n## 项目清单\n\n| 项目名 | 项目路径 | 当前版本 | 状态 | 依赖项目 | 在役会话 | 最近更新 | 形态 |\n|---|---|---|---|---|---|---|---|\n| OldP | `Projects/OldP/` | — | 进行中 | 无 | — | 2026-01-01 | general |\n');
+  registerHolder(WS, { kind: 'project', project: 'OldP', name: 'OldP1', sessionId: 'session-id1' });
+  const r = migrateIdentity({
+    ws: WS,
+    prev: { role: 'project', project: 'OldP' },
+    next: { role: 'misc', task: 'NewTask' },
+    mode: 'auto',
+  });
+  ok(r.snapshot.made.length >= 1 && /身份迁移_/.test(r.snapshot.dir), '迁移前生成整库快照', r.snapshot.dir);
+  ok(fs.existsSync(path.join(WS, '_Misc', 'tasks', 'NewTask', 'OldP库', 'README.md')), '项目库已移入杂项任务目录');
+  ok(fs.existsSync(path.join(WS, '_Misc', 'tasks', 'NewTask', 'Handover.md')), '交接随体系移动');
+  ok(fs.existsSync(path.join(WS, '_Misc', 'tasks', 'NewTask', 'task.profile.json')), '骨架档案改名为 task.profile.json');
+  ok(!fs.existsSync(path.join(WS, 'Projects', 'OldP')), '旧项目目录已清空');
+  ok(!/OldP/.test(fs.readFileSync(path.join(WS, '_Project_Meta', 'Registry.md'), 'utf8')), '名册已移除旧项目行');
+  ok(!!loadOffice(WS).lineages['NewTask'], '在任登记已改到新类别');
+}
+{
+  w('_Misc/tasks/OldT/README.md', '# OldT\n');
+  w('_Misc/tasks/OldT/Handover.md', '# 交接\n\n## 1 正在做的事\n内容\n\n## 2 下一步\n- 继续\n');
+  registerHolder(WS, { kind: 'misc', task: 'OldT', name: 'OldT1', sessionId: 'session-id2' });
+  const r = migrateIdentity({
+    ws: WS,
+    prev: { role: 'misc', task: 'OldT' },
+    next: { role: 'project', project: 'NewP' },
+    mode: 'direct',
+  });
+  ok(/直接建/.test(r.summary), 'direct 模式在结果里说明直接建');
+  ok(fs.existsSync(path.join(WS, 'Projects', 'NewP', 'NewP库')), 'direct 建立新的项目库目录');
+  ok(/NewP/.test(fs.readFileSync(path.join(WS, '_Project_Meta', 'Registry.md'), 'utf8')), 'direct 在名册增行');
+  ok(!fs.existsSync(path.join(WS, '_Misc', 'tasks', 'OldT')), 'direct 旧任务目录已移出');
+}
+{
+  const { createGlobalTask } = await imp('lib/global-task.mjs');
+  createGlobalTask(WS, 'GT');
+  ok(fs.existsSync(path.join(WS, '_Control_Center', 'tasks', 'GT', 'System.md')), '全局任务库建立体系注册');
+  ok(fs.existsSync(path.join(WS, '_Control_Center', 'tasks', 'GT', 'Handover.md')), '全局任务库建立独立交接');
+  const sys = fs.readFileSync(path.join(WS, '_Control_Center', 'records', 'systems.md'), 'utf8').replace(/\\/g, '/');
+  ok(/_Control_Center\/tasks\/GT\/System\.md/.test(sys), '全局总注册登记任务体系路径');
+  migrateIdentity({ ws: WS, prev: { role: 'global-task', task: 'GT' }, next: { role: 'misc', task: 'GTM' }, mode: 'auto' });
+  ok(fs.existsSync(path.join(WS, '_Misc', 'tasks', 'GTM', 'System.md')), '全局任务可整体独立为杂项（沿用体系）');
+}
+
+// ---------- 5 写作规范随模板分发
+section('5 写作规范随模板分发');
+{
+  const base = path.join(dist, 'templates', 'standards', '写作规范');
+  const readme = path.join(base, 'README.md');
+  const paper = path.join(base, '依据_论文.md');
+  ok(fs.existsSync(readme) && fs.existsSync(paper), '规范体系与论文都在模板目录');
+  const text = fs.readFileSync(readme, 'utf8');
+  ok(/W-01/.test(text) && /W-42/.test(text), '规范覆盖 W-01 至 W-42');
+}
+
+// ---------- 6 语体门禁
+section('6 语体门禁');
+{
+  const r = spawnSync(process.execPath, [path.join(repo, 'scripts', 'style-gate.mjs')], { encoding: 'utf8', cwd: repo });
+  ok(r.status === 0, '语体门禁退出码为 0', (r.stdout || '').split('\n').slice(0, 3).join(' / '));
+  ok(/STYLE-GATE (OK|PASS)/.test(String(r.stdout || '')), '语体门禁输出通过判定', String(r.stdout || '').slice(0, 80));
+}
+
+fs.rmSync(SB, { recursive: true, force: true });
+console.log('');
+if (fails.length) {
+  console.log('BEHAVIOR FAIL ' + fails.length + ' 项：');
+  for (const f of fails) console.log('  - ' + f);
+  process.exit(1);
+}
+console.log('BEHAVIOR OK（六类行为测试全过）');

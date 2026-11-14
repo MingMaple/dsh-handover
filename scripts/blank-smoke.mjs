@@ -402,11 +402,11 @@ ok(tsU.allow.length === 0 && tsU.deny.length === 14, '普通会话不载入任�
 const rSub = resolveRole({ sessionId: 'session-sub', title: 'Demo1', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), subagent: true });
 ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普通处理，不按 cwd 判项目', JSON.stringify(rSub));
 
-// ---------- 文档定位（docmap）与授权提示：写入权限、路径校验、空 map、注入 ----------
+// ---------- 体系注册与授权提示：写入权限、路径校验、空注册、注入、计划 ----------
 {
   const { pmDocmapTool } = await import(DIST('tools/ho_docmap.mjs'));
   const { registerHolder } = await import(DIST('lib/office.mjs'));
-  const { docmapBlock, docmapRelPath, readDocmap } = await import(DIST('lib/docmap.mjs'));
+  const { systemBlock, registryRelPath, readRegistry, planRelPath } = await import(DIST('lib/system.mjs'));
   const manDm = await import(DIST('lib/manual.mjs'));
   const { grantConsent, consumedConsent, activeConsentsFor, consentPromptLines } = await import(DIST('lib/consent.mjs'));
 
@@ -422,37 +422,42 @@ ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普�
   fs.writeFileSync(path.join(WS, 'Projects', 'Demo', 'README.md'), 'x', 'utf8');
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-dm', workspace: WS });
   const dm = pmDocmapTool(dmEnv);
-  const wroteDm = await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: '项目简介', when: '动手前' }] }, dmExec('session-dm'));
-  ok(/已写入/.test(wroteDm.text), 'docmap：在任者写自己的 map 应成功', wroteDm.text.split('\n')[0]);
-  const readBack = readDocmap(WS, dmInfo);
-  ok(readBack.exists && readBack.entries.length === 1 && readBack.entries[0].path === 'Projects/Demo/README.md', 'docmap：写盘后可解析回一条', JSON.stringify(readBack.entries));
-  const dmBlock = docmapBlock(WS, dmInfo);
-  ok(/文档定位/.test(dmBlock) && /Projects\/Demo\/README\.md/.test(dmBlock) && /动手前/.test(dmBlock), 'docmap：注入块含路径与时机', dmBlock);
-  const injectedDm = manDm.scopedManual(dmInfo, { ws: WS, docmap: dmBlock });
-  ok(injectedDm.indexOf('文档定位') !== -1 && injectedDm.split('文档定位').length === 2, 'docmap：注入段只出现一次', String(injectedDm.split('文档定位').length - 1));
+  const wroteDm = await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: '项目简介', when: '动手前', section: 'files' }] }, dmExec('session-dm'));
+  ok(/已写入/.test(wroteDm.text), '体系注册：在任者写自己的注册应成功', wroteDm.text.split('\n')[0]);
+  const readBack = readRegistry(WS, dmInfo);
+  ok(readBack.exists && readBack.data.files.length === 1 && readBack.data.files[0].path === 'Projects/Demo/README.md', '体系注册：写盘后可解析回一条', JSON.stringify(readBack.data.files));
+  const sysBlock = systemBlock(WS, dmInfo);
+  ok(/体系注册/.test(sysBlock) && /Projects\/Demo\/README\.md/.test(sysBlock) && /动手前/.test(sysBlock), '体系注册：注入块含路径与时机', sysBlock);
+  const injectedDm = manDm.scopedManual(dmInfo, { ws: WS, system: sysBlock });
+  ok(injectedDm.indexOf('体系注册') !== -1 && injectedDm.split('体系注册').length === 2, '体系注册：注入段只出现一次', String(injectedDm.split('体系注册').length - 1));
   let missErr = '';
   try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/nope.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { missErr = String(e && e.message ? e.message : e); }
-  ok(/未写入/.test(missErr) && /nope\.md/.test(missErr), 'docmap：路径不存在应整条拒绝并点名', missErr);
-  ok(readDocmap(WS, dmInfo).entries.length === 1, 'docmap：拒绝后原 map 不得被改');
+  ok(/未写入/.test(missErr) && /nope\.md/.test(missErr), '体系注册：路径不存在应整条拒绝并点名', missErr);
+  ok(readRegistry(WS, dmInfo).data.files.length === 1, '体系注册：拒绝后原注册不得被改');
+  const planWrote = await dm.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 1 目标\n试跑\n' }, dmExec('session-dm'));
+  ok(/已写入计划/.test(planWrote.text), '行动计划：可写入任务根', planWrote.text.split('\n')[0]);
+  ok(fs.existsSync(path.join(WS, planRelPath(WS, dmInfo))), '行动计划：落在任务根 PLAN.md');
+  const planRead = await dm.execute({ action: 'plan', mode: 'read' }, dmExec('session-dm'));
+  ok(/行动计划/.test(planRead.text), '行动计划：可读回');
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: 'session-dm2', workspace: WS });
   let oldErr = '';
   try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { oldErr = String(e && e.message ? e.message : e); }
-  ok(/只有在任会话可以写/.test(oldErr), 'docmap：已交出的旧会话只读', oldErr);
+  ok(/只有在任会话可以写/.test(oldErr), '体系注册：已交出的旧会话只读', oldErr);
   const emptyDm = await dm.execute({ action: 'write', entries: [] }, dmExec('session-dm2'));
-  ok(/空 map/.test(emptyDm.text), 'docmap：空 entries 应写明不注入', emptyDm.text);
-  ok(docmapBlock(WS, dmInfo) === '', 'docmap：空 map 注入块为空串');
-  ok(docmapRelPath(dmInfo).replace(/\\/g, '/') === '_Control_Center/records/docmap/project-Demo.md', 'docmap：文件路径按会话命名', docmapRelPath(dmInfo));
+  ok(/已写入/.test(emptyDm.text) && /目录 0 条、规范 0 条/.test(emptyDm.text), '体系注册：空 entries 写入空注册', emptyDm.text.split('\n')[0]);
+  ok(systemBlock(WS, dmInfo).indexOf('体系注册（项目「Demo」）') !== -1, '体系注册：空注册只注入标题一行');
+  ok(registryRelPath(dmInfo).replace(/\\/g, '/') === '_Project_Meta/Demo/System.md', '体系注册：文件按任务独立存放', registryRelPath(dmInfo));
 
   grantConsent('session-dm2', 'blank-smoke', 'compact');
   const actDm = activeConsentsFor('session-dm2');
   const consentLines = consentPromptLines(actDm);
   ok(actDm.length === 1 && consentLines.length === 1 && /用户已授权压缩/.test(consentLines[0]), '授权：有效期内应生成一行提示', JSON.stringify(consentLines));
   ok(activeConsentsFor('session-other').length === 0, '授权：别的会话看不到', JSON.stringify(activeConsentsFor('session-other')));
-  const withConsent = manDm.scopedManual(dmInfo, { ws: WS, docmap: '', consents: actDm });
+  const withConsent = manDm.scopedManual(dmInfo, { ws: WS, system: '', consents: actDm });
   ok(withConsent.indexOf('用户已授权压缩') !== -1, '授权：提示段应带那一行', withConsent.slice(-160));
   consumedConsent('session-dm2', 'compact');
   ok(consentPromptLines(activeConsentsFor('session-dm2')).length === 0, '授权：用掉后提示消失（不占位）');
-  const afterUse = manDm.scopedManual(dmInfo, { ws: WS, docmap: '', consents: activeConsentsFor('session-dm2') });
+  const afterUse = manDm.scopedManual(dmInfo, { ws: WS, system: '', consents: activeConsentsFor('session-dm2') });
   ok(afterUse.indexOf('已授权') === -1, '授权：用掉后提示段不再有该行');
 }
 
@@ -576,8 +581,11 @@ const projExec = { agent: projAgent };
 ok(typeof projGatePack === 'function' && projGatePack(projExec) === false, '项目角色不可见 ho_sessions（每步条件）');
 ok(typeof projGateHand === 'function' && projGateHand(projExec) === true, '项目角色可见 ho_handover（每步条件）');
 ok(gateFor('ho_changelog')(projExec) === false, '项目角色不可见 ho_changelog');
-ok(calls.sections.length === 1 && calls.sections[0].name === 'dsh-handover:manual', '应注册同名提示段遮蔽兜底段');
-const secNorm = String(calls.sections[0].text).replace(/\\/g, '/');
+ok(calls.sections.length >= 1 && calls.sections.some((s) => s.name === 'dsh-handover:manual'), '应注册同名提示段遮蔽兜底段', JSON.stringify(calls.sections.map((s) => s.name)));
+const projSec = calls.sections.find((s) => s.name === 'dsh-handover:manual');
+const projText = String(projSec && projSec.text || '');
+ok(calls.sections.some((s) => s.name === 'dsh-handover:reminder' && typeof s.text === 'function'), '应注册一次性提醒段（动态文本）');
+const secNorm = projText.replace(/\\/g, '/');
 ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '项目提示段应含自己的路径', secNorm.slice(0, 200));
 ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明任务完成不向全局报告', secNorm.slice(0, 400));
 ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务达成');
@@ -585,8 +593,8 @@ ok(secNorm.indexOf('可直接 peer') !== -1, '项目提示段应允许会话之�
 ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
 ok(secNorm.indexOf('_Control_Center/standards/') !== -1, '项目提示段应给出通用规范的查找范围', secNorm.slice(-240));
 ok(secNorm.indexOf('把某某写成规范') !== -1 && secNorm.indexOf('本会话所在的工作区') !== -1 && secNorm.indexOf('写入通用规范库') !== -1 && secNorm.indexOf('报全局') !== -1, '项目提示段应写明未指明写本库、通用规范库报全局', secNorm.slice(-400));
-console.log('项目提示段 token 实测：' + budget.estimateTokens(calls.sections[0].text) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
-ok(calls.sections[0].text.indexOf('子智能体') === -1, '项目段不得携带子智能体派发纪律（不属于本插件）');
+console.log('项目提示段 token 实测：' + budget.estimateTokens(projText) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
+ok(projText.indexOf('纯窗口是否可能超过 40%') !== -1, '项目段应携带 1.0 子智能体判定线（纯窗口 40%）');
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
 {
   const man = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);
@@ -615,11 +623,14 @@ const globAgent = {
 };
 for (const cb of listeners) cb({ agent: globAgent, source: 'fresh' });
 ok(gCalls.restrict === 0, '全局角色不应被裁剪', String(gCalls.restrict));
-ok(gCalls.sections.length === 1 && gCalls.sections[0].name === 'dsh-handover:manual', '全局也应遮蔽兜底段');
+ok(gCalls.sections.some((s) => s.name === 'dsh-handover:manual'), '全局也应遮蔽兜底段', JSON.stringify(gCalls.sections.map((s) => s.name)));
+const globSec = gCalls.sections.find((s) => s.name === 'dsh-handover:manual');
+const globText = String(globSec && globSec.text || '');
+ok(gCalls.sections.some((s) => s.name === 'dsh-handover:reminder' && typeof s.text === 'function'), '全局也应注册一次性提醒段');
 // 常驻段只放每轮判定，一次性流程下沉手册；参考值按加权 token 计，只打印实测值。
-console.log('全局提示段 token 实测：' + budget.estimateTokens(gCalls.sections[0].text) + '（参考值 ' + budget.TOKEN_BUDGET.globalTokens + '，不判失败）');
-ok(gCalls.sections[0].text.indexOf('反模式') === -1, '全局段不得携带反模式纪律（不属于本插件）');
-ok(gCalls.sections[0].text.indexOf('send_message 续用') === -1, '全局段不得携带子智能体续用纪律（不属于本插件）');
+console.log('全局提示段 token 实测：' + budget.estimateTokens(globText) + '（参考值 ' + budget.TOKEN_BUDGET.globalTokens + '，不判失败）');
+ok(globText.indexOf('纯窗口是否可能超过 40%') !== -1, '全局段应携带 1.0 子智能体判定线（纯窗口 40%）');
+ok(globText.indexOf('send_message 续用') === -1, '全局段不得携带子智能体续用细节');
 // 真机最坏情形：长路径 + 迁移提示行
 {
   const man2 = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);
@@ -628,23 +639,23 @@ ok(gCalls.sections[0].text.indexOf('send_message 续用') === -1, '全局段不�
   const gWorst = man2.globalManual({ ws: longWs2, move: { phase: 'switched', dst: otherWs2, src: longWs2 } });
   console.log('全局最坏情形提示段 token 实测：' + budget.estimateTokens(gWorst) + '（参考值 ' + budget.TOKEN_BUDGET.globalWorstTokens + '，不判失败）');
 }
-ok(gCalls.sections[0].text.indexOf('前置提示词') === -1, '插件角色段不得再携带前置提示词（由用户全局前置提示词注入）');
-// 结构只保留会话定位、权限、节奏、交接与按需取用五节
+ok(globText.indexOf('前置提示词') === -1, '插件角色段不得再携带前置提示词（由用户全局前置提示词注入）');
+// 结构：1.0 为六节（身份、权限、任务流程、上下文与压缩、交接与体系、按需取用）
 {
-  const g = gCalls.sections[0].text;
+  const g = globText;
   const cnt = (k) => g.split(k).length - 1;
-  const secs = ['一、身份', '二、权限', '三、节奏', '四、交接', '五、按需取用'];
+  const secs = ['一、身份', '二、权限', '三、任务流程', '四、上下文与压缩', '五、交接与体系', '六、按需取用'];
   const bad = secs.filter((k) => cnt(k) !== 1);
-  ok(bad.length === 0, '全局段五节骨架应各出现一次', bad.join(','));
-  const absent = ['子智能体', '反模式', '自检'];
+  ok(bad.length === 0, '全局段六节骨架应各出现一次', bad.join(','));
+  const absent = ['反模式', '自检'];
   const still = absent.filter((k) => g.indexOf(k) !== -1);
   ok(still.length === 0, '插件角色段不得携带非会话约束', still.join(','));
-  ok(cnt('换任') <= 2, '「换任」在全局段出现不应超过两处', String(cnt('换任')));
+  ok(cnt('换任') <= 4, '「换任」在全局段出现不应超过四处', String(cnt('换任')));
 }
 ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已有）', String(gCalls.injected));
 // 分层护栏——常驻段只留判定，工作流细节必须留在手册里
 {
-  const g0 = String(gCalls.sections[0].text);
+  const g0 = globText;
   ok(g0.indexOf('ho_backup') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
   ok(g0.indexOf('ho_charter(doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
   ok(g0.indexOf('_Control_Center/standards/') !== -1, '全局段应给出通用规范的查找范围', g0.slice(-240));
@@ -669,7 +680,8 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
     const uiFiles = listFiles(path.join(repo, 'src'), ['.mjs', '.js'], { skip: ['templates'] });
     const docFiles = [path.join(repo, 'README.md')]
       .concat(listFiles(path.join(repo, 'src', 'templates'), ['.md']))
-      .filter((f) => f.indexOf('Writing_Rules.md') === -1);
+      // 写作规范正文与论文属规范性文本，条款本身会引用被禁词；Writing_Rules 是用户内容。
+      .filter((f) => f.indexOf('Writing_Rules.md') === -1 && f.indexOf(path.join('templates', 'standards')) === -1);
     const uiHits = scanFiles(uiFiles, { ui: true });
     const docHits = scanFiles(docFiles, { ui: false });
     const fmt = (hs) => hs.slice(0, 6).map((h) => path.relative(repo, h.file) + ':' + h.line + ' ' + h.rules.join('、')).join(' | ');
@@ -680,13 +692,13 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
 }
 
 // 按步路径（0.2.2 起）：创建即按角色登记提示段；工具可见性由每步条件算，不再调用 restrict。
-const unrCalls = { restrict: 0, section: null };
+const unrCalls = { restrict: 0, section: null, sections: [] };
 const unrAgent = {
   id: 'session-unr',
   session: { header: { id: 'session-unr', title: '未命名', cwd: '/tmp/x' } },
   ctx: {
     tools: { restrict: () => { unrCalls.restrict++; return () => { }; } },
-    systemPrompt: { section: (o) => { unrCalls.section = o; return () => { }; } },
+    systemPrompt: { section: (o) => { unrCalls.section = o; unrCalls.sections.push(o); return () => { }; } },
   },
   inject: () => { throw new Error('未设角色的会话不应写历史'); },
 };
@@ -698,7 +710,7 @@ ok(!unrCalls.section, '普通会话不注册角色提示段');
 // 开轮前核对：休眠期间改了角色，下一轮开始时补装提示段（工具由每步条件即时生效）。
 writeRole({}, 'session-unr', { role: 'project', project: 'Demo', source: 'user' });
 for (const cb of ((reg.listeners && reg.listeners['agent/status']) || [])) cb({ agent: unrAgent, status: 'running' });
-ok(!!unrCalls.section && /项目/.test(String(unrCalls.section.text)), '开轮前核对应按新角色补装提示段', JSON.stringify(unrCalls.section && unrCalls.section.name));
+ok(unrCalls.sections.some((s) => s.name === 'dsh-handover:manual' && /项目/.test(String(s.text))), '开轮前核对应按新角色补装提示段', JSON.stringify(unrCalls.sections.map((s) => s.name)));
 
 // 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 14 个，改角色后开轮前换成 3 个。
 {
@@ -836,7 +848,7 @@ const FIXTURE = {
       { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', wsKey: 'w1', wsTitle: '全局', wsPath: 'C:/ws', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
     notify: [{ sid: 'session-y', key: 'Demo1', name: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
-    verdict: '2 个会话已进预警区（≥32%），应先收齐交接再换会话',
+    verdict: '2 个会话已过 35% 线，应先收齐交接再换会话',
   },
   consent: [{ sessionId: 'session-y', leftMs: 120000, kind: 'compact', onduty: true }],
   notes: [],

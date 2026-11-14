@@ -203,6 +203,7 @@ export function createApi(env, info) {
           project: p.project,
           task: p.task,
           wake: p.wake !== false,
+          migrate: p.migrate === 'direct' ? 'direct' : 'auto',
         });
         env.log('会话角色：' + (r.ok ? (r.role + ' · 存活=' + r.live + ' · 已投递=' + r.delivered) : ('失败 ' + r.error)));
         invalidateStatus(env);

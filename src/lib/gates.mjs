@@ -4,7 +4,7 @@ import { readUtf8, isFile, isDir } from './text.mjs';
 import fs from 'node:fs';
 import { charterPath, canonicalBlock, TITLE_KEY, WATER_KEY } from './charter.mjs';
 import { readProfile, listProfiles } from './profile.mjs';
-import { checkDocmaps } from './docmap.mjs';
+import { checkRegistries } from './system.mjs';
 
 /**
  * 读 Registry.md 的「形态」列 → { 项目名: 形态 }。
@@ -148,21 +148,21 @@ export function renderSyncCheck(res) {
   return out;
 }
 
-/** 文档定位 map：只检查表内路径是否仍然存在（不判字数、不判内容）。 */
+/** 体系注册：只检查表内路径是否仍然存在（不判字数、不判内容）。 */
 export function docmapReport(ws) {
-  return checkDocmaps(ws);
+  return checkRegistries(ws);
 }
 
 export function renderDocmapCheck(res) {
   const out = [];
-  out.push('文档定位 map  目录 ' + res.dir);
+  out.push('体系注册  任务 ' + res.rows.length + ' 个');
   if (!res.rows.length) {
-    out.push('  还没有任何 map（空 map 不注入提示段，属正常）');
+    out.push('  还没有任何任务注册（空注册不注入正文，属正常）');
     out.push('判定：无需检查');
     return out;
   }
   for (const r of res.rows) {
-    out.push('  ' + r.name + '  ' + r.label + '  ' + r.entries + ' 条  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
+    out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists ? r.entries + ' 条' : '未设置') + '  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
     for (const b of r.bad.slice(0, 3)) out.push('        失效：' + b.path + ' —— ' + b.problem);
   }
   out.push('判定：' + (res.missing === 0

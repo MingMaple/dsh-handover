@@ -23,6 +23,7 @@ const DIRS = [
   '_Control_Center/standards',
   '_Control_Center/templates',
   '_Control_Center/tools',
+  '_Control_Center/tasks',
   '_Control_Center/user',
   'Projects',
   '_Project_Meta',
@@ -34,14 +35,21 @@ const DIRS = [
 const FILES = [
   ['_Control_Center/records/Global_Handover.md', 'Handover.global.skeleton.md'],
   ['_Control_Center/records/Global_Changelog.md', 'Changelog.skeleton.md'],
+  // 全局总注册：只列各任务体系文件的路径；由 ho_docmap 或 scaffold 维护。
+  ['_Control_Center/records/systems.md', 'Systems.global.skeleton.md'],
   ['_Control_Center/rules/Workspace_Charter.md', 'Charter.skeleton.md'],
   ['_Control_Center/templates/Prompt_Templates.md', 'Prompt_Templates.md'],
-  // 通用规范：一条规范一个子目录，各角色会话都可读，只有全局写。这里先铺说明，规范正文由会话按需建立。
+  ['_Control_Center/templates/Plan.skeleton.md', 'Plan.skeleton.md'],
+  ['_Control_Center/templates/System.skeleton.md', 'System.skeleton.md'],
+  // 通用规范：一条规范一个子目录，各角色会话都可读，只有全局写。
   ['_Control_Center/standards/README.md', 'standards/README.md'],
+  ['_Control_Center/standards/写作规范/README.md', 'standards/写作规范/README.md'],
+  ['_Control_Center/standards/写作规范/依据_论文.md', 'standards/写作规范/依据_论文.md'],
   // 规则类：工作区没有这份时，ho_charter 会退回同名内置版本；这里先铺一份可改的默认口径。
   ['_Control_Center/rules/Handover_Rules.md', 'rules/Handover_Rules.md'],
   ['_Control_Center/rules/Migration_Rules.md', 'rules/Migration_Rules.md'],
   ['_Control_Center/rules/Misc_Task_Standard.md', 'rules/Misc_Task_Standard.md'],
+  ['_Control_Center/rules/Delegation_Rules.md', 'rules/Delegation_Rules.md'],
   ['_Control_Center/user/Writing_Rules.md', 'rules/Writing_Rules.md'],
 ];
 
@@ -78,6 +86,7 @@ export function ensureScaffold(root) {
   const created = [];
   const written = [];
   const skipped = [];
+  const missingTemplates = [];
   for (const d of DIRS) {
     const p = path.join(abs, d.split('/').join(path.sep));
     if (!fs.existsSync(p)) created.push(d);
@@ -90,14 +99,23 @@ export function ensureScaffold(root) {
   for (const [rel, tpl] of FILES) {
     const dst = path.join(abs, rel.split('/').join(path.sep));
     if (fs.existsSync(dst)) { skipped.push(rel); continue; }
+    let body = '';
     try {
-      fs.writeFileSync(dst, template(tpl), 'utf8');
+      body = template(tpl);
+    } catch {
+      // 内置模板缺失时不写空文件，登记后由调用方报出，避免静默留下半套体系。
+      missingTemplates.push(rel);
+      continue;
+    }
+    try {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.writeFileSync(dst, body, 'utf8');
       written.push(rel);
     } catch (e) {
-      return { ok: false, error: '写文件失败（' + rel + '）：' + (e && e.message ? e.message : e), created, written, skipped };
+      return { ok: false, error: '写文件失败（' + rel + '）：' + (e && e.message ? e.message : e), created, written, skipped, missingTemplates };
     }
   }
-  return { ok: true, created, written, skipped };
+  return { ok: true, created, written, skipped, missingTemplates };
 }
 
 /**

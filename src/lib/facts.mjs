@@ -5,7 +5,7 @@
  */
 import { DEFAULTS } from './config.mjs';
 
-/** 比例转百分比文本：0.32 → "32%"。 */
+/** 比例转百分比文本：0.35 → "35%"。 */
 function pctOf(ratio) {
   const n = Math.round(Number(ratio) * 1000) / 10;
   return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '%';
@@ -14,24 +14,31 @@ function pctOf(ratio) {
 /** 水位与压缩口径：全部由配置推导。 */
 export function watermark(cfg) {
   const c = cfg || DEFAULTS;
-  const warn = pctOf(c.warnRatio !== undefined ? c.warnRatio : DEFAULTS.warnRatio);
-  const handover = pctOf(c.handoverRatio !== undefined ? c.handoverRatio : DEFAULTS.handoverRatio);
-  const hard = pctOf(c.hardRatio !== undefined ? c.hardRatio : DEFAULTS.hardRatio);
-  const max = c.maxCompactions !== undefined ? c.maxCompactions : DEFAULTS.maxCompactions;
-  return { warn, handover, hard, max, warnValue: Math.round((c.warnRatio !== undefined ? c.warnRatio : DEFAULTS.warnRatio) * 100) };
+  const pick = (k) => (c[k] !== undefined ? c[k] : DEFAULTS[k]);
+  const remind = pctOf(pick('remindRatio'));
+  const remind2 = pctOf(pick('remind2Ratio'));
+  const handover = pctOf(pick('handoverRatio'));
+  const hard = pctOf(pick('hardRatio'));
+  const max = pick('maxCompactions');
+  return {
+    remind, remind2, handover, hard, max,
+    remindValue: Math.round(pick('remindRatio') * 100),
+    remind2Value: Math.round(pick('remind2Ratio') * 100),
+    reuseValue: Math.round(pick('handoverRatio') * 100),
+  };
 }
 
 /** 一句式交接规则（全局与项目提示段共用）。 */
 export function handoverRuleText(cfg) {
   const w = watermark(cfg);
-  return '水位 ' + w.warn + ' 提醒，' + w.handover + ' 交接线，' + w.hard + ' 硬上限；至多压缩 '
+  return '水位 ' + w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，' + w.handover + ' 后可压缩，' + w.hard + ' 硬上限；至多压缩 '
     + w.max + ' 次，第 ' + (w.max + 1) + ' 次换任。';
 }
 
 /** 设置页使用说明里的紧写形式。 */
 export function compactSummaryText(cfg) {
   const w = watermark(cfg);
-  return w.warn + ' 提醒、' + w.handover + ' 交接线、' + w.hard + ' 硬上限；同一会话最多压缩 ' + w.max + ' 次';
+  return w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，' + w.handover + ' 后可压缩，' + w.hard + ' 硬上限；同一会话最多压缩 ' + w.max + ' 次';
 }
 
 /** 提示段与工具描述的加权 token 估算：CJK 与全角标点每字符 1 token，其余每 4 字符 1 token。 */
@@ -63,9 +70,9 @@ function isWide(cp) {
  * 提示词效果优先于字数，实测值超出参考值时如实展示即可。
  */
 export const TOKEN_BUDGET = {
-  globalTokens: 320,
-  globalWorstTokens: 360,
-  projectTokens: 300,
-  projectWorstTokens: 340,
+  globalTokens: 900,
+  globalWorstTokens: 1000,
+  projectTokens: 800,
+  projectWorstTokens: 900,
   toolDescTokens: 70,
 };

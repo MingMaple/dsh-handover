@@ -400,6 +400,7 @@ window.__ModuleLoader__.load({
       // 会话角色
       const [roleSel, setRoleSel] = React.useState({});
       const [roleStage, setRoleStage] = React.useState({});
+      const [roleMigrate, setRoleMigrate] = React.useState({});
       const [roleMsg, setRoleMsg] = React.useState("");
       const [roleBad, setRoleBad] = React.useState(false);
 
@@ -418,15 +419,17 @@ window.__ModuleLoader__.load({
       }, []);
 
       const submitRole = React.useCallback((sid, role, project, task, wake) => {
+        const migrate = (roleMigrate && roleMigrate[sid]) || "auto";
         setWorking(true); setRoleBad(false); setRoleMsg("");
-        post("role", { session_id: sid, role: role, project: project, task: task, wake: wake }, 30000)
+        post("role", { session_id: sid, role: role, project: project, task: task, wake: wake, migrate: migrate }, 30000)
           .then((r) => {
             if (r && r.ok) {
               const liveText = r.live ? "已在当前会话生效" : "自下一轮起生效";
               const sendText = wake
-                ? (r.delivered ? "整理指令已送达，该会话将被唤醒一轮" : ("整理指令未送达" + (r.error ? "：" + r.error : "")))
+                ? (r.delivered ? "首轮指令已送达，该会话将被唤醒一轮" : ("首轮指令未送达" + (r.error ? "：" + r.error : "")))
                 : "";
-              setRoleMsg("角色已设为" + (r.role || role) + "，" + liveText + (sendText ? "；" + sendText : "。"));
+              const migrateText = r.migrated ? "；身份互转方式 " + r.migrated + "：" + (r.migrationSummary || "") : "";
+              setRoleMsg("角色已设为" + (r.role || role) + "，" + liveText + migrateText + (sendText ? "；" + sendText : "。"));
               setRoleStage((prev) => {
                 const next = Object.assign({}, prev || {});
                 next[sid] = wake ? "notified" : "set";
@@ -440,7 +443,7 @@ window.__ModuleLoader__.load({
           })
           .catch((e) => { setRoleBad(true); setRoleMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
           .then(() => setWorking(false));
-      }, [load]);
+      }, [load, roleMigrate]);
 
       // 迁移：探针 → 复制并校验 → 状态 → 清旧备份
       const refreshMove = React.useCallback(() => {
@@ -646,7 +649,7 @@ window.__ModuleLoader__.load({
         authKids.push(h("div", { className: "dshh-muted" }, "换任同样须授权：点击「授权换任」后 5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
         authKids.push(grantTable("succeed"));
       } else {
-        authKids.push(h("div", { className: "dshh-muted" }, "暂无可点选的在任会话；可在下方直接填会话 id 授权。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "暂无可选的在任会话；可在下方直接填会话 id 授权。"));
       }
       authKids.push(h("div", { className: "dshh-row" },
         h("input", {
@@ -792,11 +795,29 @@ window.__ModuleLoader__.load({
         const task = draft.task !== undefined ? draft.task : (r.task || "");
         const wide = role === "project" || role === "misc";
         const stage = (roleStage && roleStage[r.sid]) || "";
+        // 已有在任全局时不再提供「全局」选项；当前就是全局的会话仍显示，避免看不出现状。
+        const canGlobal = Number(data.globalSessions || 0) === 0 || r.role === "global";
+        const convert = (r.role === "project" || r.role === "misc") && wide && role !== r.role;
         const action = stage === "notified"
           ? h("button", { className: "dshh-btn", type: "button", disabled: true }, "已通知")
           : stage === "set"
             ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, true) }, "通知该会话")
-            : h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, false) }, "设置角色");
+            : stage === "confirm"
+              ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, false) }, "确认设置")
+              : h("button", {
+                className: "dshh-btn",
+                type: "button",
+                disabled: working,
+                onClick: () => {
+                  setRoleStage((prev) => {
+                    const next = Object.assign({}, prev || {});
+                    next[r.sid] = "confirm";
+                    return next;
+                  });
+                  setRoleBad(false);
+                  setRoleMsg("请确认角色与名称，再点击「确认设置」。项目与杂项互转默认先快照再移动。");
+                },
+              }, "设置角色");
         return h("tr", { key: i },
           h("td", null, r.title || "（无标题）"),
           h("td", { className: "dshh-code dshh-num" }, shortSid(r.sid)),
@@ -806,17 +827,25 @@ window.__ModuleLoader__.load({
             value: role,
             onChange: (e) => setRoleValue(r.sid, { role: e.target.value }),
           },
-            h("option", { value: "global" }, "全局"),
+            canGlobal ? h("option", { value: "global" }, "全局") : null,
             h("option", { value: "project" }, "项目"),
             h("option", { value: "misc" }, "杂项"),
             h("option", { value: "plain" }, "普通"))),
-          h("td", null, wide ? h("input", {
-            className: "dshh-inputSm",
-            type: "text",
-            value: role === "project" ? project : task,
-            placeholder: role === "project" ? "填写项目名" : "填写任务名",
-            onChange: (e) => setRoleValue(r.sid, role === "project" ? { project: e.target.value } : { task: e.target.value }),
-          }) : h("span", { className: "dshh-muted" }, "不需填写")),
+          h("td", null, wide ? h("div", null,
+            h("input", {
+              className: "dshh-inputSm",
+              type: "text",
+              value: role === "project" ? project : task,
+              placeholder: role === "project" ? "填写项目名" : "填写任务名",
+              onChange: (e) => setRoleValue(r.sid, role === "project" ? { project: e.target.value } : { task: e.target.value }),
+            }),
+            convert ? h("select", {
+              className: "dshh-inputSm",
+              value: (roleMigrate && roleMigrate[r.sid]) || "auto",
+              onChange: (e) => setRoleMigrate((prev) => Object.assign({}, prev || {}, { [r.sid]: e.target.value })),
+            },
+              h("option", { value: "auto" }, "先快照再移动"),
+              h("option", { value: "direct" }, "直接建新体系")) : null) : h("span", { className: "dshh-muted" }, "不需填写")),
           h("td", null, h("div", { className: "dshh-pick" }, action)));
       };
       sections.push(card("会话角色",

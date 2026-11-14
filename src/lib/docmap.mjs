@@ -1,9 +1,6 @@
 /**
- * 文档定位 map（docmap）：每个会话（全局、每个项目、每个杂项任务）一份文件，写「本类别有哪些文档、各自一句话介绍、什么时候该读」。
- *
- * 定位：只指路，不规定读多少。是否读正文由被注入的会话自己判断；
- * 空 map 不注入，提示段其余文字一字不动。文件放在 _Control_Center/records/docmap/，
- * 随工作区迁移；写入者必须是在任会话（由 tools/ho_docmap.mjs 用在任登记表判定）。
+ * 旧版文档定位（docmap）解析：1.0 起只由迁移兼容模块 `legacy.mjs` 使用，用于把旧表并入体系注册。
+ * 新写入一律走 `system.mjs`；本模块不再参与提示段注入。
  */
 import fs from 'node:fs';
 import path from 'node:path';

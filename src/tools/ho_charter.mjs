@@ -11,6 +11,7 @@ const FILES = [
   { key: 'handover_rules', rel: ['_Control_Center', 'rules', 'Handover_Rules.md'], tpl: 'rules/Handover_Rules.md' },
   { key: 'migration_rules', rel: ['_Control_Center', 'rules', 'Migration_Rules.md'], tpl: 'rules/Migration_Rules.md' },
   { key: 'misc_standard', rel: ['_Control_Center', 'rules', 'Misc_Task_Standard.md'], tpl: 'rules/Misc_Task_Standard.md' },
+  { key: 'delegation_rules', rel: ['_Control_Center', 'rules', 'Delegation_Rules.md'], tpl: 'rules/Delegation_Rules.md' },
   { key: 'writing_rules', rel: ['_Control_Center', 'user', 'Writing_Rules.md'], tpl: 'rules/Writing_Rules.md' },
 ];
 

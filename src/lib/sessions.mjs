@@ -1,4 +1,5 @@
 /** 会话清点：只读投影缓存，不激活任何会话、不消耗 token。 */
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readJsonDir, pick, isSafeName } from './text.mjs';
@@ -86,10 +87,32 @@ export function readSelfPressure(dir, meId) {
   return { used: null, win: null };
 }
 
+/** 只读一个会话的投影缓存文件，返回水位百分比；读不到返回 null。供逐回合提醒使用。 */
+export function readSessionPressurePct(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid) return null;
+  const dir = projCacheDir();
+  const bare = sid.indexOf('session-') === 0 ? sid.slice(8) : sid;
+  const names = [];
+  for (const n of [sid, bare]) {
+    if (n && names.indexOf(n) === -1) names.push(n);
+  }
+  for (const stem of names) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, stem + '.json'), 'utf8'));
+      const used = pick(data, 'record', 'rows', 'contextPressure', 'val', 'pressureTokens');
+      const win = pick(data, 'record', 'rows', 'contextPressure', 'val', 'contextWindow');
+      if (!used || !win) return null;
+      return (used / win) * 100;
+    } catch { /* 试下一个文件名 */ }
+  }
+  return null;
+}
+
 /** 扫描：返回 { rows, cutoff, hot, unknown, notify, skip }。 */
 export function scanSessions(opts) {
   const dir = opts.dir || projCacheDir();
-  const warn = opts.warn === undefined ? 32 : opts.warn;
+  const warn = opts.warn === undefined ? 35 : opts.warn;
   const silentHours = opts.silentHours === undefined ? 12 : opts.silentHours;
   const nowMs = opts.nowMs || Date.now();
   const meId = opts.meId || null;

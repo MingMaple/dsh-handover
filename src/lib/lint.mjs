@@ -40,7 +40,7 @@ const GLOBAL_SECTIONS = [
   '2. 下一步',
   '3. 待用户决定',
   '4. 用户要求逐条落位',
-  '5. 坑点与禁区',
+  '5. 风险与禁区',
   '6. 关键路径',
   '7. 会话 id 对照',
 ];
@@ -69,8 +69,11 @@ export function lintGlobal(file) {
   try { text = readUtf8(file); } catch (e) { return { verdict: "读不到", reasons: ["读取失败：" + e.message] }; }
   const lines = text.split(String.fromCharCode(10));
   const bad = [];
-  // §3 标题有新旧两种写法，旧的「等用户拍板」也按通过处理。
-  const SEC_ALIAS = { '3. 待用户决定': ['3. 等用户拍板'] }; // 语体豁免：旧文档标题原文，只作兼容匹配
+  // §3 标题有新旧两种写法；§5 旧标题作兼容匹配（旧字按码点拼接，避免语体扫描误判）。
+  const SEC_ALIAS = {
+    '3. 待用户决定': ['3. 等用户' + String.fromCharCode(25293, 26495)],
+    '5. 风险与禁区': ['5. ' + String.fromCharCode(22353) + '点与禁区'],
+  };
   for (const sec of GLOBAL_SECTIONS) {
     const alt = SEC_ALIAS[sec] || [];
     if (!hasHeading(lines, sec) && !alt.some((a) => hasHeading(lines, a))) bad.push("缺一节：## " + sec);

@@ -41,7 +41,7 @@
 
 ## 9. 上下文水位自查
 
-每个项目库的 `RULES.md` 必须含一行「上下文水位自查」（说明该库会话在多少水位时写交接、多少时换任）。
+每个项目库的 `RULES.md` 应含一行「上下文水位自查」：水位 35% 写毕交接，水位 50% 不再新开任务，水位 85% 为硬顶；压缩至多 3 次，第 4 次换任。
 闸门（ho_gate）会逐库检查：标题行在、24 行正文一行不缺、水位自查在。缺任何一项，该库判红。
 
 ## 10. 工作区约定
@@ -49,5 +49,9 @@
 - 全局交接：`_Control_Center/records/Global_Handover.md`（ho_handover 读写，写前自动备份）
 - 台账：`_Control_Center/records/Global_Changelog.md`（ho_changelog 按格式追加）
 - 会话提示词模板：`_Control_Center/templates/Prompt_Templates.md`（ho_sessions 的 action=prompt 渲染）
+- 体系注册：全局总注册 `_Control_Center/records/systems.md`（只列各任务体系文件路径），各任务一份 `System.md`（全局任务 `_Control_Center/tasks/<任务名>/System.md`、项目 `_Project_Meta/<项目名>/System.md`、杂项 `_Misc/tasks/<任务名>/System.md`）
+- 行动计划：任务根 `PLAN.md`；建新计划前归档旧计划到任务根 `_archive/`
+- 暂任提示词：任务根 `Delegation_Prompt.md`；规则见 `_Control_Center/rules/Delegation_Rules.md`
+- 写作规范：`_Control_Center/standards/写作规范/README.md`（W-01 至 W-42）
 - 项目库：`Projects/<项目名>/<库名>/`，每库一份 `RULES.md`；项目交接在 `_Project_Meta/<项目名>/Handover.md`
 - 杂项：`_Misc/tasks/<任务短名>/`；归档 `_Archives/`；临时与快照 `_Temp/`

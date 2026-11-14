@@ -13,6 +13,7 @@ import { watermark } from './facts.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { lineageKeyOf, loadOffice, registerHolder } from './office.mjs';
+import { migrateIdentity } from './identity.mjs';
 
 const FENCE = String.fromCharCode(96, 96, 96);
 
@@ -173,10 +174,10 @@ function reuseBlocker(env, ws, kind, key) {
   if (!cur || !cur.sessionId) return '';
   let pct = null;
   try { pct = typeof env.selfPct === 'function' ? env.selfPct(cur.sessionId) : null; } catch { pct = null; }
-  if (pct === null || pct === undefined || !(Number(pct) < watermark(env.cfg).warnValue)) return '';
+  if (pct === null || pct === undefined || !(Number(pct) < watermark(env.cfg).reuseValue)) return '';
   const label = kind === 'global' ? '全局类别' : kind === 'project' ? '项目「' + key + '」' : '杂项任务「' + key + '」';
   return '拒绝新建：' + label + '已有在任会话 ' + (cur.name || '（未命名）') + '（' + cur.sessionId + '）水位 '
-    + Number(pct).toFixed(1) + '%，低于 ' + watermark(env.cfg).warn + '；建议用 peer（action="send"）复用，确需另建请传 force=true。';
+    + Number(pct).toFixed(1) + '%，低于 ' + watermark(env.cfg).handover + '；建议用 peer（action="send"）复用，确需另建请传 force=true。';
 }
 
 export async function sessionNew(env, args, exec) {
@@ -203,6 +204,24 @@ export async function sessionNew(env, args, exec) {
   if (args.force !== true && officeKind) {
     const block = reuseBlocker(env, ws, officeKind, lineageKeyOf(officeKind, project, task));
     if (block) throw new Error(block);
+  }
+
+  // 全局任务整体独立：先把任务库移入项目或杂项位置，沿用现有体系，不重建、不重新注册。
+  let migrated = null;
+  if (args.from_task) {
+    let caller = null;
+    try { caller = env.roleOf(exec); } catch { caller = null; }
+    if (!caller || caller.role !== 'global') throw new Error('from_task 只对全局会话开放');
+    const oldTask = String(args.from_task).trim();
+    assertTaskName(oldTask);
+    if (finalRole !== 'project' && finalRole !== 'misc') throw new Error('from_task 须同时给 role=project 或 role=misc');
+    migrated = migrateIdentity({
+      ws,
+      prev: { role: 'global-task', task: oldTask },
+      next: { role: finalRole, project, task },
+      mode: 'auto',
+    });
+    out.push('全局任务已独立：' + migrated.summary);
   }
 
   // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
@@ -241,7 +260,7 @@ export async function sessionNew(env, args, exec) {
     '读毕先向当前用户报告，不得自行开展作业：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。待当前用户指派后再动手。交接无待办时如实说明，不得编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '全局会话 id：' : '创建者会话 id：') + meId,
-    '默认沉默：仅在三种时机各发一条 peer（action="send"）给全局：水位不低于 ' + watermark(env.cfg).warn + ' 且已写交接、需当前用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer（action="send"），不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
+    '默认沉默：仅在三种时机各发一条 peer（action="send"）给全局：水位不低于 ' + watermark(env.cfg).remind + ' 且已写交接、需当前用户决定、全局口径有误。任务完成不报全局，任务属本会话内部事务。会话间可直接 peer（action="send"），不必经全局转述；不得每轮回执，不得发送「收到」「已完成」一类确认，全局以文件末态为准。',
   ].join(NL);
   const r = await sendPrompt(env.controller(), sessionId, text, 'queue');
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');

@@ -165,7 +165,7 @@ export async function runSuccession(env, exec, opts) {
   if (o.force !== true) {
     let pct = null;
     try { pct = typeof env.selfPct === 'function' ? env.selfPct(selfId) : null; } catch { pct = null; }
-    if (pct !== null && pct !== undefined && Number(pct) < watermark(env.cfg).warnValue) {
+    if (pct !== null && pct !== undefined && Number(pct) < watermark(env.cfg).remindValue) {
       return reject('本会话水位 ' + Number(pct).toFixed(1) + '%，尚未到线，通常无需换任；确需换任请传 force=true。');
     }
   }

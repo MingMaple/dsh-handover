@@ -46,7 +46,7 @@ export function writeHandover(ws, file, text, mode, opts) {
   const o = opts || {};
   const info = o.info || { role: o.kind === 'project' ? 'project' : o.kind === 'misc' ? 'misc' : 'global' };
   let dir = null;
-  try { dir = snapshotDirFor(ws, info); } catch { dir = path.join(ws, '_Temp', '_Global', 'Snapshots'); }
+  try { dir = o.snapshotDir || snapshotDirFor(ws, info); } catch { dir = path.join(ws, '_Temp', '_Global', 'Snapshots'); }
   let backup = null;
   try {
     if (fs.existsSync(file)) {
