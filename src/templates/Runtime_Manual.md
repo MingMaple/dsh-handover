@@ -155,10 +155,11 @@
 ## 6. 行动计划
 
 - 位置：任务根 `PLAN.md`。项目为 `Projects/<名>/<名库>/PLAN.md`，杂项为 `_Misc/tasks/<任务>/PLAN.md`，全局任务为 `_Control_Center/tasks/<任务>/PLAN.md`。
+- 写计划固定流程，4 步不可跳：① 读模板 `_Control_Center/templates/Plan.skeleton.md`；② 把上一份计划归档到任务根 `_archive/PLAN_<YYYYMMDD_HHMMSS>.md`；③ 新建空白 `PLAN.md`；④ 按模板 5 节写入（目标、步骤、验收、风险、状态）。
+- 不读旧计划：上一份计划归档后不再读取，也不在原文件上改写；写新计划只依据当前任务与模板。
+- 缺节拒收：`ho_docmap(action="plan", mode="write")` 逐节校验 5 节，缺任一节即报错并列出缺失节次。
 - 判据：层级二一律编写计划。纯窗口是否超过 40% 决定计划内是否拆分派子智能体。超过则在计划中安排拆分，未超过则按本会话完成编写。子智能体细则见 §12.4。
-- 模板：`src/templates/Plan.skeleton.md`，含目标、步骤、验收、风险、状态 5 节。
-- 建新计划前把旧计划归档到任务根 `_archive/`，归档后不读旧计划。
-- 收尾或换任时计划随任务归档；续跑提示写明「先读交接、再读计划、后执行」。
+- 收尾：任务结束或换任时把当前计划归档到任务根 `_archive/`，并从体系注册删除「计划」一行；续跑提示写明「先读交接、再读计划、后执行」。
 - 工具：`ho_docmap(action="plan", mode=…)`；也可用 `ho_sessions(action="prompt")` 生成带计划的启动提示词。
 
 ## 7. 暂任与协作

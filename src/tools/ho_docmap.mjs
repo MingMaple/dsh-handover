@@ -15,7 +15,7 @@ import { loadOffice, lineageKeyOf } from '../lib/office.mjs';
 import {
   lineageOf, lineageLabel, registryRelPath, registryAbsPath, readRegistry, readGlobalRegistry,
   validateEntries, checkRegistries, writeRegistry, syncGlobalRefs,
-  planRelPath, readPlan, writePlan, archivePlan, pointRegistryToPlan,
+  planRelPath, readPlan, writePlan, archivePlan, pointRegistryToPlan, planSectionProblems,
   GLOBAL_REGISTRY_REL, REGISTRY_NAME,
 } from '../lib/system.mjs';
 import { taskNameOk } from '../lib/role.mjs';
@@ -159,6 +159,12 @@ export function pmDocmapTool(env) {
         }
         const text = String(args.text || '');
         if (!text.trim()) throw new Error('mode=write 需要 text（行动计划正文）');
+        const missing = planSectionProblems(text);
+        if (missing.length) {
+          throw new Error('计划缺少模板要求的节：' + missing.join('、') + NL
+            + '先读模板 _Control_Center/templates/Plan.skeleton.md，按 5 节写入。' + NL
+            + '写新计划前先把上一份计划归档到任务根 _archive/，归档后不再读取旧计划；也不得在旧计划上改写。');
+        }
         const r = writePlan(ws, target, text);
         let pointed = false;
         try { pointed = pointRegistryToPlan(ws, target); } catch { pointed = false; }

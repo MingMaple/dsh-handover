@@ -450,9 +450,19 @@ ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普�
   try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/nope.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { missErr = String(e && e.message ? e.message : e); }
   ok(/未写入/.test(missErr) && /nope\.md/.test(missErr), '体系注册：路径不存在应整条拒绝并点名', missErr);
   ok(readRegistry(WS, dmInfo).data.files.length === 1, '体系注册：拒绝后原注册不得被改');
-  const planWrote = await dm.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 1 目标\n试跑\n' }, dmExec('session-dm'));
-  ok(/已写入计划/.test(planWrote.text), '行动计划：可写入任务根', planWrote.text.split('\n')[0]);
-  ok(fs.existsSync(path.join(WS, planRelPath(WS, dmInfo))), '行动计划：落在任务根 PLAN.md');
+  let planMissErr = '';
+  try { await dm.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 1 目标\n试跑\n' }, dmExec('session-dm')); } catch (e) { planMissErr = String(e && e.message ? e.message : e); }
+  ok(/缺少模板要求的节/.test(planMissErr) && /步骤/.test(planMissErr) && /Plan\.skeleton\.md/.test(planMissErr), '行动计划：缺节拒收并指向模板', planMissErr.slice(0, 80));
+  const PLAN_OK = '# 行动计划\n\n## 1 目标\n完成冒烟\n\n## 2 步骤\n| # | 步骤 |\n|---|---|\n| 1 | 写\n\n## 3 验收\n- 可判定\n\n## 4 风险\n- 无\n\n## 5 状态\n| 项 | 值 |\n|---|---|\n| 状态 | 进行中 |\n';
+  const planWrote = await dm.execute({ action: 'plan', mode: 'write', text: PLAN_OK }, dmExec('session-dm'));
+  ok(/已写入计划/.test(planWrote.text) && /无旧计划/.test(planWrote.text), '行动计划：可写入任务根', planWrote.text.split('\n')[0]);
+  const planAbs = path.join(WS, planRelPath(WS, dmInfo));
+  ok(fs.existsSync(planAbs), '行动计划：落在任务根 PLAN.md');
+  const planWrote2 = await dm.execute({ action: 'plan', mode: 'write', text: PLAN_OK.split('完成冒烟').join('第二版') }, dmExec('session-dm'));
+  const archDir = path.join(path.dirname(planAbs), '_archive');
+  const archFiles = fs.existsSync(archDir) ? fs.readdirSync(archDir).filter((f) => /^PLAN_\d{8}_\d{6}\.md$/.test(f)) : [];
+  ok(/旧计划已归档/.test(planWrote2.text) && archFiles.length === 1, '行动计划：写新计划前旧计划自动归档', planWrote2.text.split('\n')[0] + ' / ' + archFiles.join(','));
+  ok(fs.readFileSync(planAbs, 'utf8').indexOf('第二版') !== -1, '行动计划：写入后文件为全新内容');
   const planRead = await dm.execute({ action: 'plan', mode: 'read' }, dmExec('session-dm'));
   ok(/行动计划/.test(planRead.text), '行动计划：可读回');
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: 'session-dm2', workspace: WS });
@@ -614,6 +624,7 @@ ok(projText.indexOf('纯窗口是否可能超过 40%') !== -1, '项目段应携�
 ok(secNorm.indexOf('写计划就把拆子智能体安排进去') !== -1, '项目段应写明超过 40% 时计划里引入子智能体', secNorm.slice(0, 400));
 ok(secNorm.indexOf('超过时，写计划就把拆子智能体安排进去') < secNorm.indexOf('写行动计划 PLAN.md（任务根）'), '项目段应是先判纯窗口、再写一次计划', secNorm.slice(0, 400));
 ok(secNorm.indexOf('子智能体') !== -1 && secNorm.indexOf('并发 ≤3') !== -1 && secNorm.indexOf('交回原作者续用') !== -1, '项目段应携带子智能体硬线（并发与续用）', secNorm.slice(0, 500));
+ok(secNorm.indexOf('先读模板') !== -1 && secNorm.indexOf('不读旧计划') !== -1 && secNorm.indexOf('任务收尾时把当前计划归档') !== -1, '项目段应写明写计划的固定流程', secNorm.slice(0, 600));
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
 {
   const man = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);

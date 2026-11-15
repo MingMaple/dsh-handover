@@ -39,7 +39,7 @@ export function buildGuide(cfg) {
       { when: '全局前置提示词', say: '将这段设为全局前置提示词', what: '在本页保存到本机；仅在开启且内容非空时注入全部会话，关闭或留空时不注册提示段' },
       { when: '项目骨架', say: '注册 Demo 的骨架', what: '读取、注册、校验项目或杂项的骨架档案；档案文件由该项目会话自己写（ho_profile）' },
       { when: '体系注册', say: '把本项目的体系注册写进提示段', what: '每个任务一份体系注册，写目录结构、规范文件与计划；全局总注册只列各任务体系文件路径；写入后热更新（ho_docmap action=write）' },
-      { when: '行动计划', say: '为这个任务建立行动计划', what: '写任务根 PLAN.md；旧计划先归档且不再读取；压缩或换任后按「先交接、再计划、后执行」阅读（ho_docmap action=plan）' },
+      { when: '行动计划', say: '为这个任务建立行动计划', what: '写任务根 PLAN.md：先读模板，旧计划先归档且归档后不再读取，再新建空白文件写入；收尾时归档当前计划；压缩或换任后按「先交接、再计划、后执行」阅读（ho_docmap action=plan）' },
       { when: '暂任交出与归还', say: '把本任务交给另一个会话', what: '先刷新交接，再按任务库内 Delegation_Rules.md 把提示词写入 Delegation_Prompt.md；归还时刷新交接，并在交接中写明暂任者（ho_handover）' },
       { when: '查看会话', say: '列出当前会话', what: '水位、运行状态、活跃或沉默、角色与最后活动，并给出本轮通知名单（ho_sessions）' },
       { when: '打包迁移', say: '把 Demo 打包成迁移包', what: '收集文件、逐文件 sha256、7z（无 7-Zip 时用内置 tar.gz）、自检与绝对路径体检（ho_backup action=pack）' },

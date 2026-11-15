@@ -50,7 +50,7 @@
 - 台账：`_Control_Center/records/Global_Changelog.md`（由 `ho_changelog` 按格式追加）
 - 会话提示词模板：`_Control_Center/templates/Prompt_Templates.md`（由 `ho_sessions` 的 `action=prompt` 渲染）
 - 体系注册：全局总注册 `_Control_Center/records/systems.md`（只列各任务体系文件路径），各任务一份 `System.md`（全局任务 `_Control_Center/tasks/<任务名>/System.md`、项目 `_Project_Meta/<项目名>/System.md`、杂项 `_Misc/tasks/<任务名>/System.md`）
-- 行动计划：任务根 `PLAN.md`；新建计划前归档旧计划到任务根 `_archive/`
+- 行动计划：任务根 `PLAN.md`；先读模板再写，旧计划先归档到任务根 `_archive/`，归档后不读旧计划
 - 暂任提示词：任务根 `Delegation_Prompt.md`；规则见 `_Control_Center/rules/Delegation_Rules.md`
 - 写作规范：`_Control_Center/standards/写作规范/README.md`（W-01 至 W-42）
 - 项目库：`Projects/<项目名>/<库名>/`，每库一份 `RULES.md`；项目交接在 `_Project_Meta/<项目名>/Handover.md`

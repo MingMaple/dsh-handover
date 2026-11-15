@@ -22,7 +22,7 @@
 ## 4 体系注册、计划与暂任
 
 - 体系注册写 `_Misc/tasks/<任务>/System.md`，格式见 `_Control_Center/templates/System.skeleton.md`；全局总注册 `_Control_Center/records/systems.md` 只列该文件路径，由全局会话写入。
-- 行动计划写任务根 `PLAN.md`，格式见 `_Control_Center/templates/Plan.skeleton.md`；新建计划前将旧计划移入 `_archive/`，归档后不读旧计划。
+- 行动计划写任务根 `PLAN.md`，固定流程：先读模板 `_Control_Center/templates/Plan.skeleton.md` → 旧计划移入 `_archive/` → 新建空白文件 → 按 5 节写入。归档后不读旧计划，也不在旧计划上改写；任务收尾时归档当前计划并删除注册中的「计划」一行。
 - 暂任提示词写任务根 `Delegation_Prompt.md`，旧文件移入 `_archive/`；插件不检查该文件是否存在，也不检查是否已归档。暂任方只写本任务库。
 
 ## 5 升级为项目

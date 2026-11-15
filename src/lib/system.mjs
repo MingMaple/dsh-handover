@@ -331,6 +331,15 @@ export function archivePlan(ws, info) {
   return dst;
 }
 
+/** 计划模板要求的节次；写入时逐节校验，缺节即拒收。 */
+export const PLAN_SECTIONS = ['目标', '步骤', '验收', '风险', '状态'];
+
+/** 返回计划正文缺少的模板节次（空数组表示齐全）。 */
+export function planSectionProblems(text) {
+  const t = String(text || '');
+  return PLAN_SECTIONS.filter((s) => !(new RegExp('^##\\s*\\d*\\s*' + s, 'm')).test(t));
+}
+
 export function readPlan(ws, info) {
   const rel = planRelPath(ws, info);
   const abs = rel ? path.join(String(ws || ''), rel) : '';
