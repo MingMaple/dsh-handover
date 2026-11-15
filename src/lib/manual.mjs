@@ -26,7 +26,7 @@ const STANDARDS_WRITE_SCOPED = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET +
 const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/README.md（W-01 至 W-42）；全部产出按它执行。';
 
 /** 暂任与协作的落点：规范与提示词随任务库独立。 */
-const DELEGATION_POINTER = '暂任与协作：规范在任务库 rules/Delegation_Rules.md，协作模板在 templates/Prompt_Templates.md。';
+const DELEGATION_POINTER = '暂任：用户说「交接给外部会话」「交给另一个会话」「暂任」即暂任，不是换任。步骤：刷新交接；提示词写入任务库 Delegation_Prompt.md（旧提示词归档到 _archive/）；回复里代码块只给一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」。暂任不改变交接归属与在任登记：不申请授权、不建接任会话，交出方仍是在任者；席位变更只在用户明确要求时另行办理。细则见任务库 rules/Delegation_Rules.md，协作模板见 templates/Prompt_Templates.md。';
 
 /** 协作收结果的口径：被派方不发消息，协调方按完成顺序收集最终回复。 */
 const COLLAB_LINE = '协作收结果：进入协作前先以 peer(action="collab", sessions=[…]) 注册。协作期间被交办方不得向交办者或同组成员发送明文消息，工具端会拒绝，DSH 自带的 send_message 亦由插件守卫拦截；普通对话无需注册。协调方以 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复；timeout_ms 按任务预估设置，最低 120000。collect 取回全部结果后，限制自动解除。';
@@ -64,7 +64,7 @@ function rhythmLines(cfg) {
     '- 水位跨 ' + w.remind + ' 与 ' + w.remind2 + ' 时，由插件在本会话的工具结果末尾各追加一次提醒；不修改系统提示段、不生成用户消息、不独立成轮。',
     '- 判断标准：' + w.remind + ' 档为完成剩余流程后不超过 ' + Math.round((cfg && cfg.margin1 !== undefined ? cfg.margin1 : 0.45) * 100) + '%；'
       + w.remind2 + ' 档为不超过 ' + Math.round((cfg && cfg.margin2 !== undefined ? cfg.margin2 : 0.55) * 100) + '%。',
-    '- ' + handoverRuleText(cfg) + '当前用户可随时要求换任。',
+    '- ' + handoverRuleText(cfg) + '当前用户可随时要求提前办理。',
     '- 压缩前先刷新交接；压缩后先读交接、再读计划、后执行。',
     '- 压缩须由当前用户点击「授权压缩」，随后写交接并调用 ho_checkpoint(confirm=true)；任务未完成传 resume=continue，已收尾传 resume=wait（不再唤醒）。',
     '- 关键步骤传 at_risk=true 暂缓；85% 硬上限仍然生效。',

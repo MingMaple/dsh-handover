@@ -625,6 +625,7 @@ ok(secNorm.indexOf('写计划就把拆子智能体安排进去') !== -1, '项目
 ok(secNorm.indexOf('超过时，写计划就把拆子智能体安排进去') < secNorm.indexOf('写行动计划 PLAN.md（任务根）'), '项目段应是先判纯窗口、再写一次计划', secNorm.slice(0, 400));
 ok(secNorm.indexOf('子智能体') !== -1 && secNorm.indexOf('并发 ≤3') !== -1 && secNorm.indexOf('交回原作者续用') !== -1, '项目段应携带子智能体硬线（并发与续用）', secNorm.slice(0, 500));
 ok(secNorm.indexOf('先读模板') !== -1 && secNorm.indexOf('不读旧计划') !== -1 && secNorm.indexOf('任务收尾时把当前计划归档') !== -1, '项目段应写明写计划的固定流程', secNorm.slice(0, 600));
+ok(secNorm.indexOf('交接给外部会话') !== -1 && secNorm.indexOf('不是换任') !== -1 && secNorm.indexOf('Delegation_Prompt.md') !== -1, '项目段应写明暂任与换任的分界', secNorm.slice(0, 700));
 // 真实工作区路径 + 迁移提示是最坏情形，参考值另设一档
 {
   const man = await import(pathToFileURL(path.join(dist, 'lib', 'manual.mjs')).href);
