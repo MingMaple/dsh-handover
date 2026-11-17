@@ -3,7 +3,8 @@
  * 整理线与建议线只注入提示，绝不调用压缩 API；只有强制线由插件兜底压缩。
  * 全部注入都在本会话的步骤边界生成，作为末尾消息追加；不改 system 头，不逐步注入。
  *
- * 依赖通过 runtime 注入，共享状态（inline、scheduler、roleCache、cfg 等）集中在 index.mjs 的 runtime 对象。
+ * 依赖通过 runtime 注入，共享状态集中在 index.mjs 的 runtime 对象，
+ * 含 inline、scheduler、roleCache、cfg 等。
  */
 import fs from 'node:fs';
 import path from 'node:path';

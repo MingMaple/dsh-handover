@@ -711,7 +711,9 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   const ckSrc = fs.readFileSync(path.join(dist, 'tools', 'compact.mjs'), 'utf8');
   ok(ckSrc.indexOf('assistantCompact') !== -1, '助手压缩入口应走统一前置校验');
   const idxSrc = fs.readFileSync(path.join(dist, 'index.mjs'), 'utf8');
-  ok(idxSrc.indexOf('directPeer') !== -1, '会话守卫应支持直接对话开关');
+  // 会话守卫已抽到 lib/tool-registry.mjs：直接对话开关的判定以实现文件为准。
+  const guardSrc = fs.readFileSync(path.join(dist, 'lib', 'tool-registry.mjs'), 'utf8');
+  ok(idxSrc.indexOf('directPeer') !== -1 || guardSrc.indexOf('directPeer') !== -1, '会话守卫应支持直接对话开关');
   // 语体扫描——界面与文档一律标准书面语（口语词、感叹号、图形结论、全角斜杠、时间缺时区）。
   {
     const uiFiles = listFiles(path.join(repo, 'src'), ['.mjs', '.js'], { skip: ['templates'] });

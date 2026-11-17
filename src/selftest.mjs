@@ -185,7 +185,12 @@ eq('中间一次达标后只计最近一次', lowRoiStreakOf([0.20, 0.40, 0.20],
 eq('最近一次达标归零', lowRoiStreakOf([0.20, 0.25, 0.40], 0.30), 0);
 
 const indexSrc = fs.readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');
-const autoBlock = indexSrc.slice(indexSrc.indexOf('压缩主链：轮首注入压力行'), indexSrc.indexOf('用户全局前置提示词'));
+// 压缩主链的实现已抽到 lib/inline-engine.mjs：断言核对实现文件本身。
+// 同时拼接 index.mjs 的装配段（引擎创建、步骤边界监听、助手入口赋值），接线同样在锁定范围内。
+const inlineSrc = fs.readFileSync(new URL('./lib/inline-engine.mjs', import.meta.url), 'utf8');
+const wiringAt = indexSrc.indexOf('压缩主链：轮首注入压力行');
+const wiringEnd = indexSrc.indexOf('用户全局前置提示词');
+const autoBlock = inlineSrc + (wiringAt >= 0 && wiringEnd > wiringAt ? indexSrc.slice(wiringAt, wiringEnd) : '');
 check('判定段已移除全局巡检', autoBlock.length > 0 && autoBlock.indexOf('agents.list()') === -1);
 check('判定段已移除定时扫描', autoBlock.indexOf('setInterval') === -1 && autoBlock.indexOf('triggerScanMs') === -1);
 check('判定绑定本会话步骤边界', autoBlock.indexOf("'agent/pre-step'") !== -1);
@@ -208,17 +213,17 @@ check('助手入口传入换任计数', autoBlock.indexOf('compactionCount: Math
 check('助手入口要求锚点可写', autoBlock.indexOf('anchorPath,') !== -1 && autoBlock.indexOf('anchorWritable,') !== -1);
 check('例行压缩不生成回填文本', autoBlock.indexOf('buildBackfillText') === -1 && autoBlock.indexOf('composeResumeMessage') === -1);
 check('轮首压力行每轮注入', autoBlock.indexOf('pressureLineText(profile)') !== -1 && autoBlock.indexOf('atTurnStart') !== -1);
-const turnStartBlock = indexSrc.slice(indexSrc.indexOf('if (atTurnStart) {'), indexSrc.indexOf('// 轮内步骤分隔'));
+const turnStartBlock = inlineSrc.slice(inlineSrc.indexOf('if (atTurnStart) {'), inlineSrc.indexOf('// 轮内步骤分隔'));
 check('轮次起点只注水位不判定', turnStartBlock.length > 0
   && turnStartBlock.indexOf('judgeTrigger') === -1
   && turnStartBlock.indexOf('forceCompact') === -1);
-const stepJudgeBlock = indexSrc.slice(indexSrc.indexOf('// 轮内步骤分隔'), indexSrc.indexOf('async function onPreStep'));
+const stepJudgeBlock = inlineSrc.slice(inlineSrc.indexOf('// 轮内步骤分隔'), inlineSrc.indexOf('async function onPreStep'));
 check('轮内步骤才判定与强制压缩', stepJudgeBlock.indexOf('judgeTrigger(') !== -1
   && stepJudgeBlock.indexOf('forceCompact(agent, sid, signal)') !== -1);
 check('注入不改 system 头', autoBlock.indexOf('systemPrompt.section') === -1 && autoBlock.indexOf("append('system/message'") === -1);
 check('压缩前先写锚点', autoBlock.indexOf('writeAnchorFor(sid, agent.session') !== -1
   && autoBlock.indexOf('writeAnchorFor(sid, agent.session') < autoBlock.indexOf('compactInTurn('));
-check('连续低收益追加换任建议', indexSrc.indexOf('lowRoiStreakOf') !== -1 && indexSrc.indexOf("kind: 'succession-advice'") !== -1);
+check('连续低收益追加换任建议', autoBlock.indexOf('lowRoiStreakOf') !== -1 && autoBlock.indexOf("kind: 'succession-advice'") !== -1);
 check('换任留痕记录 rotate', indexSrc.indexOf("kind === 'rotate'") !== -1 && indexSrc.indexOf('flow.rotatedAt') !== -1);
 check('换任硬闸改用 rotate 判据', indexSrc.indexOf('judgeRotateGate(') !== -1 && indexSrc.indexOf('四步顺序') === -1);
 
