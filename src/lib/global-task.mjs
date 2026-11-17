@@ -1,10 +1,11 @@
 /**
  * 全局任务库：`_Control_Center/tasks/<任务>/`。
- * 全局可同时承担多个任务，每个任务有独立交接、体系注册与计划；任务可整体独立为项目或杂项会话。
+ * 全局可同时承担多个任务，每个任务有独立交接、体系注册与计划。
+ * 任务可整体独立为项目或杂项会话。
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { NL, readUtf8, isFile, isDir } from './text.mjs';
+import { NL, isFile, isDir } from './text.mjs';
 import { assertTaskName } from './role.mjs';
 import { renderRegistry, syncGlobalRefs } from './system.mjs';
 
@@ -60,10 +61,4 @@ export function createGlobalTask(ws, task) {
   }
   syncGlobalRefs(ws);
   return { dir, created };
-}
-
-/** 读全局任务交接正文（不存在返回空串）。 */
-export function readTaskHandover(ws, task) {
-  const file = path.join(String(ws || ''), '_Control_Center', 'tasks', String(task || ''), 'Handover.md');
-  try { return readUtf8(file); } catch { return ''; }
 }

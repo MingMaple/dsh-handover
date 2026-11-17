@@ -81,13 +81,13 @@ window.__ModuleLoader__.load({
       for (const url of ENDPOINTS) {
         try {
           const res = await fetchWithTimeout(url, { cache: "no-store", headers: { accept: "application/json" } }, 30000);
-          if (!res.ok) { reasons.push(url + " → HTTP " + res.status); continue; }
+          if (!res.ok) { reasons.push(url + " 返回 HTTP 状态 " + res.status); continue; }
           return await res.json();
         } catch (e) {
-          reasons.push(url + " → " + (e && e.message ? e.message : String(e)));
+          reasons.push(url + " 请求失败：" + (e && e.message ? e.message : String(e)));
         }
       }
-      throw new Error(reasons.join("；") || "无法取得状态");
+      throw new Error(reasons.join("；") || "未取得任何候选端点的响应");
     }
 
     /** 通道诊断（显示于页面；出现异常时可直接定位，无须推测）。 */
@@ -136,16 +136,16 @@ window.__ModuleLoader__.load({
 
     function carrierKind() {
       const conn = connection;
-      if (!conn) return "无 connection";
-      if (!conn.rpc) return "无 connection.rpc";
-      if (typeof conn.rpc.call !== "function") return "无 rpc.call";
-      return "可用（参数 " + (conn.rpc.call.length || "?") + "）";
+      if (!conn) return "`connection` 不可用";
+      if (!conn.rpc) return "`connection.rpc` 不可用";
+      if (typeof conn.rpc.call !== "function") return "`rpc.call` 不可用";
+      return "可用（参数数 " + (conn.rpc.call.length || "?") + "）";
     }
 
     /** 与超时竞速：宿主 rpc.call 不理会 AbortSignal，仅中止请求无法结束等待，页面会停在「读取中」。 */
     function raceTimeout(promise, ms, label) {
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(label + " 超时 " + ms + " ms")), ms);
+        const timer = setTimeout(() => reject(new Error(label + "响应超时 " + ms + " ms")), ms);
         Promise.resolve(promise).then(
           (v) => { clearTimeout(timer); resolve(v); },
           (e) => { clearTimeout(timer); reject(e); },
@@ -159,7 +159,7 @@ window.__ModuleLoader__.load({
       // 必须保留 this=connection.rpc：宿主用 this 拼接目标，换成其他对象会得到
       // "[object Object]/api" 并报 invalid RPC target。
       const rpcObj = conn && conn.rpc && typeof conn.rpc.call === "function" ? conn.rpc : null;
-      if (!rpcObj) throw new Error("宿主没有 connection.rpc（载体=" + carrierKind() + "）");
+      if (!rpcObj) throw new Error("宿主未提供 `connection.rpc`（载体：" + carrierKind() + "）");
       // 不主动中止请求：宿主处理可能超过 8 秒，此处仅与超时竞速，
       // 请求在宿主侧自然完成，耗时较长也能取得结果。
       const ac = new AbortController();
@@ -186,11 +186,11 @@ window.__ModuleLoader__.load({
         }
         if (!r || r.ok !== true) {
           const err = (r && r.error) || {};
-          throw new Error(String(err.message || "载体返回失败"));
+          throw new Error(String(err.message || "载体调用失败：宿主未返回有效结果"));
         }
         return r.value;
       } catch (e) {
-        diag.lastError = "载体：" + String(e && e.message ? e.message : e) + "（耗时 " + (Date.now() - t0) + " ms）";
+        diag.lastError = String(e && e.message ? e.message : e) + "（耗时 " + (Date.now() - t0) + " ms）";
         throw e;
       }
     }
@@ -220,9 +220,9 @@ window.__ModuleLoader__.load({
           let body = null;
           try { body = await res.json(); } catch (e) { body = null; }
           if (body) return body;
-          reasons.push(url + " → HTTP " + res.status);
+          reasons.push(url + " 返回 HTTP 状态 " + res.status);
         } catch (e) {
-          reasons.push(url + " → " + (e && e.message ? e.message : String(e)));
+          reasons.push(url + " 请求失败：" + (e && e.message ? e.message : String(e)));
         }
       }
       throw new Error(reasons.join("；"));
@@ -292,13 +292,13 @@ window.__ModuleLoader__.load({
           let via = "";
           try {
             d = await rpc("status", {}, 30000);
-            via = "载体（/api）";
+            via = "载体（`/api`）";
           } catch (e1) {
             try {
               d = await fetchStatus();
               via = "HTTP 回退";
             } catch (e2) {
-              const msg = "载体（" + carrierKind() + "）：" + String(e1 && e1.message ? e1.message : e1)
+              const msg = "主通道：" + String(e1 && e1.message ? e1.message : e1)
                 + "；HTTP 回退：" + String(e2 && e2.message ? e2.message : e2);
               diag.lastError = msg;
               setErr(msg);
@@ -321,13 +321,13 @@ window.__ModuleLoader__.load({
           .then((r) => {
             if (r && r.ok) {
               setCreated(r.root || "");
-              setSetupMsg("已建立：目录 " + (r.created || []).length + " 个、文件 " + (r.written || []).length + " 个。下一步：注册为工作区。");
+              setSetupMsg("已建立文件体系：目录 " + (r.created || []).length + " 个、文件 " + (r.written || []).length + " 个。下一步，点击「注册为工作区」。");
             } else {
               setSetupBad(true);
-              setSetupMsg((r && r.error) || "建立失败");
+              setSetupMsg((r && r.error) || "建立文件体系失败：未返回原因，请检查路径后重试。");
             }
           })
-          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请确认路径可写后重试。"); })
           .then(() => setWorking(false));
       }, [parent]);
 
@@ -336,10 +336,10 @@ window.__ModuleLoader__.load({
         setWorking(true); setSetupBad(false); setSetupMsg("");
         post("register", { path: created, title: "全局" }, 20000)
           .then((r) => {
-            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（" + (r.id || "?") + "）。点击「刷新」后可继续。");
-            else { setSetupBad(true); setSetupMsg(((r && r.error) || "注册失败") + (r && r.hint ? "；" + r.hint : "")); }
+            if (r && r.ok) setSetupMsg("已注册工作区：" + (r.title || "全局") + "（工作区 ID `" + (r.id || "未知") + "`）。点击「刷新」后可继续。");
+            else { setSetupBad(true); setSetupMsg(((r && r.error) || "注册失败：未返回原因") + (r && r.hint ? "；" + r.hint : "；请稍后重试")); }
           })
-          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"); })
           .then(() => setWorking(false));
       }, [created]);
 
@@ -350,20 +350,20 @@ window.__ModuleLoader__.load({
           .then((r) => {
             if (!r || !r.ok) {
               setSetupBad(true);
-              setSetupMsg((r && r.error) || "部署失败");
+              setSetupMsg((r && r.error) || "部署失败：未返回原因，请检查路径后重试。");
               return;
             }
             const parts = [];
-            parts.push("文件体系：" + r.root);
-            if (r.workspace) parts.push("工作区：「" + r.workspace.title + "」（" + r.workspace.path + "）");
-            else if (r.workspaceError) parts.push("工作区未注册：" + r.workspaceError);
-            if (r.sessionId) parts.push("全局会话：" + r.sessionId + "。在左侧「" + (r.workspace ? r.workspace.title : "全局") + "」工作区打开它即可开始。");
-            else if (r.sessionError) parts.push("会话未创建：" + r.sessionError);
+            parts.push("文件体系：`" + r.root + "`");
+            if (r.workspace) parts.push("工作区：「" + r.workspace.title + "」（`" + r.workspace.path + "`）");
+            else if (r.workspaceError) parts.push("工作区未注册，原因：" + r.workspaceError + "；可稍后重试部署");
+            if (r.sessionId) parts.push("全局会话：`" + r.sessionId + "`。在左侧「" + (r.workspace ? r.workspace.title : "全局") + "」工作区打开该会话即可开始。");
+            else if (r.sessionError) parts.push("全局会话未创建，原因：" + r.sessionError + "；可点击「创建全局会话」补建");
             setCreated(r.root || "");
             setDeployInfo({ text: parts.join("；"), bad: false });
             load();
           })
-          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setSetupBad(true); setSetupMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请确认路径可写后重试。"); })
           .then(() => setWorking(false));
       }, [parent, load]);
 
@@ -373,14 +373,14 @@ window.__ModuleLoader__.load({
         post("global-session", {}, 60000)
           .then((r) => {
             if (r && r.ok) {
-              setGlobalMsg("已创建全局会话 " + r.sessionId + "，在左侧工作区打开它即可开始。");
+              setGlobalMsg("已创建全局会话 `" + r.sessionId + "`，在左侧工作区打开该会话即可开始。");
               load();
             } else {
               setGlobalBad(true);
-              setGlobalMsg((r && r.error) || "创建失败");
+              setGlobalMsg((r && r.error) || "创建失败：未返回原因，请稍后重试。");
             }
           })
-          .catch((e) => { setGlobalBad(true); setGlobalMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setGlobalBad(true); setGlobalMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"); })
           .then(() => setWorking(false));
       }, [load]);
 
@@ -392,9 +392,9 @@ window.__ModuleLoader__.load({
               if (r.unchanged) setExtraMsg(r.note || "内容未变，已跳过写入。");
               else setExtraMsg((r.chars ? "已保存，共 " + r.chars + " 字符。" : "已清空，不再注册提示段。") + (r.cacheNote ? " " + r.cacheNote : ""));
             }
-            else { setExtraBad(true); setExtraMsg((r && r.error) || "保存失败"); }
+            else { setExtraBad(true); setExtraMsg((r && r.error) || "保存失败：未返回原因，请稍后重试。"); }
           })
-          .catch((e) => { setExtraBad(true); setExtraMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setExtraBad(true); setExtraMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"); })
           .then(() => setWorking(false));
       }, [extra]);
 
@@ -427,10 +427,10 @@ window.__ModuleLoader__.load({
             if (r && r.ok) {
               const liveText = r.live ? "已在当前会话生效" : "自下一轮起生效";
               const sendText = wake
-                ? (r.delivered ? "首轮指令已送达，该会话将被唤醒一轮" : ("首轮指令未送达" + (r.error ? "：" + r.error : "")))
+                ? (r.delivered ? "首轮指令已送达，该会话将被唤醒一轮" : ("首轮指令未送达，原因：" + (r.error || "未返回原因") + "，可手动发送首轮指令"))
                 : "";
-              const migrateText = r.migrated ? "；身份互转方式 " + r.migrated + "：" + (r.migrationSummary || "") : "";
-              setRoleMsg("角色已设为" + (r.role || role) + "，" + liveText + migrateText + (sendText ? "；" + sendText : "。"));
+              const migrateText = r.migrated ? "；角色互转方式 " + r.migrated + "：" + (r.migrationSummary || "") : "";
+              setRoleMsg("角色已设为 " + (r.role || role) + "，" + liveText + migrateText + (sendText ? "；" + sendText : "") + "。");
               setRoleStage((prev) => {
                 const next = Object.assign({}, prev || {});
                 next[sid] = wake ? "notified" : "set";
@@ -439,10 +439,10 @@ window.__ModuleLoader__.load({
               load();
             } else {
               setRoleBad(true);
-              setRoleMsg((r && r.error) || "设置失败");
+              setRoleMsg((r && r.error) || "角色设置失败：未返回原因，请稍后重试。");
             }
           })
-          .catch((e) => { setRoleBad(true); setRoleMsg("请求未完成：" + (e && e.message ? e.message : String(e))); })
+          .catch((e) => { setRoleBad(true); setRoleMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"); })
           .then(() => setWorking(false));
       }, [load, roleMigrate]);
 
@@ -455,7 +455,7 @@ window.__ModuleLoader__.load({
         setMvBusy(true); setMvBad(false); setMvMsg("");
         return rpc(method, payload, ms || 20000)
           .then((v) => v)
-          .catch((e) => { setMvBad(true); setMvMsg(String(e && e.message ? e.message : e)); throw e; })
+          .catch((e) => { setMvBad(true); setMvMsg("操作未完成：" + String(e && e.message ? e.message : e) + "。请稍后重试。"); throw e; })
           .then((v) => v, () => null)
           .then((v) => { setMvBusy(false); return v; });
       }, []);
@@ -465,7 +465,7 @@ window.__ModuleLoader__.load({
           if (!p) return;
           setMvProbe(p);
           setMvBad(!p.ok);
-          setMvMsg(p.ok ? "预检通过，可开始复制。" : "预检未通过，原因见下。");
+          setMvMsg(p.ok ? "预检通过，可点击「复制并校验」开始复制。" : "预检未通过，原因见上方条目；修正后重新预检。");
         });
       }, [mvTo, callMove]);
 
@@ -473,7 +473,7 @@ window.__ModuleLoader__.load({
         callMove("move.start", { to: mvTo }, 900000).then((r) => {
           if (!r) return;
           setMvBad(false);
-          setMvMsg("复制与校验通过：共 " + r.report.files + " 个文件、" + fmtBytes(r.report.bytes) + "。切换脚本已生成。");
+          setMvMsg("复制与校验通过：共 " + r.report.files + " 个文件，合计 " + fmtBytes(r.report.bytes) + "。切换脚本已生成。");
           refreshMove();
         });
       }, [mvTo, callMove, refreshMove]);
@@ -484,39 +484,40 @@ window.__ModuleLoader__.load({
           setMvBad(false);
           setMvMsg(r.already
             ? "已处于切换完成状态（原路径为链接），无需再次切换。"
-            : "已就绪：完全退出 DSH 后约 1 秒完成切换，等待 10 秒再打开。日志：" + (r.log || ""));
+            : "已就绪：完全退出 DSH 后约 1 秒完成切换，等待 10 秒后再打开 DSH。日志：`" + (r.log || "") + "`");
           refreshMove();
         });
       }, [callMove, refreshMove]);
 
-      // 压缩授权：仅在用户于此授权后，压缩才可排入；模型不得自行批准。
+      // 授权只约束「换任（上下文重置）」：压缩走前置校验，不看授权文件。
+      // 授权须由用户亲手产生，模型不得自行批准，故入口只放在本页与聊天页命令。
       const [csSid, setCsSid] = React.useState("");
       const [csMsg, setCsMsg] = React.useState("");
       const doGrant = React.useCallback((kind) => {
         setWorking(true); setCsMsg("");
         post("consent.grant", { session_id: csSid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "：5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
-            else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
+            if (r && r.ok) { setCsMsg("已授权会话 `" + r.sessionId + "`：5 分钟内可完成换任一次，用后失效。"); load(); }
+            else setCsMsg("授权未完成：" + ((r && r.error) || "未返回原因") + "。请点击「授权重置」重试。");
           })
-          .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
+          .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"))
           .then(() => setWorking(false));
       }, [csSid, load]);
       const doGrantSid = React.useCallback((sid, kind) => {
         setWorking(true); setCsMsg("");
         post("consent.grant", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
           .then((r) => {
-            if (r && r.ok) { setCsMsg("已授权会话 " + r.sessionId + "：5 分钟内可" + (r.kind === "succeed" ? "换任" : "压缩") + "一次，用后失效。"); load(); }
-            else setCsMsg("授权未完成：" + ((r && r.error) || "原因未知"));
+            if (r && r.ok) { setCsMsg("已授权会话 `" + r.sessionId + "`：5 分钟内可完成换任一次，用后失效。"); load(); }
+            else setCsMsg("授权未完成：" + ((r && r.error) || "未返回原因") + "。请点击「授权重置」重试。");
           })
-          .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e))))
+          .catch((e) => setCsMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"))
           .then(() => setWorking(false));
       }, [load]);
 
       const doRevoke = React.useCallback((sid, kind) => {
         setWorking(true); setCsMsg("");
         post("consent.revoke", { session_id: sid, kind: kind === "succeed" ? "succeed" : "compact" }, 15000)
-          .then(() => { setCsMsg("已撤销 " + sid + " 的" + (kind === "succeed" ? "换任" : "压缩") + "授权。"); load(); })
+          .then(() => { setCsMsg("已撤销会话 `" + sid + "` 的授权。"); load(); })
           .catch(() => { /* 撤销失败不影响其他操作 */ })
           .then(() => setWorking(false));
       }, [load]);
@@ -526,7 +527,7 @@ window.__ModuleLoader__.load({
           if (!r) return;
           if (r.already) { setMvMsg("DSH 登记已在新位置，无需修改登记。"); return; }
           setMvBad(false);
-          setMvMsg("已就绪：DSH 退出后改写登记，每份先备份，重启后生效。日志：" + ((r.script && r.script.log) || ""));
+          setMvMsg("已就绪：退出 DSH 后改写登记文件，每份先备份，重启后生效。日志：`" + ((r.script && r.script.log) || "") + "`");
           refreshMove();
         });
       }, [callMove, refreshMove]);
@@ -535,7 +536,7 @@ window.__ModuleLoader__.load({
         callMove("move.repair", {}, 20000).then((r) => {
           if (!r) return;
           setMvBad(false);
-          setMvMsg(r.already ? "原路径已经是链接，无需重建。" : "已重建链接：" + r.src + " 现指向 " + r.dst + "（未改动任何文件）。");
+          setMvMsg(r.already ? "原路径已是指向新位置的链接，无需重建。" : "已重建链接：`" + r.src + "` 现指向 `" + r.dst + "`（未改动任何文件）。");
           refreshMove();
         });
       }, [callMove, refreshMove]);
@@ -543,14 +544,14 @@ window.__ModuleLoader__.load({
       const doCleanup = React.useCallback(() => {
         if (String(delWord || "").trim() !== "删除") {
           setMvBad(true);
-          setMvMsg("确认词不正确。输入「删除」后重试。");
+          setMvMsg("确认词不正确：需输入「删除」才能继续。请在输入框填写「删除」后重试。");
           return;
         }
         callMove("move.cleanup", { confirm: true }, 180000).then((r) => {
           if (!r) return;
           setMvBad(false);
           setDelWord("");
-          setMvMsg(r.note + ((r.removed || []).length ? "：" + r.removed.join("、") : ""));
+          setMvMsg(r.note + ((r.removed || []).length ? "：" + r.removed.map((x) => "`" + x + "`").join("、") : ""));
           refreshMove();
         });
       }, [delWord, callMove, refreshMove]);
@@ -561,13 +562,13 @@ window.__ModuleLoader__.load({
       const head = h("div", { className: "dshh-head" },
         h("h2", { className: "dshh-title" }, "dsh-handover"),
         h("button", { className: "dshh-btn", onClick: load, disabled: busy, type: "button" }, busy ? (data ? "正在刷新" : "正在读取") : "刷新"),
-        diag.lastError ? h("span", { className: "dshh-bad" }, "读取失败（通道 " + (channel || carrierKind()) + "）：" + diag.lastError.slice(0, 90)) : null,
+        diag.lastError ? h("span", { className: "dshh-bad" }, "读取失败（通道 " + (channel || carrierKind()) + "）：" + diag.lastError.slice(0, 90) + "。可点击「刷新」重试。") : null,
         data ? h("span", { className: "dshh-muted" }, "读数时间 " + data.generatedAt) : null);
 
       if (err && !data) {
         return h("div", { className: "dshh-root" }, head,
           h("div", { className: "dshh-bad" }, "无法取得状态：" + err),
-          h("div", { className: "dshh-muted" }, "插件刚安装时，确认已在配置中启用并重启 DSH。"));
+          h("div", { className: "dshh-muted" }, "处置：确认插件已在配置中启用并重启 DSH，再点击「刷新」重试。"));
       }
       if (!data) {
         return h("div", { className: "dshh-root" }, head, h("div", { className: "dshh-muted" }, "正在读取状态数据。"));
@@ -597,14 +598,14 @@ window.__ModuleLoader__.load({
         const notes = Array.isArray(data.notes) ? data.notes : [];
         sections.push(card("首次安装",
           h("div", null,
-            h("div", { className: "dshh-muted" }, "本页与工具已可用；接入工作区后显示闸门、交接体检与会话水位。"),
+            h("div", { className: "dshh-muted" }, "本页与工具已可使用；接入工作区后显示闸门、交接体检与会话水位。"),
             h("ol", { className: "dshh-list" }, steps.map((s, i) => h("li", { key: i }, s))),
             notes.length ? h("ul", { className: "dshh-list" }, notes.map((n, i) => h("li", { key: i }, n))) : null,
             h("input", {
               className: "dshh-input",
               type: "text",
               value: parent,
-              placeholder: "填写绝对路径：全局根 _Workspace 将建立在该目录下",
+              placeholder: "填写绝对路径：全局根 `_Workspace` 将建立在该目录下",
               onChange: (e) => setParent(e.target.value),
             }),
             h("div", { className: "dshh-row" },
@@ -616,14 +617,15 @@ window.__ModuleLoader__.load({
       } else if (globalCount === 0) {
         sections.push(card("全局会话",
           h("div", null,
-            h("div", { className: "dshh-muted" }, "工作区已接入，尚无「全局」会话。点击下方按钮新建，插件会将其登记为全局角色。"),
-            h("div", { className: "dshh-muted" }, "全局根：" + (ws.root || "")),
+            h("div", { className: "dshh-muted" }, "工作区已接入，尚无「全局」会话。点击下方「创建全局会话」新建，插件会将其登记为全局角色。"),
+            h("div", { className: "dshh-muted" }, "全局根：`" + (ws.root || "") + "`"),
             h("div", { className: "dshh-row" },
               h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: makeGlobalSession }, working ? "正在创建" : "创建全局会话")),
             globalMsg ? h("div", { className: globalBad ? "dshh-bad" : "dshh-ok" }, globalMsg) : null)));
       }
 
       // 二、授权：唯一合法的「用户同意」入口，置顶；只列在任会话，超过 5 个折叠。
+      // 授权只约束「换任（上下文重置）」。压缩不看授权文件：助手入口只跑前置校验，日常压缩由插件自触发。
       const consentRows = (Array.isArray(data.consent) ? data.consent : []).filter((r) => r.onduty !== false);
       const dutyRows = byActivity.filter((r) => r.onduty !== false);
       const grantRow = (kind) => (r, i) => h("tr", { key: i },
@@ -635,7 +637,7 @@ window.__ModuleLoader__.load({
           disabled: working,
           title: r.sid,
           onClick: () => doGrantSid(r.sid, kind),
-        }, kind === "succeed" ? "授权换任" : "授权压缩")));
+        }, "授权重置")));
       const grantTable = (kind) => h(Folded, {
         rows: dutyRows,
         pageSize: 5,
@@ -644,31 +646,29 @@ window.__ModuleLoader__.load({
         render: grantRow(kind),
       });
       const authKids = [];
+      authKids.push(h("div", { className: "dshh-muted" }, "需要授权的只有「换任」（上下文重置）。点击「授权重置」后，该会话在 5 分钟内可完成换任一次。步骤：先调用 `ho_handover(action=\"rotate\")` 重写交接，再调用 `ho_sessions(action=\"succeed\")` 建立接任会话。授权用后失效。也可在会话中发送 `/allow-reset`。"));
+      authKids.push(h("div", { className: "dshh-muted" }, "压缩一律不需要授权；事件级微快照同样不需要。"));
       if (dutyRows.length) {
-        authKids.push(h("div", { className: "dshh-muted" }, "点击「授权压缩」后，该会话 5 分钟内可压缩一次，用后失效；也可在会话中发送 /allow-compact。"));
-        authKids.push(grantTable("compact"));
-        authKids.push(h("div", { className: "dshh-muted" }, "换任亦须授权：点击「授权换任」后 5 分钟内可换任一次；也可在会话中发送 /allow-succeed。"));
         authKids.push(grantTable("succeed"));
       } else {
-        authKids.push(h("div", { className: "dshh-muted" }, "暂无可选的在任会话；可在下方直接填写会话 id 授权。"));
+        authKids.push(h("div", { className: "dshh-muted" }, "暂无可选的在任会话；可在下方直接填写会话 ID 授权。"));
       }
       authKids.push(h("div", { className: "dshh-row" },
         h("input", {
           className: "dshh-inputSm",
           type: "text",
           value: csSid,
-          placeholder: "也可填写会话 id 或 8 位短号",
+          placeholder: "也可填写会话 ID 或 8 位短号",
           onChange: (e) => setCsSid(e.target.value),
         }),
-        h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("compact") }, working ? "正在授权" : "授权压缩"),
-        h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("succeed") }, "授权换任")));
+        h("button", { className: "dshh-btn", type: "button", disabled: working || !csSid, onClick: () => doGrant("succeed") }, working ? "正在授权" : "授权重置")));
       if (consentRows.length) {
-        authKids.push(h("div", { className: "dshh-ok" }, "有授权"));
+        authKids.push(h("div", { className: "dshh-ok" }, "已有有效授权"));
         authKids.push(h("table", { className: "dshh-table" },
           h("colgroup", null, h("col", { style: { width: "62%" } }), h("col", { style: { width: "18%" } }), h("col", { style: { width: "20%" } })),
           h("thead", null, h("tr", null, h("th", null, "已授权会话"), h("th", null, "剩余"), h("th", null, "操作"))),
           h("tbody", null, consentRows.map((r, i) => h("tr", { key: i },
-            h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId) + (r.kind === "succeed" ? " · 换任" : " · 压缩")),
+            h("td", { className: "dshh-code", title: r.sessionId }, shortSid(r.sessionId) + (r.kind === "succeed" ? "（上下文重置）" : "（旧压缩授权）")),
             h("td", { className: "dshh-num" }, Math.round((r.leftMs || 0) / 1000) + " 秒"),
             h("td", null, h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => doRevoke(r.sessionId, r.kind) }, "撤销")))))));
       }
@@ -689,17 +689,17 @@ window.__ModuleLoader__.load({
         const hasOlds = !!(st && st.phase === "switched" && (st.olds || []).length);
         const attention = !!(st && (st.linkBroken || st.srcExists === false || st.phase === "verified" || st.phase === "partial" || (st.retarget && st.retarget.needed)));
         const stateText = st
-          ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（" + st.dst + "）" : "") + (hasOlds ? "；旧备份保留，不影响使用" : "")
+          ? "状态：" + (phaseLabel[st.phase] || st.phase) + (st.dst ? "（`" + st.dst + "`）" : "") + (hasOlds ? "；旧备份保留，不影响使用" : "")
           : "正在读取迁移状态";
         const kids = [];
-        kids.push(h("div", { className: "dshh-muted" }, "切换只改名并建立链接，不改动文件内容。"));
+        kids.push(h("div", { className: "dshh-muted" }, "切换仅重命名并建立链接，不改动文件内容。"));
         if (st && st.phase && st.phase.indexOf("switched") === 0) {
-          kids.push(h("div", { className: "dshh-muted" }, "原路径为指向新位置的链接；若已删除，可用「重建链接」恢复。"));
+          kids.push(h("div", { className: "dshh-muted" }, "原路径现为指向新位置的链接；若链接已被删除，可点击「重建链接」恢复。"));
         }
         if (st && (st.srcExists === false || st.linkBroken)) {
           kids.push(h("div", { className: "dshh-bad" }, st.linkBroken
-            ? "链接指向的新位置不存在：" + (st.dst || "") + "。应先确认真实数据位置；本页不改动文件。"
-            : "原路径不存在（可能已被删除）：" + (st.src || "") + "。数据仍在 " + (st.dst || "") + "。"));
+            ? "链接指向的新位置不存在：`" + (st.dst || "") + "`。原因：该目录可能已被移动或删除。处置：先确认真实数据位置；本页不改动文件。"
+            : "原路径不存在：`" + (st.src || "") + "`。原因：该路径可能已被删除。数据仍在 `" + (st.dst || "") + "`。" + (st.canRepair ? "可点击「重建链接」恢复。" : "")));
           if (st.canRepair) {
             kids.push(h("div", { className: "dshh-row" },
               h("button", { className: "dshh-btn", type: "button", disabled: mvBusy, onClick: doRepair }, "重建链接")));
@@ -708,29 +708,29 @@ window.__ModuleLoader__.load({
         if (st && st.phase === "verified" && st.script) {
           kids.push(h("div", { className: "dshh-sub" }, "切换步骤"));
           kids.push(h("ol", { className: "dshh-list" },
-            h("li", null, "点击「准备切换」，助手进入待命状态。"),
+            h("li", null, "点击「准备切换」，切换脚本进入待命状态。"),
             h("li", null, "完全退出 DSH，含托盘与后台进程。"),
-            h("li", null, "退出后自动执行，约 50 毫秒。"),
+            h("li", null, "退出 DSH 后自动执行，约耗时 50 毫秒。"),
             h("li", null, "等待 10 秒后再打开 DSH。"),
             h("li", null, "回到本页，状态应为「已切换，原路径为链接」。")));
           kids.push(h("div", { className: "dshh-row" },
             h("button", { className: "dshh-btn", type: "button", disabled: mvBusy, onClick: doSwitch }, mvBusy ? "正在准备" : "准备切换（退出 DSH 后自动完成）")));
-          kids.push(h("div", { className: "dshh-muted" }, "助手未运行时手工执行：" + ((st.script && st.script.helper) || "")));
+          kids.push(h("div", { className: "dshh-muted" }, "切换脚本未运行时，可手动执行：`" + ((st.script && st.script.helper) || "") + "`"));
         }
         if (st && st.retarget && st.retarget.needed) {
-          kids.push(h("div", { className: "dshh-warn" }, "DSH 登记仍指向旧路径：" + st.retarget.total + " 处，涉及 " + st.retarget.files.length + " 个文件。"));
-          kids.push(h("div", { className: "dshh-muted" }, "退出 DSH 时改写，每份先备份；重启后生效。"));
+          kids.push(h("div", { className: "dshh-warn" }, "DSH 登记仍指向旧路径：共 " + st.retarget.total + " 处，涉及 " + st.retarget.files.length + " 个文件。"));
+          kids.push(h("div", { className: "dshh-muted" }, "退出 DSH 时改写登记文件，每份先备份；重启后生效。"));
           kids.push(h("div", { className: "dshh-row" },
-            h("button", { className: "dshh-btn", type: "button", disabled: mvBusy, onClick: doRetarget }, "把登记迁到新位置（退出 DSH 后生效）")));
+            h("button", { className: "dshh-btn", type: "button", disabled: mvBusy, onClick: doRetarget }, "迁移登记到新位置（退出 DSH 后生效）")));
           for (const rf of (st.retarget.files || [])) {
-            kids.push(h("div", { className: "dshh-code dshh-muted" }, rf.path + "  ×" + rf.count));
+            kids.push(h("div", { className: "dshh-code dshh-muted" }, rf.path + "（" + rf.count + " 处）"));
           }
         }
         if (st && st.retarget && st.retarget.needed === false) {
-          kids.push(h("div", { className: "dshh-ok" }, "DSH 登记已指向新位置：" + (st.dst || "") + "。"));
+          kids.push(h("div", { className: "dshh-ok" }, "DSH 登记已指向新位置：`" + (st.dst || "") + "`。"));
         }
         if (hasOlds) {
-          kids.push(h("div", { className: "dshh-muted" }, "旧备份：" + st.olds.map((o) => o.path + "（" + fmtBytes(o.bytes) + "）").join("、") + "。保留不影响使用；删除后无法恢复。"));
+          kids.push(h("div", { className: "dshh-muted" }, "旧备份：" + st.olds.map((o) => "`" + o.path + "`（" + fmtBytes(o.bytes) + "）").join("、") + "。保留不影响使用；删除后无法恢复。"));
           kids.push(h("div", { className: "dshh-row" },
             h("input", {
               className: "dshh-inputSm",
@@ -757,8 +757,8 @@ window.__ModuleLoader__.load({
           kids.push(kv([
             ["源", h("span", { className: "dshh-code" }, mvProbe.src)],
             ["目标", h("span", { className: "dshh-code" }, mvProbe.dst)],
-            ["总大小", mvProbe.files + " 文件 · " + fmtBytes(mvProbe.bytes)],
-            ["目标盘可用", mvProbe.freeBytes === null || mvProbe.freeBytes === undefined ? "?" : fmtBytes(mvProbe.freeBytes)],
+            ["总大小", mvProbe.files + " 个文件，共 " + fmtBytes(mvProbe.bytes)],
+            ["目标盘可用", mvProbe.freeBytes === null || mvProbe.freeBytes === undefined ? "未知" : fmtBytes(mvProbe.freeBytes)],
             ["结论", mvProbe.ok ? verdict("通过", true) : verdict("不通过", false)],
           ]));
           for (const w of (mvProbe.warnings || [])) kids.push(h("div", { className: "dshh-warn" }, "注意：" + w));
@@ -768,7 +768,7 @@ window.__ModuleLoader__.load({
         sections.push(card("移动全局根目录",
           h("div", null,
             h("details", null,
-              h("summary", { className: "dshh-sum" }, (attention ? "需要处理：" : "") + stateText),
+              h("summary", { className: "dshh-sum" }, (attention ? "需要处理。" : "") + stateText),
               h("div", { className: "dshh-wrap" }, kids)))));
       }
 
@@ -850,7 +850,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => setRoleMigrate((prev) => Object.assign({}, prev || {}, { [r.sid]: e.target.value })),
             },
               h("option", { value: "auto" }, "先快照再移动"),
-              h("option", { value: "direct" }, "直接建新体系")) : null) : h("span", { className: "dshh-muted" }, "不需填写")),
+              h("option", { value: "direct" }, "直接建新体系")) : null) : h("span", { className: "dshh-muted" }, "无需填写")),
           h("td", null, h("div", { className: "dshh-pick" }, action)));
       };
       sections.push(card("会话角色",
@@ -873,7 +873,7 @@ window.__ModuleLoader__.load({
       // 五、全局前置提示词：默认折叠，只显示已保存字数。
       sections.push(card("全局前置提示词",
         h("div", null,
-          h("div", { className: "dshh-muted" }, "只注入你填写的内容，不含插件约束；对全部会话生效，留空保存即不注册提示段。"),
+          h("div", { className: "dshh-muted" }, "仅注入下方填写的内容，不含插件约束；对全部会话生效。留空后保存，即不注册提示段。"),
           h("details", null,
             h("summary", { className: "dshh-sum" }, "已保存 " + (extra ? extra.length : 0) + " 字符，点击编辑"),
             h("textarea", {
@@ -920,9 +920,9 @@ window.__ModuleLoader__.load({
       if (gate) {
         const rows = (gate.libraries || []).map((r, i) => h("tr", { key: i },
           h("td", null, r.name),
-          h("td", null, r.titleOk ? "通过" : "缺"),
+          h("td", null, r.titleOk ? "通过" : "缺失"),
           h("td", null, (r.lines - r.missing) + "/" + r.lines),
-          h("td", null, r.waterOk ? "通过" : "缺"),
+          h("td", null, r.waterOk ? "通过" : "缺失"),
           h("td", null, verdict(r.ok ? "通过" : "未通过", r.ok))));
         sections.push(card("通用约束条闸门",
           gate.error
@@ -947,7 +947,7 @@ window.__ModuleLoader__.load({
           h("td", null, (r.reasons || []).map(cleanReason).filter(Boolean).join("；"))));
         sections.push(card("交接文档体检",
           h("div", null,
-            h("div", null, "全局 Global_Handover.md：", ho.global.verdict === "通过" ? verdict("通过", true) : verdict(ho.global.verdict, false),
+            h("div", null, "全局 `Global_Handover.md`：", ho.global.verdict === "通过" ? verdict("通过", true) : verdict(ho.global.verdict, false),
               (ho.global.reasons || []).length ? h("span", { className: "dshh-muted" }, (ho.global.reasons || []).map(cleanReason).filter(Boolean).join("；")) : null),
             prows.length
               ? h("table", { className: "dshh-table" },
@@ -963,7 +963,7 @@ window.__ModuleLoader__.load({
         ["压缩调度器", p.scheduler],
         ["注入项", (p.inject || []).join("、")],
         ["初始化", (p.initErrors && p.initErrors.length) ? h("span", { className: "dshh-bad" }, p.initErrors.join("；")) : verdict("正常", true)],
-        ["工作区", ws.found ? h("span", { className: "dshh-code" }, ws.root) : verdict("未接入（未找到 _Control_Center）", false)],
+        ["工作区", ws.found ? h("span", { className: "dshh-code" }, ws.root) : verdict("未接入（未找到 `_Control_Center`）", false)],
       ])));
 
       // 十、最近一次会话间通信判定：只有存在判定时才出现。
@@ -972,7 +972,7 @@ window.__ModuleLoader__.load({
         sections.push(card("最近一次会话间通信判定", kv([
           ["结论", g.allow ? verdict("允许", true) : verdict("拒绝", false)],
           ["依据", g.source + (g.title ? "；会话标题 " + g.title : "")],
-          ["会话", h("span", { className: "dshh-code" }, g.sid || "-")],
+          ["会话", h("span", { className: "dshh-code" }, g.sid || "无")],
         ])));
       }
 

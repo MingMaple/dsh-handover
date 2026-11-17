@@ -1,7 +1,7 @@
 /**
  * 设置页数据与动作的唯一实现：HTTP 路由（旧通道）和 /api 载体（新通道）都调它。
  * 返回统一信封：{ ok:true, value } | { ok:false, error:{code,message,details}, http }。
- * http 只是给旧 HTTP 通道用的状态码提示，载体通道不用它。
+ * http 仅用于旧 HTTP 通道，载体通道忽略它。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,7 +34,7 @@ export function currentRoot(env) {
   return ws || '';
 }
 
-/** 状态快照缓存：设置页只取现成结果，不让请求等待现算。 */
+/** 状态快照缓存：设置页只取现成结果，不让请求等待现算。超过租期才重算一次。 */
 const statusCache = new WeakMap();   // env → { at, json, ms }
 const STATUS_TTL_MS = 30000;
 
@@ -117,7 +117,7 @@ export function createApi(env, info) {
       }
 
       if (method === 'deploy') {
-        // 一键部署：建文件体系 → 注册「全局」工作区 → 建「全局」会话（三件事一次做完）。
+        // 一键部署：建文件体系 → 注册「全局」工作区 → 建「全局」会话，上述动作在一次请求内顺序完成。
         const scaffold = createGlobalWorkspace(p.parent, { name: p.name });
         if (!scaffold || scaffold.ok !== true) {
           return { ok: false, error: { code: 'setup-failed', message: String((scaffold && scaffold.error) || '建立失败'), details: {} }, http: 400 };
@@ -179,8 +179,9 @@ export function createApi(env, info) {
       }
 
       if (method === 'extra-prompt') {
-        if (typeof p.text !== 'string') return bad('bad-request', '缺少 text（空字符串＝不注入）');
-        // 写入门禁：内容与开关都没变就不写。提示词一改，下一次请求的整段前缀缓存失效。
+        if (typeof p.text !== 'string') return bad('bad-request', '缺少 text（空字符串表示不注入）');
+        // 写入门禁：内容与开关都没变就不写。
+        // 提示词一改，下一次请求的整段前缀缓存立即失效，代价高，因此先比对再落盘。
         let before = '';
         let beforeEnabled = false;
         try { before = String(env.extraPrompt() || ''); } catch { before = ''; }
@@ -195,7 +196,7 @@ export function createApi(env, info) {
           env.log('全局前置提示词：' + (r.enabled ? '已开启' : '已关闭') + '，' + r.chars + ' 字符（下一次请求前缀缓存失效）');
           return ok(Object.assign({}, r, {
             changed: true,
-            note: '已保存。提示词位于段序 950，改动会让下一次请求的整段前缀缓存失效，建议在压缩或换任的边界处修改。',
+            note: '已保存。提示词位于段序 950，改动会让下一次请求的整段前缀缓存失效。建议在压缩或换任的边界处修改。',
           }));
         } catch (e) { return boom(e); }
       }
@@ -249,6 +250,7 @@ export function createApi(env, info) {
         const kind = p.kind === 'succeed' ? 'succeed' : 'compact';
         const g = grantConsent(sid, kind === 'succeed' ? '设置页点击换任' : '设置页点击', kind);
         // 授权一到就重装目标会话的提示段：空闲会话下一轮即可看见，不必等它自己去查。
+        // 重装失败不影响授权结果，下一轮重建提示段时仍会读到，故此处忽略异常。
         if (typeof env.refreshPromptFor === 'function') { try { env.refreshPromptFor(sid); } catch { /* ignore */ } }
         env.log((kind === 'succeed' ? '换任' : '压缩') + '授权：' + sid + '（5 分钟）');
         invalidateStatus(env);

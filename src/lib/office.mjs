@@ -2,16 +2,16 @@
  * 在任登记表（office）：回答「这条类别现在谁在任」。
  *
  * 记录保存在 <工作区根>/_Control_Center/records/Office.json：每一类会话（全局／项目名／杂项任务名）
- * 记一个在任会话与历史编号。Registry.md 的「在役会话」列由本文件定点改写——只换那一格，
+ * 记一个在任会话与历史编号。Registry.md 的「在役会话」列由本文件定点改写：只换那一格，
  * 不动人写的状态文字与整表结构。编号由这里分配（历史最大号 + 1），不采信会话自述。
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { NL, readUtf8 } from './text.mjs';
+import { NL, readUtf8, writeFileAtomic } from './text.mjs';
 
-export const OFFICE_VERSION = 1;
+const OFFICE_VERSION = 1;
 
-/** 带时区偏移的时刻文本（与交接、登记表同一写法）。 */
+/** 带时区偏移的时刻文本（与交接、登记表同一写法，固定东八区）。 */
 export function stampNow() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
   const p = (n) => String(n).padStart(2, '0');
@@ -34,15 +34,17 @@ export function loadOffice(ws) {
   return v;
 }
 
-/** 原子写：临时文件 + rename，半截文件不会被下一次读当成事实。 */
+/**
+ * 原子写：先写临时文件再改名，读方不会读到写入一半的内容。
+ * @param {string} ws 工作区根
+ * @param {object} store 登记表对象，写入前补 version 与 updatedAt
+ * @returns {string} 登记表文件路径
+ */
 export function saveOffice(ws, store) {
   const p = officePath(ws);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
   store.version = OFFICE_VERSION;
   store.updatedAt = stampNow();
-  const tmp = p + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + NL, 'utf8');
-  fs.renameSync(tmp, p);
+  writeFileAtomic(p, JSON.stringify(store, null, 2) + NL);
   return p;
 }
 
@@ -57,13 +59,13 @@ export function lineageKeyOf(kind, project, task) {
 const GEN_RE = /^(.*\D)(\d+)$/;
 
 /** 名字去掉尾部代际：全局11 → 全局；没有数字返回空串。 */
-export function baseOf(name) {
+function baseOf(name) {
   const m = GEN_RE.exec(String(name || '').trim());
   return m ? m[1] : '';
 }
 
 /** 名字里的代际号：全局11 → 11；没有数字返回 null。 */
-export function generationOf(name) {
+function generationOf(name) {
   const m = GEN_RE.exec(String(name || '').trim());
   return m ? Number(m[2]) : null;
 }
@@ -85,8 +87,9 @@ export function nextName(store, key) {
 }
 
 /**
- * 名字 → 类别。用户给的多半是不确定的名字（全局3、全局、Demo1、换了说法的旧叫法），
- * 按「类别名精确 → 去尾部编号 → 现任名 → 唯一子串」四步收敛；收敛不了就报候选，不瞎猜。
+ * 名字 → 类别。用户给的多半是不确定的名字（全局3、全局、Demo1、换过说法的旧名）。
+ * 按「类别名精确 → 去尾部编号 → 现任名 → 唯一子串」4 步判定。
+ * 判定不出唯一类别时列出候选，不猜测。
  */
 export function resolveOffice(store, query) {
   const q = String(query || '').trim();
@@ -145,7 +148,12 @@ export function rowsOf(store) {
   });
 }
 
-/** 一行人类可读：名字、会话 id、类别、（提到旧编号时的来处）。 */
+/**
+ * 一行文本：名字、会话 id、类别，以及提及旧编号时的来处。
+ * @param {object} row rowsOf 返回的一行
+ * @param {string} [askedAs] 用户提问时用的名字，用于标注旧编号的去向
+ * @returns {string} 可直接展示的一行
+ */
 export function formatRow(row, askedAs) {
   const cur = row && row.current;
   if (!cur || !cur.name) return (row && row.key ? row.key : '?') + '  — 当前空缺';
@@ -159,7 +167,7 @@ export function formatRow(row, askedAs) {
 export function registerHolder(ws, opts) {
   const o = opts || {};
   const key = lineageKeyOf(o.kind, o.project, o.task);
-  if (!key) throw new Error('类别名缺失：全局用 kind=global，项目给 project，杂项给 task');
+  if (!key) throw new Error('类别名缺失：全局传 kind=global，项目传 project，杂项传 task');
   const store = loadOffice(ws);
   const lin = store.lineages[key] || (store.lineages[key] = {
     kind: o.kind, project: String(o.project || ''), task: String(o.task || ''),
@@ -227,8 +235,10 @@ export function removeHolder(ws, opts) {
 
 /**
  * 读 Registry.md「项目清单」里的项目名（按表内顺序）。
- * 只认那一张表：表头、分隔行与空行一律跳过；读不到文件时返回空数组。
+ * 只认那一张表：表头、分隔行与空行一律跳过。读不到文件时返回空数组。
  * 设置页的交接体检以它为准，避免把未登记的旧目录当成项目。
+ * @param {string} ws 工作区根
+ * @returns {string[]} 项目名数组，可能为空
  */
 export function readRegistryProjects(ws) {
   const file = path.join(String(ws || ''), '_Project_Meta', 'Registry.md');
@@ -269,9 +279,9 @@ function currentCellFor(row, withName) {
 
 /**
  * 把 Registry.md 里的「在役会话」格改成登记表里的现任。
- * 只认两张表（项目清单、未登记但存在的任务），只换那一格；其它文字一律不动。
+ * 只认项目清单与未登记任务这 2 张表，只换该格；其它文字一律不动。
  */
-export function syncRegistry(ws, store) {
+function syncRegistry(ws, store) {
   const file = path.join(String(ws || ''), '_Project_Meta', 'Registry.md');
   let text = '';
   try { text = readUtf8(file); } catch { return { changed: [], error: '读不到 Registry.md' }; }

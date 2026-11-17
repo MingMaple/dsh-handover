@@ -2,7 +2,7 @@
  * 设置页数据的**旧通道**：GET /dsh-handover/status.json、POST /setup /register /extra-prompt /role。
  *
  * 主通道是 DSH 认证的 /api 载体（见 rpc-carrier.mjs）：本机 GUI 服务器对裸请求一律返回 403。
- * 这里保留给没有 connection 服务的宿主与 CLI 作兜底，实现统一委托 api.mjs，避免两套逻辑漂移。
+ * 本通道只给没有 connection 服务的宿主与 CLI 作兜底。实现统一委托 api.mjs，避免 2 套逻辑漂移。
  */
 import { createApi } from './api.mjs';
 
@@ -46,12 +46,12 @@ export function registerStatusRoute(ctx, env, info, apiIn) {
     try {
       const webServer = wctx && wctx.webServer;
       if (!webServer || typeof webServer.register !== 'function') {
-        env.log('状态路由：webServer 不可用，跳过设置页 HTTP 兜底（主通道是 /api 载体）');
+        env.log('状态路由：webServer 不可用，跳过设置页 HTTP 兜底；主通道为 /api 载体');
         return;
       }
       const api = apiIn || createApi(env, info);
 
-      /** 旧通道出口：把统一信封翻成 { ok, ...value }（页面两种通道都能吃）。 */
+      /** 旧通道出口：把统一信封转换为 { ok, ...value }，页面在 2 条通道下都能解析。 */
       const reply = (res, r) => {
         if (!r || r.ok !== true) {
           const err = (r && r.error) || {};

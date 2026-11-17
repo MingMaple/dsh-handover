@@ -1,4 +1,4 @@
-/** 7-Zip 封装：路径探测 + a/t/x 三个动作（参数用数组，不拼命令行字符串）。 */
+/** 7-Zip 封装：路径探测 + a/t/x 3 个动作（参数用数组，不拼命令行字符串）。 */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -37,7 +37,7 @@ let probed = null;
 
 /**
  * 探测可用的 7-Zip：配置路径 → 常见安装位置 → PATH 里的 7z。
- * 返回空串表示本机没有；调用方要能退回内置归档器（lib/archive.mjs），不能因此罢工。
+ * 返回空串表示本机没有；调用方须能退回内置归档器（lib/archive.mjs），不得因此中断打包。
  */
 export function sevenZipBin(configured) {
   if (probed !== null) return probed;

@@ -5,8 +5,8 @@
  * - **链接**：Windows 用 junction，POSIX 用目录 symlink；都用 node:fs.symlinkSync，不需要管理员。
  * - **助手**：一个纯 Node 脚本，用 DSH 自带的运行时（process.execPath + ELECTRON_RUN_AS_NODE=1）启动，
  *   不依赖 PowerShell / bash。等待用「父进程 pid 还在不在」轮询（process.kill(pid,0)），不按进程名匹配。
- * - **为什么不就地做**：源目录在 DSH 运行时被占用，Windows 下改名会报占用，
- *   所以只能「先复制校验，等 DSH 退了再改名 + 建链接」。
+ * - **为什么不就地做**：源目录在 DSH 运行时被占用，Windows 下改名会报占用。
+ *   因此只能「先复制校验，等 DSH 退出后再改名并建链接」。
  *
  * 本模块不持有进程状态，入参显式，便于空白环境单测。
  */
@@ -17,6 +17,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { pathKey } from './pathkey.mjs';
+import { aborted } from './abort.mjs';
+import { fmtBytes, writeFileAtomic } from './text.mjs';
 
 const MARKER_NAME = 'dsh-handover.move.json';
 const HELPER_NAME = 'dsh-handover.move.mjs';
@@ -61,11 +63,8 @@ function readMarker() {
   } catch { return null; }
 }
 function writeMarker(obj) {
-  fs.mkdirSync(stateDir(), { recursive: true });
   const p = markerPath();
-  const tmp = p + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
-  fs.renameSync(tmp, p);
+  writeFileAtomic(p, JSON.stringify(obj, null, 2));
   return p;
 }
 function stampNow() {
@@ -136,14 +135,6 @@ function linkTargetOf(p) {
   } catch { return null; }
 }
 
-function fmtBytes(n) {
-  const v = Number(n) || 0;
-  if (v >= 1024 * 1024 * 1024) return (v / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-  if (v >= 1024 * 1024) return (v / (1024 * 1024)).toFixed(1) + ' MB';
-  if (v >= 1024) return (v / 1024).toFixed(1) + ' KB';
-  return v + ' B';
-}
-
 function stampPathOf(dst) { return path.join(dst, STAMP_REL); }
 function writeStamp(marker) {
   const p = stampPathOf(marker.dst);
@@ -159,7 +150,7 @@ function writeStamp(marker) {
 export async function probeMove({ src, to }) {
   const problems = [];
   const warnings = [];
-  if (!src) throw new Error('缺少当前全局根路径');
+  if (!src) throw new Error('缺少当前全局根路径。请提供 src 参数。');
   const s = tail(path.resolve(String(src)));
   let st = null;
   try { st = fs.lstatSync(s); } catch { st = null; }
@@ -175,9 +166,9 @@ export async function probeMove({ src, to }) {
   if (!fs.existsSync(path.join(copyFrom, '_Control_Center'))) warnings.push('源目录中无 _Control_Center：请确认该目录是否为全局根。');
 
   const raw = String(to || '').trim();
-  if (!raw) throw new Error('缺少目标路径（to）');
+  if (!raw) throw new Error('缺少目标路径（to）。请提供目标父目录的绝对路径。');
   if (!path.isAbsolute(raw)) problems.push('目标须为绝对路径：' + raw);
-  // 语义：to＝目标**父目录**（把整个根目录搬进去）；basename 与当前根同名则直接当新根。
+  // 语义：to＝目标**父目录**（把整个根目录搬进去）。basename 与当前根同名时，to 直接作为新根。
   const toRaw = tail(path.resolve(raw));
   const rootName = path.basename(s);
   const t = pathKey(path.basename(toRaw)) === pathKey(rootName) ? toRaw : path.join(toRaw, rootName);
@@ -212,10 +203,14 @@ export async function probeMove({ src, to }) {
   };
 }
 
-/** 复制 + 全量校验 + 落标记 + 写助手脚本。失败即抛，不留可被误用的标记。 */
-export async function startMove({ src, to, onProgress }) {
+/**
+ * 复制并校验目标。仅在校验一致时落标记，避免后续切换误用未验证副本。
+ * 失败直接抛出，不留下可被切换助手读取的标记。
+ */
+export async function startMove({ src, to, onProgress, signal }) {
   const p = await probeMove({ src, to });
-  if (!p.ok) throw new Error('预检未通过：' + p.problems.join('；'));
+  if (!p.ok) throw new Error('预检未通过：' + p.problems.join('；') + '。请修正后重试。');
+  if (aborted(signal)) return { ok: false, aborted: true };
   await fsp.mkdir(p.dst, { recursive: true });
   if (onProgress) onProgress({ stage: 'copy', done: 0, total: p.files });
   try {
@@ -223,6 +218,8 @@ export async function startMove({ src, to, onProgress }) {
   } catch (e) {
     throw new Error('复制失败：' + msgOf(e) + '（目标可能已有部分文件，可清空后重跑）');
   }
+  // 中止只影响本次调用：已复制的文件保留，但不校验、不落标记、不生成切换脚本。
+  if (aborted(signal)) return { ok: false, aborted: true };
   if (onProgress) onProgress({ stage: 'verify', done: 0, total: p.files });
   const a = await manifest(p.copyFrom, (n) => { if (onProgress) onProgress({ stage: 'verify-src', done: n, total: p.files }); });
   const b = await manifest(p.dst, (n) => { if (onProgress) onProgress({ stage: 'verify-dst', done: n, total: p.files }); });
@@ -250,7 +247,7 @@ export async function startMove({ src, to, onProgress }) {
   return { ok: true, marker, report: { files: a.files, bytes: p.bytes, digest: a.digest, copies: b.files } };
 }
 
-/** 生成跨平台助手脚本（纯 Node，不依赖 PowerShell、bash）+ 两个手工兜底启动器。 */
+/** 生成跨平台助手脚本（纯 Node，不依赖 PowerShell、bash）+ 2 个手工兜底启动器。 */
 function writeHelper(marker) {
   fs.mkdirSync(stateDir(), { recursive: true });
   const sp = scriptPaths();
@@ -307,12 +304,12 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 
   const stampName = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 13).replace(/^(\\d{8})(\\d{4})/, '$1-$2');
   const old = src + '.old-' + stampName;
-  try { fs.renameSync(src, old); } catch (e) { stop('改名失败（多半还有进程占用）：' + e.message); }
-  log('① 已改名：' + src + '  →  ' + old);
+  try { fs.renameSync(src, old); } catch (e) { stop('改名失败：源目录仍被进程占用或权限不足。请关闭占用该目录的程序后重试。系统信息：' + e.message); }
+  log('（1） 已改名：' + src + '  →  ' + old);
   const kind = process.platform === 'win32' ? 'junction' : 'dir';
   try { fs.symlinkSync(dst, src, kind); } catch (e) {
     try { fs.renameSync(old, src); } catch { /* ignore */ }
-    stop('建链接失败，已把旧目录改回原名：' + e.message);
+    stop('建链接失败：无法在原路径创建链接。已把旧目录改回原名，请检查权限后重试。系统信息：' + e.message);
   }
   let target = '';
   try { target = fs.readlinkSync(src); } catch { target = ''; }
@@ -325,11 +322,11 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
   m.oldPath = old;
   m.linkKind = kind;
   try { fs.writeFileSync(MARKER, JSON.stringify(m, null, 2), 'utf8'); } catch { /* ignore */ }
-  log('② 已建 ' + kind + '：' + src + '  →  ' + dst);
+  log('（2） 已建 ' + kind + '：' + src + '  →  ' + dst);
   if (RETARGET_HELPER) {
     try {
       spawn(process.execPath, [RETARGET_HELPER, '0'], { detached: true, stdio: 'ignore', windowsHide: true, env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }) }).unref();
-      log('③ 已派登记修改登记助手（把 DSH 的登记改到新位置）');
+      log('（3） 已派登记修改登记助手（把 DSH 的登记改到新位置）');
     } catch (e) {
       log('修改登记助手未派成功：' + e.message + '（可在设置页点击「把登记迁到新位置」）');
     }
@@ -344,8 +341,10 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 })();
 `;
   fs.writeFileSync(sp.helper, helper, 'utf8');
-  // 手工兜底：Windows 与 POSIX 各一个启动器，都把 ELECTRON_RUN_AS_NODE 打开（Electron 运行时当 node 用）
-  const cmd = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', '"' + exe + '" "' + sp.helper + '" %*', 'pause', ''].join('\r\n');
+  // 手工兜底：Windows 与 POSIX 各一个启动器。两者都打开 ELECTRON_RUN_AS_NODE，让 Electron 运行时作为 Node 使用。
+  // cmd.exe 按当前控制台代码页（简体中文为 GBK）逐行读批处理：用户目录含中文时（如 C:\Users\张茗枫）
+  // 直接写 UTF-8 会让路径被误读。首行切到 UTF-8 代码页，后续行才按 UTF-8 解码。
+  const cmd = ['@echo off', 'chcp 65001 >nul', 'set ELECTRON_RUN_AS_NODE=1', '"' + exe + '" "' + sp.helper + '" %*', 'pause', ''].join('\r\n');
   fs.writeFileSync(sp.cmd, cmd, 'utf8');
   const sh = ['#!/bin/sh', 'export ELECTRON_RUN_AS_NODE=1', 'exec "' + exe + '" "' + sp.helper + '" "$@"', ''].join('\n');
   fs.writeFileSync(sp.sh, sh, 'utf8');
@@ -356,10 +355,10 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 /** 派后台助手：等本进程（DSH）退出后自动切换。 */
 export function stageSwitch({ relaunch, waitPid } = {}) {
   const m = readMarker();
-  if (!m || !m.src || !m.dst) throw new Error('无可用迁移标记，请先执行一次 move');
+  if (!m || !m.src || !m.dst) throw new Error('无可用迁移标记：尚未执行复制。请先执行一次 move。');
   const st = moveStatus({ src: m.src });
   if (st.phase === 'switched' || st.phase === 'switched+cleaned') return { ok: true, already: true, phase: st.phase, log: switchLogPath() };
-  if (st.phase !== 'verified') throw new Error('当前不是「已复制并校验通过」（phase=' + st.phase + '），不能切换');
+  if (st.phase !== 'verified') throw new Error('当前状态不能切换：预期「已复制并校验通过」，实际 phase=' + st.phase + '。请先执行 move 完成复制与校验。');
   try { m.exe = process.execPath || ''; } catch { m.exe = ''; }
   // 先把「登记修改登记」算清楚：哪些文件里还写着旧路径。切换助手完成后会立刻派它执行。
   try {
@@ -391,10 +390,10 @@ export function stageSwitch({ relaunch, waitPid } = {}) {
 }
 
 /**
- * 重建链接：原路径被手工删除（或在资源管理器里误删）后，把链接按原样建回来。
+ * 重建链接：原路径被手工删除后，按原样重建链接。
  *
- * 只在「原路径确实不存在」或「原路径是指向别处的链接」时动手；
- * 遇到真实目录一律拒绝——那时候谁是真的数据已经说不清，必须人来判断。
+ * 仅当原路径不存在，或原路径是指向别处的链接时才执行。
+ * 遇到真实目录一律拒绝：此时无法判定哪一份是真实数据，须由人判断。
  */
 export function repairLink() {
   const m = readMarker();
@@ -425,7 +424,7 @@ export function repairLink() {
   return { ok: true, repaired: true, src: m.src, dst: m.dst, kind, link: t2 };
 }
 
-// ---------------------------------------------------------------- 登记修改登记（真正的「搬过去」）
+// ---------------------------------------------------------------- 登记改写（实际的迁移）
 
 /** 需要修改登记的 DSH 存储文件：工作区表、聊天集成的归属表。 */
 function retargetTargets() {
@@ -468,8 +467,8 @@ export function retargetPlan({ src, dst } = {}) {
   const m = readMarker();
   const S = tail(path.resolve(String(src || (m && m.src) || '')));
   const D = tail(path.resolve(String(dst || (m && m.dst) || '')));
-  if (!S || S === '.' || !D) throw new Error('缺少源或目标路径');
-  // 已经同一位置（修改登记完成后当前根就是新位置）→ 没有可改的，别误报。
+  if (!S || S === '.' || !D) throw new Error('缺少源或目标路径。请提供 src 与 dst。');
+  // 已在同一位置（登记修改完成后当前根即新位置）时无项可改，不误报。
   if (samePath(S, D)) return { src: S, dst: D, files: [], total: 0, needed: false };
   const needle = escPath(S);
   const files = [];
@@ -482,7 +481,7 @@ export function retargetPlan({ src, dst } = {}) {
   return { src: S, dst: D, files, total, needed: total > 0 };
 }
 
-/** 真改：先备份再整篇替换；只替换字符串里的路径，结构不动。 */
+/** 执行改写：先备份再整篇替换。只替换字符串中的路径，不改结构。 */
 export function applyRetarget(opts) {
   const plan = retargetPlan(opts);
   const from = escPath(plan.src);
@@ -566,13 +565,13 @@ export function moveStatus({ src } = {}) {
     }
   } catch { /* 源目录读取失败则跳过 */ }
 
-  // 这三种情形要让人一眼看见：原路径被手工删掉、目标不见了、链接悬空。
+  // 3 种情形须显式呈现：原路径被手工删除、目标缺失、链接悬空。
   let srcExists = false;
   try { fs.lstatSync(s); srcExists = true; } catch { srcExists = false; }
   const dstExists = !!dst && fs.existsSync(dst);
   const linkBroken = !!link && dst !== '' && !dstExists;
 
-  // 登记是否还指着旧路径：这是「搬过去了」与「只是能在新位置读写」的分界线。
+  // 登记是否仍指向旧路径，用于区分「已迁移」与「仅能在新位置读写」。
   let retarget = null;
   try {
     const p = retargetPlan({ src: s, dst });
@@ -580,7 +579,7 @@ export function moveStatus({ src } = {}) {
   } catch { retarget = null; }
 
   return {
-    phase, marker: m, src: s, dst, linkTarget: link || '', olds, script: scriptPaths(),
+    phase, marker: m, src: s, dst, sameTarget: !!(dst && samePath(s, dst)), linkTarget: link || '', olds, script: scriptPaths(),
     srcExists, dstExists, linkBroken, retarget,
     canCleanup: phase === 'switched' && olds.length > 0,
     canRepair: !srcExists && dstExists,
@@ -641,8 +640,8 @@ export async function rmTree(dir) {
 
 export async function cleanupOld({ src, confirm } = {}) {
   const st = moveStatus({ src });
-  if (st.phase !== 'switched') throw new Error('当前不是已切换状态（phase=' + st.phase + '），拒绝删除任何目录');
-  if (confirm !== true) throw new Error('删除旧备份需要明确确认（confirm=true）');
+  if (st.phase !== 'switched') throw new Error('当前状态不能清理：预期已切换，实际 phase=' + st.phase + '。请先完成切换再删除旧备份。');
+  if (confirm !== true) throw new Error('拒绝删除旧备份：缺少明确确认。请传入 confirm=true 后重试。');
   if (!st.olds.length) return { ok: true, removed: [], bytes: 0, note: '未找到旧备份目录' };
   const removed = []; const failed = []; let bytes = 0;
   const base = path.basename(st.src) + '.old-';

@@ -1,7 +1,7 @@
 # Workspace Charter（骨架）
 
 > 本文件由 dsh-handover 首次安装向导生成，只含可运行所需的最小内容；其余内容按需补充。
-> 铁律：§8.1.1.4 的 24 行是唯一正文来源，任何项目库的 RULES.md 都须逐字复制该节（外加一行「上下文水位自查」）。修改本节须同步修改全部库。
+> 铁律：§8.1.1.4 的 24 行是唯一正文来源。任何项目库的 RULES.md 都须逐字复制该节，并追加一行「上下文水位自查」。修改本节须同步修改全部库。
 
 ## 8. 工程约束
 
@@ -41,13 +41,13 @@
 
 ## 9. 上下文水位自查
 
-每个项目库的 `RULES.md` 应含一行「上下文水位自查」。水位 35% 写毕交接，水位 50% 不再新开任务，水位 85% 为硬顶；压缩至多 3 次，第 4 次换任。
-`ho_gate` 会逐库检查：标题行存在、24 行正文一行不缺、水位自查存在。缺任何一项，该库判定为未通过。
+每个项目库的 `RULES.md` 应含一行「上下文水位自查」。插件按 token 分档：整理线 soft、建议线 advise、强制线 hard。各档按窗口纯比例计算：整理线 35%、建议线 50%、强制线 65%。各档均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。前两档只提示。助手在子任务闭环或阶段切换时先写胶囊，再调用 `ho_handover(action="compact", capsule=…)`。强制线由插件兜底压缩。助手入口与提示在 4 次后关闭，强制线兜底至 6 次；宿主 80% 兜底。
+`ho_status(view="gate")` 会逐库检查：标题行存在、24 行正文一行不缺、水位自查存在。缺任一项，该库判定为未通过。
 
 ## 10. 工作区约定
 
 - 全局交接：`_Control_Center/records/Global_Handover.md`（由 `ho_handover` 读写，整篇重写前先归档）
-- 台账：`_Control_Center/records/Global_Changelog.md`（由 `ho_changelog` 按格式追加）
+- 台账：`_Control_Center/records/Global_Changelog.md`（由 `ho_docmap(action="changelog-append")` 按格式追加）
 - 会话提示词模板：`_Control_Center/templates/Prompt_Templates.md`（由 `ho_sessions` 的 `action=prompt` 渲染）
 - 体系注册：全局总注册 `_Control_Center/records/systems.md`（只列各任务体系文件路径），各任务一份 `System.md`（全局任务 `_Control_Center/tasks/<任务名>/System.md`、项目 `_Project_Meta/<项目名>/System.md`、杂项 `_Misc/tasks/<任务名>/System.md`）
 - 行动计划：任务根 `PLAN.md`；先读模板再写，旧计划先归档到任务根 `_archive/`，归档后不读旧计划

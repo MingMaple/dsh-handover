@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 换任自服务：在任会话在用户授权后，自己校验交接、建接任会话、登记在任并投递启动提示词。
  *
  * 越权防线：建什么角色的会话只认会话自身已登记的角色（env.roleOf），不采信调用参数；
@@ -13,10 +13,10 @@ import { checkConsent, consumedConsent } from './consent.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { resolveWorkspaceFor, promptFor, workspaceIdOfPath, workspacePathOf } from './session-ops.mjs';
-import { watermark } from './facts.mjs';
+import { bandsFor, normWater } from './pressure.mjs';
 
 /** 交接里不得残留的占位符。 */
-export const HANDOVER_PLACEHOLDERS = ['待填', 'TODO', '（建完后填）', '<填'];
+const HANDOVER_PLACEHOLDERS = ['待填', 'TODO', '（建完后填）', '<填'];
 
 function msgOf(e) {
   return String(e && e.message ? e.message : e);
@@ -32,7 +32,7 @@ function currentGlobalId(ws) {
 
 /**
  * 找接任指令节：含「## 下一步」或「## 2.」这类标题；没有标题时接受 §2 的写法。
- * 判据与 ho_gate 的交接体检一致：这一节至少要有一个条目（列表、表格或编号行）。
+ * 判据与 ho_status(view="gate") 的交接体检一致：这一节至少要有一个条目（列表、表格或编号行）。
  */
 function nextSectionOf(text) {
   const lines = text.split(NL);
@@ -59,7 +59,7 @@ function nextSectionOf(text) {
 }
 
 /** 交接结构检查（只判结构）：返回缺项列表，空数组表示通过。 */
-export function auditHandover(file) {
+function auditHandover(file) {
   const problems = [];
   try {
     const st = fs.statSync(file);
@@ -76,6 +76,46 @@ export function auditHandover(file) {
     if (text.indexOf(p) !== -1) problems.push('仍有占位符：' + p);
   }
   return problems;
+}
+
+/**
+ * 换任硬闸：以 rotate 留痕为准。输入均为已取好的事实，纯函数，便于单测。
+ * 7 项：rotate 留痕、归档副本与 sha256、归档先于新交接、交接未被改动、
+ * 结构体检、压缩锁、压缩排队与未闭合工具调用。
+ * @param {{flow?:object, archiveSha256?:string, archiveMtimeMs?:number, handoverMtimeMs?:number,
+ *   lint?:object, lock?:string, compactionPending?:boolean, openToolCalls?:number}} input
+ * @returns {{ok:boolean, lines:string[]}}
+ */
+export function judgeRotateGate(input) {
+  const i = input || {};
+  const flow = i.flow && typeof i.flow === 'object' ? i.flow : {};
+  const lines = [];
+  let ok = true;
+  const gate = (pass, text) => {
+    if (!pass) ok = false;
+    lines.push((pass ? '  通过 ' : '  未过 ') + text);
+    return pass;
+  };
+  const at = (ms) => (Number(ms) > 0 ? new Date(Number(ms)).toISOString() : '未执行');
+  const newAt = Number(flow.newAt) || 0;
+  gate(Number(flow.rotatedAt) > 0, 'rotate 留痕：' + at(flow.rotatedAt));
+  gate(newAt > 0, '新交接写入时刻：' + at(flow.newAt));
+  const archivePath = String(flow.archivePath || '');
+  const noArchive = flow.rotateNoArchive === true && !archivePath;
+  const shaOk = !!archivePath && !!flow.archiveSha256 && String(i.archiveSha256 || '') === String(flow.archiveSha256);
+  gate(noArchive || shaOk, noArchive ? '原交接不存在，无需归档' : '归档副本存在且 sha256 一致' + (archivePath ? '：' + archivePath : '：未归档'));
+  const archMs = Number(i.archiveMtimeMs) || 0;
+  if (!noArchive) gate(newAt > 0 && archMs > 0 && newAt >= archMs, '归档早于新交接写入');
+  const mtime = typeof i.handoverMtimeMs === 'number' ? i.handoverMtimeMs : null;
+  gate(mtime !== null && newAt > 0 && mtime >= newAt, '交接未被 rotate 之后改动');
+  const lint = i.lint || { verdict: '读不到', reasons: ['无交接路径'] };
+  gate(lint.verdict === '通过', '结构体检 ' + lint.verdict
+    + (lint.reasons && lint.reasons.length ? '：' + lint.reasons.join('；') : ''));
+  gate(String(i.lock || '') === 'clean', '压缩锁 ' + (i.lock || '未核'));
+  gate(i.compactionPending !== true, '无进行中或排队的压缩');
+  const calls = i.openToolCalls;
+  gate(!Number.isFinite(calls) || calls <= 1, '无未闭合工具调用（' + (Number.isFinite(calls) ? calls : '未核') + ' 个）');
+  return { ok, lines };
 }
 
 /** 在旧会话的交接末尾追加「换任登记」：先备份到同目录 .bak，再追加。 */
@@ -112,7 +152,18 @@ export async function runSuccession(env, exec, opts) {
   const key = lineageKeyOf(kind, project, task);
   if (!key) return reject(kind === 'project' ? '项目名缺失，无法确定类别。' : '任务名缺失，无法确定类别。');
 
-  // 2. 用户授权：AI 不能自行批准。
+  // 2. 换任硬闸：以 rotate 留痕为准，未通过一律拒绝。
+  if (typeof env.successionGate === 'function') {
+    const g = env.successionGate(exec);
+    if (!g || g.ok !== true) {
+      return reject(['换任硬闸未通过。'].concat((g && g.lines) || []).concat([
+        '处置：先调用 rotate 一步完成，再请用户授权并调用 succeed'
+          + '（授权方式：发送 /allow-reset，或在设置页点击「授权重置」）。',
+      ]).join(NL));
+    }
+  }
+
+  // 3. 用户授权：AI 不能自行批准。
   const selfId = env.selfId(exec);
   if (!selfId) return reject('无法获取当前会话 id，无法校验授权。');
   const cs = checkConsent(selfId, 'succeed');
@@ -120,13 +171,13 @@ export async function runSuccession(env, exec, opts) {
     return reject([
       cs.reason + '。',
       '授权方式（任选其一）：',
-      '  ① 在聊天框发送 /allow-succeed（仅授权本会话，最为快捷）；',
-      '  ② 在设置页的 dsh-handover 中，点击「授权」内的「授权换任」。',
+      '  （1） 在聊天框发送 /allow-reset（仅授权本会话，最为快捷）；',
+      '  （2） 在设置页的 dsh-handover 中，点击「授权」内的「授权重置」。',
       '授权有效期 5 分钟，用后失效。',
     ].join(NL));
   }
 
-  // 3. 交接结构检查（只判结构，不判质量）。
+  // 4. 交接结构检查（只判结构，不判质量）。
   const hp = env.handoverFor(exec) || {};
   const handoverFile = hp.path ? String(hp.path) : '';
   if (!handoverFile) return reject('没有可用的交接路径：' + (hp.reason || '本会话角色未确定'));
@@ -134,11 +185,11 @@ export async function runSuccession(env, exec, opts) {
   if (problems.length) {
     return reject(['交接结构未通过：' + handoverFile]
       .concat(problems.map((p) => '  - ' + p))
-      .concat(['补齐后重新调用 ho_succeed。'])
+      .concat(['补齐后重新调用 ho_sessions(action="succeed")。'])
       .join(NL));
   }
 
-  // 4. 在任身份与重复换任：登记表是唯一记录。
+  // 5. 在任身份与重复换任：登记表是唯一记录。
   const ws = String(env.resolveWs(exec) || '');
   if (!ws) return reject('无法确定工作区根，读不到在任登记表。');
   const store = loadOffice(ws);
@@ -160,13 +211,17 @@ export async function runSuccession(env, exec, opts) {
     }
   }
 
-  // 4.1 水位未到线：本会话就是在任者且水位低于提醒线时，换任通常多余。
+  // 4.1 水位未到线：本会话就是在任者且水位低于建议线时，换任通常多余。
   // 放在授权与交接校验之后、任何写入之前；取不到水位就跳过。
   if (o.force !== true) {
-    let pct = null;
-    try { pct = typeof env.selfPct === 'function' ? env.selfPct(selfId) : null; } catch { pct = null; }
-    if (pct !== null && pct !== undefined && Number(pct) < watermark(env.cfg).remindValue) {
-      return reject('本会话水位 ' + Number(pct).toFixed(1) + '%，未到提醒线，通常无需换任；确需换任请传 force=true。');
+    let self = null;
+    try { self = typeof env.selfPressure === 'function' ? env.selfPressure(selfId) : null; } catch { self = null; }
+    const { used, win } = normWater(self);
+    if (used !== null && win !== null) {
+      const bands = bandsFor(env.cfg, win);
+      if (used < bands.advise) {
+        return reject('本会话水位 ' + used + ' token，未到建议线 ' + bands.advise + '，通常无需换任；确需换任请传 force=true。');
+      }
     }
   }
 

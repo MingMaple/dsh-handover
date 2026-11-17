@@ -5,16 +5,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readJsonDir, pick, isSafeName, assertSafeName } from './text.mjs';
-import { projCacheDir, isSubagent } from './sessions.mjs';
+import { readJsonDir, pick, isSafeName, assertSafeName, writeFileAtomic } from './text.mjs';
+import { projCacheDir, isSubagent, projCacheFileOf } from './sessions.mjs';
 import { globalWorkspaceSessionIds } from './registry.mjs';
-import { TOOL_NAMES, PEER_NAME, nameOf } from './names.mjs';
+import { ALL_TOOL_NAMES, PEER_NAME, nameOf } from './names.mjs';
 import { stampTz } from './brief.mjs';
 
 export const ROLES = ['global', 'project', 'misc', 'plain'];
 export const ROLE_LABEL = { global: '全局', project: '项目', misc: '杂项', plain: '普通' };
-
-export const ALL_TOOL_NAMES = TOOL_NAMES.concat([PEER_NAME]);
 
 /**
  * 角色 → 可见工具（其余一律 deny）。改这张表就是改成本结构。
@@ -22,8 +20,9 @@ export const ALL_TOOL_NAMES = TOOL_NAMES.concat([PEER_NAME]);
  */
 const ROLE_TOOLS = {
   global: ALL_TOOL_NAMES.slice(),
-  project: [nameOf('status'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('gate'), nameOf('backup'), nameOf('profile'), nameOf('office'), nameOf('succeed'), nameOf('docmap'), PEER_NAME],
-  misc: [nameOf('status'), nameOf('handover'), nameOf('checkpoint'), nameOf('charter'), nameOf('backup'), nameOf('profile'), nameOf('office'), nameOf('succeed'), nameOf('docmap'), PEER_NAME],
+  // 1.1.1 起项目与杂项看不到 ho_workspace；ho_sessions 仅开放 succeed，其余动作在工具内部拒绝。
+  project: [nameOf('status'), nameOf('handover'), nameOf('docmap'), nameOf('sessions'), PEER_NAME],
+  misc: [nameOf('status'), nameOf('handover'), nameOf('docmap'), nameOf('sessions'), PEER_NAME],
   plain: [],
 };
 
@@ -42,11 +41,20 @@ export function rolesPath(cfg) {
   return path.join(os.homedir(), '.dsh', 'storages', 'dsh-handover.roles.json');
 }
 
+let rolesCache = null;
+
 export function readRoles(cfg) {
+  const file = rolesPath(cfg);
+  let st = null;
+  try { st = fs.statSync(file); } catch { return { version: 1, sessions: {} }; }
+  // 角色表只有十几 KB，但每步会被多次解析；按 (path, mtime, size) 缓存一条即可。
+  if (rolesCache && rolesCache.path === file && rolesCache.mtimeMs === st.mtimeMs && rolesCache.size === st.size) return rolesCache.value;
   try {
-    const j = JSON.parse(fs.readFileSync(rolesPath(cfg), 'utf8'));
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
     const sessions = j && typeof j.sessions === 'object' && j.sessions ? j.sessions : {};
-    return { version: 1, sessions };
+    const value = { version: 1, sessions };
+    rolesCache = { path: file, mtimeMs: st.mtimeMs, size: st.size, value };
+    return value;
   } catch {
     return { version: 1, sessions: {} };
   }
@@ -54,10 +62,8 @@ export function readRoles(cfg) {
 
 function writeRolesFile(cfg, data) {
   const file = rolesPath(cfg);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + String.fromCharCode(10), 'utf8');
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, JSON.stringify(data, null, 2) + String.fromCharCode(10));
+  rolesCache = null;   // 写完立刻作废，免得 mtime 精度不够时读到旧表
   return file;
 }
 
@@ -66,14 +72,16 @@ export function writeRole(cfg, sessionId, patch) {
   const sid = String(sessionId || '');
   if (!sid) throw new Error('缺少会话 id');
   const data = readRoles(cfg);
-  const prev = data.sessions[sid] || {};
+  // 复制一层再改：readRoles 的对象可能是缓存本体，直接改会污染缓存。
+  const sessions = Object.assign({}, data.sessions);
+  const prev = sessions[sid] || {};
   const next = Object.assign({}, prev, patch || {});
   // 名字要落成目录：不合法就当场拒绝，别等拼路径时才 ENOENT。
   if (next.role === 'project') assertProjectName(next.project);
   if (next.role === 'misc') assertTaskName(next.task);
   next.setAt = stampTz(Date.now());
-  data.sessions[sid] = next;
-  writeRolesFile(cfg, data);
+  sessions[sid] = next;
+  writeRolesFile(cfg, { version: data.version, sessions });
   return next;
 }
 
@@ -84,15 +92,22 @@ export function writeRole(cfg, sessionId, patch) {
 export function sessionMeta(sessionId) {
   const sid = String(sessionId || '');
   if (!sid) return { cwd: '', firstPrompt: '', subagent: false };
+  // 直接按会话 id 拼文件名读一个文件；全目录扫描要解析 400+ 文件、几十 MB。
+  const one = projCacheFileOf(sid);
+  if (one) return metaOf(one.data);
   for (const f of readJsonDir(projCacheDir())) {
     if (f.name.replace('.json', '') !== sid) continue;
-    return {
-      cwd: String(pick(f.data, 'record', 'identity', 'cwd') || ''),
-      firstPrompt: String(pick(f.data, 'record', 'rows', 'titleInput', 'val', 'first', 'text') || ''),
-      subagent: isSubagent(f.data),
-    };
+    return metaOf(f.data);
   }
   return { cwd: '', firstPrompt: '', subagent: false };
+}
+
+function metaOf(data) {
+  return {
+    cwd: String(pick(data, 'record', 'identity', 'cwd') || ''),
+    firstPrompt: String(pick(data, 'record', 'rows', 'titleInput', 'val', 'first', 'text') || ''),
+    subagent: isSubagent(data),
+  };
 }
 
 function parts(p) {
@@ -100,16 +115,8 @@ function parts(p) {
 }
 
 /** 项目名当目录名用，长度与字符集都比任务名紧一些；任务名放宽到 40 字符。 */
-export const PROJECT_NAME_MAX = 24;
+const PROJECT_NAME_MAX = 24;
 export const TASK_NAME_MAX = 40;
-
-export function projectNameOk(name) {
-  return isSafeName(name, PROJECT_NAME_MAX);
-}
-
-export function taskNameOk(name) {
-  return isSafeName(name, TASK_NAME_MAX);
-}
 
 export function assertProjectName(name) {
   return assertSafeName(name, '项目名', PROJECT_NAME_MAX);
@@ -123,13 +130,13 @@ export function assertTaskName(name) {
 function roleFromPath(cwd) {
   const seg = parts(cwd);
   for (let i = 0; i < seg.length; i++) {
-    if (seg[i] === 'Projects' && projectNameOk(seg[i + 1]) && seg[i + 1] !== '_Project_Meta') {
+    if (seg[i] === 'Projects' && isSafeName(seg[i + 1], PROJECT_NAME_MAX) && seg[i + 1] !== '_Project_Meta') {
       return { role: 'project', project: seg[i + 1], task: '' };
     }
-    if (seg[i] === '_Misc' && seg[i + 1] === 'tasks' && taskNameOk(seg[i + 2])) {
+    if (seg[i] === '_Misc' && seg[i + 1] === 'tasks' && isSafeName(seg[i + 2], TASK_NAME_MAX)) {
       return { role: 'misc', project: '', task: seg[i + 2] };
     }
-    if (seg[i] === '_Project_Meta' && projectNameOk(seg[i + 1])) {
+    if (seg[i] === '_Project_Meta' && isSafeName(seg[i + 1], PROJECT_NAME_MAX)) {
       return { role: 'project', project: seg[i + 1], task: '' };
     }
   }
@@ -148,7 +155,7 @@ function roleFromPrompt(text) {
       name += ch;
     }
     // 首条提示常把规则写成 `_Control_Center/**、Projects/**` 这样的通配，解析结果必须过名称校验。
-    if (projectNameOk(name)) return { role: 'project', project: name, task: '' };
+    if (isSafeName(name, PROJECT_NAME_MAX)) return { role: 'project', project: name, task: '' };
   }
   const q = t.indexOf(String.fromCharCode(12300));
   if (q !== -1) {
@@ -156,7 +163,7 @@ function roleFromPrompt(text) {
     const j = rest.indexOf(String.fromCharCode(12301) + '项目');
     if (j > 0) {
       const name = rest.slice(0, j);
-      if (projectNameOk(name)) return { role: 'project', project: name, task: '' };
+      if (isSafeName(name, PROJECT_NAME_MAX)) return { role: 'project', project: name, task: '' };
     }
   }
   return null;
@@ -176,8 +183,8 @@ export function resolveRole(opts) {
     if (ROLES.indexOf(role) !== -1) {
       // 角色表里的名字要当目录名用。历史写入或手工编辑留下的非法名字一律不认，继续往下推断，
       // 否则会把整条「写交接 → 备份 → 归档」链路卡在 Windows 的非法路径上。
-      const named = role === 'project' ? projectNameOk(hit.project)
-        : role === 'misc' ? taskNameOk(hit.task) : true;
+      const named = role === 'project' ? isSafeName(hit.project, PROJECT_NAME_MAX)
+        : role === 'misc' ? isSafeName(hit.task, TASK_NAME_MAX) : true;
       if (named) {
         return { role, project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
       }
@@ -218,13 +225,13 @@ export function handoverPathFor(ws, info) {
   if (role === 'project') {
     const project = String(info.project || '');
     if (!project) return { path: null, kind: null, scope: '', role, reason: '项目名缺失' };
-    if (!projectNameOk(project)) return { path: null, kind: null, scope: '', role, reason: '项目名不合法（当目录名用）：' + JSON.stringify(project) };
+    if (!isSafeName(project, PROJECT_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '项目名不合法（当目录名用）：' + JSON.stringify(project) };
     return { path: path.join(ws, '_Project_Meta', project, 'Handover.md'), kind: 'project', scope: project, role, project };
   }
   if (role === 'misc') {
     const task = String(info.task || '');
     if (!task) return { path: null, kind: null, scope: '', role, reason: '任务名缺失' };
-    if (!taskNameOk(task)) return { path: null, kind: null, scope: '', role, reason: '任务名不合法（当目录名用）：' + JSON.stringify(task) };
+    if (!isSafeName(task, TASK_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '任务名不合法（当目录名用）：' + JSON.stringify(task) };
     return { path: path.join(ws, '_Misc', 'tasks', task, 'Handover.md'), kind: 'misc', scope: path.join('_Misc', task), role, task };
   }
   if (role === 'plain') return { path: null, kind: null, scope: '', role, reason: '普通会话不参与交接' };
@@ -239,7 +246,7 @@ export function snapshotDirFor(ws, info) {
 export function archiveDirFor(ws, info) {
   // 规范 §4.1：杂项归档自包含在任务目录里（`_Misc/tasks/<任务>/_archive/`），不进全局归档；
   // 全局与项目归档在 `_Archives/<范围>/Handover/`。
-  if (info && info.role === 'misc' && taskNameOk(info.task)) {
+  if (info && info.role === 'misc' && isSafeName(info.task, TASK_NAME_MAX)) {
     return path.join(ws, '_Misc', 'tasks', String(info.task), '_archive');
   }
   const t = handoverPathFor(ws, info);

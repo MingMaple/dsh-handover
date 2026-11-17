@@ -15,7 +15,7 @@ const argIdx = process.argv.indexOf('--dist');
 const dist = argIdx !== -1 ? path.resolve(process.argv[argIdx + 1]) : path.join(repo, 'dist');
 
 const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
-const { pmBackupTool } = await imp('tools/ho_backup.mjs');
+const { pmBackupTool } = await imp('tools/backup.mjs');
 const { resolveConfig } = await imp('lib/config.mjs');
 
 const fails = [];

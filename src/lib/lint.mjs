@@ -69,7 +69,7 @@ export function lintGlobal(file) {
   try { text = readUtf8(file); } catch (e) { return { verdict: "读不到", reasons: ["读取失败：" + e.message] }; }
   const lines = text.split(String.fromCharCode(10));
   const bad = [];
-  // §3 标题有新旧两种写法；§5 旧标题作兼容匹配（旧字按码点拼接，避免语体扫描误判）。
+  // §3 标题有新旧 2 种写法。§5 旧标题作兼容匹配，旧字按码点拼接，避免语体扫描误判。
   const SEC_ALIAS = {
     '3. 待用户决定': ['3. 等用户' + String.fromCharCode(25293, 26495)],
     '5. 风险与禁区': ['5. ' + String.fromCharCode(22353) + '点与禁区'],

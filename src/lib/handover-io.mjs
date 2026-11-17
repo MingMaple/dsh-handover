@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { readUtf8 } from './text.mjs';
+import { readUtf8, writeFileAtomic } from './text.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
 import { snapshotDirFor, archiveDirFor } from './role.mjs';
 
@@ -12,8 +12,18 @@ function stamp() {
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
 }
 
-function sha256(file) {
+export function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+/** 交接文件最后修改时刻（毫秒）；读不到返回 null。 */
+export function handoverMtimeMs(file) {
+  try { return fs.statSync(file).mtimeMs; } catch { return null; }
+}
+
+/** 文件 sha256；读不到返回空串。 */
+export function fileSha256(file) {
+  try { return sha256(file); } catch { return ""; }
 }
 
 /** 读交接：{ path, text }；文件不存在返回 text: null。 */
@@ -22,9 +32,50 @@ export function readHandover(file) {
   catch { return { path: file, text: null }; }
 }
 
+/** 换任时承接的 3 节标题，按出现顺序取条目。 */
+const CARRY_SECTIONS = ['下一步', '待用户决定', '风险与禁区'];
+
+/**
+ * 从旧交接抽取承接项：只读「下一步」「待用户决定」「风险与禁区」3 节。
+ * 列表、编号与表格行都算条目；去重后按出现顺序截到上限。
+ * @param {string} text 旧交接正文
+ * @param {number} [max] 条数上限，默认 8
+ * @returns {string[]}
+ */
+export function carryItemsOf(text, max) {
+  const nl = String.fromCharCode(10);
+  const lines = String(text || '').split(nl);
+  const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 8;
+  const out = [];
+  let active = false;
+  for (const raw of lines) {
+    if (/^##\s/.test(raw)) {
+      active = CARRY_SECTIONS.some((s) => raw.indexOf(s) !== -1);
+      continue;
+    }
+    if (!active) continue;
+    const t = raw.trim();
+    if (!t) continue;
+    let item = '';
+    if (/^[-*+]\s+/.test(t)) item = t.replace(/^[-*+]\s+/, '');
+    else if (/^\d+[.、)]\s+/.test(t)) item = t.replace(/^\d+[.、)]\s+/, '');
+    else if (/^\|/.test(t)) {
+      if (/^\|[\s:|-]+\|?$/.test(t)) continue;
+      const cells = t.split('|').map((c) => c.trim()).filter(Boolean);
+      if (!cells.length) continue;
+      item = cells.join(' · ');
+    } else continue;
+    item = item.trim();
+    if (!item || out.indexOf(item) !== -1) continue;
+    out.push(item);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /**
  * 归档时间戳：`YYYYMMDD_HHMMSS`（到秒）。
- * 规范要求时间戳取归档那一刻；只到分钟会在同一分钟内归档两份时撞名，故到秒。
+ * 规范要求时间戳取归档那一刻。只到分钟会在同一分钟内归档 2 份时撞名，故到秒。
  */
 export function archiveStamp(d) {
   const x = d || new Date();
@@ -72,7 +123,7 @@ export function archiveHandover(ws, file, opts) {
  * @param {object} [opts] { info?: 角色信息（决定体检判据与备份目录）, kind?: 'global'|'project'|'misc', noBackup?: boolean }
  * @returns {{ path, backup, verdict, reasons, bytes }}
  */
-export function writeHandover(ws, file, text, mode, opts) {
+export function writeHandover(ws, file, text, opts) {
   const o = opts || {};
   const info = o.info || { role: o.kind === 'project' ? 'project' : o.kind === 'misc' ? 'misc' : 'global' };
   let dir = null;
@@ -86,12 +137,8 @@ export function writeHandover(ws, file, text, mode, opts) {
       fs.copyFileSync(file, backup);
     }
   } catch (e) { throw new Error("备份失败，已中止写入：" + e.message); }
-  const body = mode === "append" && fs.existsSync(file) ? readUtf8(file) + String.fromCharCode(10) + text : text;
-  const parent = path.dirname(file);
-  fs.mkdirSync(parent, { recursive: true });
-  const tmp = file + ".tmp-" + stamp();
-  fs.writeFileSync(tmp, body, "utf8");
-  fs.renameSync(tmp, file);
+  const body = text;
+  writeFileAtomic(file, body);
   const res = (o.kind === 'project' || o.kind === 'misc' || info.role === 'project' || info.role === 'misc')
     ? lintProject(file)
     : lintGlobal(file);
@@ -127,6 +174,6 @@ export function rewriteHandover(ws, file, text, opts) {
       ? { dest: same, bytes: fs.statSync(same).size, sha256: sha, reused: true }
       : Object.assign(archiveHandover(ws, file, o), { reused: false });
   }
-  const res = writeHandover(ws, file, text, "write", Object.assign({}, o, { noBackup: true }));
+  const res = writeHandover(ws, file, text, Object.assign({}, o, { noBackup: true }));
   return Object.assign({}, res, { archived });
 }

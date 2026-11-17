@@ -23,12 +23,12 @@ function dateOnly() {
   return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
 }
 
-export function backupDirFor(ws) {
+function backupDirFor(ws) {
   return path.join(String(ws || ''), '_Archives', '_Global', 'Backups', '身份迁移_' + stampCompact());
 }
 
 /** 整库快照：有 7-Zip 出 .7z，否则出内置 .tar.gz。返回 { dir, made }。 */
-export function snapshotDirs(ws, dirs) {
+function snapshotDirs(ws, dirs) {
   const dir = backupDirFor(ws);
   const made = [];
   const bin = sevenZipBin();
@@ -73,6 +73,32 @@ function moveContents(srcDir, destDir) {
   return moved;
 }
 
+/**
+ * 项目库根 Projects/<项目>/ 下通常只有一个 <项目>库 包装层；转杂项时拆掉这层，
+ * 让杂项任务目录本身就是库根（与现有杂项任务一致），否则再转回项目会多套一层。
+ */
+function moveProjectLibInto(srcLib, destLib, oldName) {
+  if (!isDir(srcLib)) return [];
+  fs.mkdirSync(destLib, { recursive: true });
+  const moved = [];
+  const names = listDir(srcLib);
+  const libName = oldName + '库';
+  for (const name of names) {
+    const s = path.join(srcLib, name);
+    if (isDir(s) && (name === libName || (names.length === 1 && name.endsWith('库')))) {
+      moved.push(...moveContents(s, destLib));
+      try { fs.rmdirSync(s); } catch { /* 非空或已删 */ }
+      continue;
+    }
+    const d = path.join(destLib, name);
+    if (fs.existsSync(d)) throw new Error('目标已存在同名条目：' + d);
+    fs.renameSync(s, d);
+    moved.push(name);
+  }
+  try { fs.rmdirSync(srcLib); } catch { /* 非空或已删 */ }
+  return moved;
+}
+
 function moveOne(srcFile, destFile) {
   if (!isFile(srcFile)) return false;
   if (fs.existsSync(destFile)) throw new Error('目标已存在同名文件：' + destFile);
@@ -89,7 +115,8 @@ function rewriteProfile(srcFile, destFile, root) {
   v.root = root;
   fs.mkdirSync(path.dirname(destFile), { recursive: true });
   fs.writeFileSync(destFile, JSON.stringify(v, null, 2) + NL, 'utf8');
-  fs.rmSync(srcFile, { force: true });
+  // 原地改写（srcFile === destFile）时不能把刚写好的文件删掉。
+  if (path.resolve(srcFile) !== path.resolve(destFile)) fs.rmSync(srcFile, { force: true });
   return true;
 }
 
@@ -135,7 +162,7 @@ export function removeRegistryProject(ws, name) {
 }
 
 /** 追加一行项目；已有同名行则返回 false。 */
-export function addRegistryProject(ws, name) {
+function addRegistryProject(ws, name) {
   const file = registryFile(ws);
   if (!isFile(file)) return false;
   const text = readUtf8(file).replace(/^\uFEFF/, '');
@@ -205,18 +232,18 @@ export function migrateIdentity(input) {
   const prev = i.prev || {};
   const next = i.next || {};
   const mode = i.mode === 'direct' ? 'direct' : 'auto';
-  if (!ws) throw new Error('缺工作区根');
+  if (!ws) throw new Error('缺工作区根。请提供 ws 参数。');
   const prevKind = prev.role;
   const nextKind = next.role;
   const prevOk = prevKind === 'project' || prevKind === 'misc' || prevKind === 'global-task';
   if (!prevOk || (nextKind !== 'project' && nextKind !== 'misc')) {
-    throw new Error('身份互转只处理项目、杂项与全局任务');
+    throw new Error('身份互转只处理项目、杂项与全局任务。请调整 prev.role 与 next.role。');
   }
-  if (prevKind === nextKind) throw new Error('身份未变化，无需迁移');
+  if (prevKind === nextKind) throw new Error('身份未变化，无需迁移。');
 
   const oldName = prevKind === 'project' ? String(prev.project || '') : String(prev.task || '');
   const newName = nextKind === 'project' ? String(next.project || '') : String(next.task || '');
-  if (!oldName || !newName) throw new Error('缺旧名或新名');
+  if (!oldName || !newName) throw new Error('缺旧名或新名。请提供 prev 与 next 的名称。');
 
   const srcLib = prevKind === 'project' ? path.join(ws, 'Projects', oldName)
     : prevKind === 'misc' ? path.join(ws, '_Misc', 'tasks', oldName)
@@ -247,7 +274,7 @@ export function migrateIdentity(input) {
       mode,
       snapshot: snap,
       moved: movedTo.length > 0,
-      summary: '直接建：旧体系已移入 ' + (snap.dir || '备份目录') + '，新位置 ' + target + ' 为空目录；名册已调整' + (office.moved ? '，在任登记已改名' : ''),
+      summary: '直接建：旧体系已移入 ' + (snap.dir || '备份目录') + '。新位置 ' + target + ' 为空目录。名册已调整' + (office.moved ? '，在任登记已改名' : ''),
     };
   }
 
@@ -266,27 +293,38 @@ export function migrateIdentity(input) {
   fs.mkdirSync(destMeta, { recursive: true });
 
   const moved = [];
-  if (isDir(srcLib)) moved.push(...moveContents(srcLib, destLib));
+  const toProject = nextKind === 'project';
+  // 布局沿用现有项目：库内容进 Projects/<项目>/<项目>库，项目档案进 _Project_Meta/<项目>/。
+  const rootRel = toProject ? 'Projects/' + newName : '_Misc/tasks/' + newName;
+  const oldRoot = prevKind === 'project' ? 'Projects/' + oldName
+    : prevKind === 'misc' ? '_Misc/tasks/' + oldName : '_Control_Center/tasks/' + oldName;
 
-  const oldProfile = prevKind === 'project' ? path.join(srcMeta, 'project.profile.json') : path.join(srcLib, 'task.profile.json');
-  const newProfile = nextKind === 'project' ? path.join(destMeta, 'project.profile.json') : path.join(destLib, 'task.profile.json');
-  const rootRel = nextKind === 'project' ? 'Projects/' + newName + '/' + newName + '库' : '_Misc/tasks/' + newName;
-  if (isFile(oldProfile)) rewriteProfile(oldProfile, newProfile, rootRel);
-
-  const oldHandover = prevKind === 'project' ? path.join(srcMeta, 'Handover.md') : path.join(srcLib, 'Handover.md');
-  const newHandover = nextKind === 'project' ? path.join(destMeta, 'Handover.md') : path.join(destLib, 'Handover.md');
-  if (moveOne(oldHandover, newHandover)) moved.push('Handover.md');
-
-  const oldSystem = prevKind === 'project' ? path.join(srcMeta, 'System.md') : path.join(srcLib, 'System.md');
-  const newSystem = nextKind === 'project' ? path.join(destMeta, 'System.md') : path.join(destLib, 'System.md');
-  if (moveOne(oldSystem, newSystem)) {
-    rewritePaths(newSystem, prevKind === 'project' ? 'Projects/' + oldName : '_Misc/tasks/' + oldName, rootRel);
-    moved.push('System.md');
+  if (isDir(srcLib)) {
+    moved.push(...(prevKind === 'project' ? moveProjectLibInto(srcLib, destLib, oldName) : moveContents(srcLib, destLib)));
   }
 
+  // 归位顺序：先把档案放到目标角色该在的位置，再挪其余内容。否则档案会随库被搬进库根。
+  // 目标为项目时还会漏进 _Project_Meta。
+  // 2026-11-16 第二轮测试：杂项转项目时档案落在库根、元数据目录为空。
+  const metaDir = toProject ? destMeta : destLib;
+  if (toProject) {
+    for (const name of ['Handover.md', 'System.md', 'Project_Overview.md']) {
+      if (moveOne(path.join(destLib, name), path.join(metaDir, name))) moved.push(name);
+    }
+  }
+
+  const profileFrom = prevKind === 'project' ? path.join(srcMeta, 'project.profile.json') : path.join(destLib, 'task.profile.json');
+  const profileTo = toProject ? path.join(destMeta, 'project.profile.json') : path.join(destLib, 'task.profile.json');
+  if (isFile(profileFrom) && rewriteProfile(profileFrom, profileTo, rootRel)) moved.push(path.basename(profileTo));
+
   if (prevKind === 'project') {
+    if (moveOne(path.join(srcMeta, 'Handover.md'), path.join(metaDir, 'Handover.md'))) moved.push('Handover.md');
+    const sysTo = path.join(metaDir, 'System.md');
+    if (moveOne(path.join(srcMeta, 'System.md'), sysTo)) {
+      rewritePaths(sysTo, oldRoot, rootRel);
+      moved.push('System.md');
+    }
     for (const name of listDir(srcMeta)) {
-      if (name === 'project.profile.json') continue;
       const s = path.join(srcMeta, name);
       const d = path.join(destLib, name);
       if (fs.existsSync(d)) continue;
@@ -294,14 +332,10 @@ export function migrateIdentity(input) {
       moved.push(name);
     }
     removeRegistryProject(ws, oldName);
-  } else if (isDir(srcLib)) {
-    // 杂项与全局任务的剩余条目（模板、归档等）一并移入目标库根。
-    for (const name of listDir(srcLib)) {
-      const d = path.join(destLib, name);
-      if (fs.existsSync(d)) continue;
-      fs.renameSync(path.join(srcLib, name), d);
-      moved.push(name);
-    }
+  } else {
+    // 迁入方不是项目：体系与交接由上面的归位与档案改写处理，只剩路径需要就地改正。
+    const sysInPlace = path.join(metaDir, 'System.md');
+    if (isFile(sysInPlace)) rewritePaths(sysInPlace, oldRoot, rootRel);
   }
   try { if (isDir(srcMeta)) fs.rmdirSync(srcMeta); } catch { /* 留空目录不影响使用 */ }
   try { if (isDir(srcLib)) fs.rmdirSync(srcLib); } catch { /* 留空目录不影响使用 */ }
@@ -314,8 +348,8 @@ export function migrateIdentity(input) {
     mode,
     snapshot: snap,
     moved: moved.length > 0,
-    summary: '已快照 ' + (snap.made.length) + ' 份到 ' + (snap.dir || '备份目录') + '；体系已移至 ' + destLib
-      + (office.moved ? '；在任登记由「' + office.oldKey + '」改为「' + office.newKey + '」' : ''),
+    summary: '已快照 ' + (snap.made.length) + ' 份到 ' + (snap.dir || '备份目录') + '。体系已移至 ' + destLib
+      + (office.moved ? '。在任登记由「' + office.oldKey + '」改为「' + office.newKey + '」' : ''),
   };
 }
 

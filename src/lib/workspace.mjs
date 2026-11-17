@@ -1,4 +1,4 @@
-/** 工作区解析：路由侧（设置页，没有 exec）与工具侧共用一套判定。 */
+/** 工作区解析：设置页路由（没有 exec）与工具侧共用同一套判定。 */
 import path from 'node:path';
 import { isDir } from './text.mjs';
 import { workspaceRows } from './registry.mjs';
@@ -9,8 +9,9 @@ export function hasCenter(p) {
 }
 
 /**
- * 没有 exec 时的备用做法：配置 workspaceRoot → 标题含「全局」且带 _Control_Center 的工作区
- * → 任一带 _Control_Center 的工作区 → 进程 cwd。
+ * 没有 exec 时的回退顺序：先取配置 workspaceRoot。
+ * 其次取标题含「全局」且带 _Control_Center 的工作区，再次取任一带 _Control_Center 的工作区。
+ * 都取不到时返回进程 cwd。
  */
 export function routeWorkspace(env) {
   try { if (env && env.cfg && env.cfg.workspaceRoot) return env.cfg.workspaceRoot; } catch { /* ignore */ }

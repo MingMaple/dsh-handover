@@ -8,7 +8,8 @@ import { checkRegistries } from './system.mjs';
 
 /**
  * 读 Registry.md 的「形态」列 → { 项目名: 形态 }。
- * 口径（Charter §1.6、§2.5）：只有 library 才受通用约束条闸门管；artifact、shortcut、product 属工程型，豁免。
+ * 口径（Charter §1.6、§2.5）：只有 library 才受通用约束条闸门管。
+ * artifact、shortcut、product 属工程型，豁免。
  * 缺该列或读不到 → 全部按 library 处理（向后兼容）。
  */
 function registryForms(ws) {

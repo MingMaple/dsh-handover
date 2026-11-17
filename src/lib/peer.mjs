@@ -11,7 +11,10 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-/** 收到的消息必须能自报来源：宿主把投递消息记成 source.kind === "user"，不加标记就与用户消息无法区分。 */
+/**
+ * 收到的消息必须能自报来源。
+ * 宿主把投递消息记成 source.kind === "user"，不加标记就与用户消息无法区分。
+ */
 const MARK_HEAD = '【peer-link ← ';
 
 export function peerMarker(senderId) {
@@ -29,7 +32,7 @@ function dshRoots() {
   return roots;
 }
 
-/** 在候选根下找第一个存在的目录；找不到返回 null（不抛）。 */
+/** 在候选根下找第一个存在的目录；找不到返回 null（不抛）。探测失败按未安装处理，不阻断调用方。 */
 function findDir(relative) {
   for (const root of dshRoots()) {
     const p = path.join(root, relative);
@@ -55,7 +58,7 @@ function findStateFile(relative) {
   return null;
 }
 
-/** 安全地按路径取值；无法获取返回 undefined（与 peer-link 一致，区别于 lib/text.mjs 的 null）。 */
+/** 按路径逐层取值；路径不存在返回 undefined（与 peer-link 一致，lib/text.mjs 的同类函数返回 null）。 */
 export function pick(node, ...rest) {
   let cur = node;
   for (const key of rest) {
@@ -93,7 +96,7 @@ export function resolveWorkspaceId(key) {
     if (ws.title === raw) return id;
     if (ws.path !== undefined) {
       if (trimSlash(ws.path) === want) return id;
-      // 注册表存的是真实路径，而入参可能是 /root/<项目名> 这类软链接 —— 两条都认
+      // 注册表存的是真实路径，入参可能是 /root/<项目名> 这类软链接；两者都认
       try {
         if (trimSlash(fs.realpathSync(ws.path)) === trimSlash(fs.realpathSync(raw))) return id;
       } catch (error) {
@@ -104,7 +107,12 @@ export function resolveWorkspaceId(key) {
   return null;
 }
 
-/** 读一个会话的投影缓存（水位 / 运行状态 / 项目名的来源）。读不到返回 null。 */
+/**
+ * 读一个会话的投影缓存（水位 / 运行状态 / 项目名的来源）。
+ * 缓存可能尚未生成，宿主也可能正在写入，因此读不到时返回 null，由调用方按缺省值展示。
+ * @param {string} sessionId 会话 id
+ * @returns {object|null} 投影缓存对象；读不到返回 null
+ */
 export function readProjCache(sessionId) {
   const dir = findDir('storages/session_projcache/sessions');
   if (dir === null) return null;
@@ -171,10 +179,15 @@ export function rowLine(sessionId, cache, fallback) {
 
 /**
  * 会话清单：controller.list 的结果按 origin 过滤。
- * 冷会话在这一步就会被服务端从持久化里恢复成可寻址的行，所以 peer（action="list"）本身不花 token。
+ * 冷会话在这一步由服务端从持久化恢复成可寻址的行。
+ * 因此 peer（action="list"）本身不消耗 token。
+ * @param {object} controller 会话控制器
+ * @param {boolean} includeSubagents 为 true 时保留子会话
+ * @param {AbortSignal} [signal] 本次工具调用的中止信号
+ * @returns {Promise<object[]>} 会话行数组
  */
-export async function sessionRows(controller, includeSubagents) {
-  const value = await controller.list({}, new AbortController().signal);
+export async function sessionRows(controller, includeSubagents, signal) {
+  const value = await controller.list({}, signal || new AbortController().signal);
   return value.items.filter((row) => includeSubagents === true || row.origin !== 'subagent');
 }
 
@@ -199,7 +212,7 @@ export function decodeSessionLog(file) {
     try {
       parts.push(zlib.zstdDecompressSync(buf.subarray(starts[i], end)).toString('utf8'));
     } catch (error) {
-      void error;
+      void error;   // 尾部半写帧解不开时跳过，下次读取会拿到完整帧
     }
   }
   return parts
@@ -216,28 +229,12 @@ export function decodeSessionLog(file) {
     .filter((x) => x !== null);
 }
 
-/** 在 <DSH_HOME>/sessions/<任意 slug>/<session id>/ 下找日志文件（不猜 slug）。 */
-export function findSessionLog(sessionId) {
-  const root = findDir('sessions');
-  if (root === null) return null;
-  let buckets = [];
-  try {
-    buckets = fs.readdirSync(root);
-  } catch (error) {
-    return null;
-  }
-  for (const bucket of buckets) {
-    const file = path.join(root, bucket, sessionId, 'session.v4.jsonl.zstd');
-    try {
-      if (fs.statSync(file).isFile()) return file;
-    } catch (error) {
-      void error;
-    }
-  }
-  return null;
+/** 会话日志根目录（<DSH_HOME>/sessions）；找不到返回 null。 */
+export function sessionsRoot() {
+  return findDir('sessions');
 }
 
-/** 从事件流里抽出「人/会话说得出口的话」，跳过运行时上下文与技能目录注入。 */
+/** 从事件流中取用户与会话可见的正文，跳过运行时上下文与技能目录注入。 */
 export function conversation(events, limit) {
   const skip = { 'runtime-context': true, 'skill-catalog': true };
   const items = [];

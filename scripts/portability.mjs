@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { makeReporter } from './lib/harness.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
@@ -20,12 +21,7 @@ const dist = (() => {
   return i !== -1 && process.argv[i + 1] ? path.resolve(process.argv[i + 1]) : path.join(repo, 'dist');
 })();
 
-const fails = [];
-function ok(cond, msg, extra) {
-  if (cond) console.log('  通过 ' + msg);
-  else { fails.push(msg + (extra ? ' → ' + extra : '')); console.log('  未通过 ' + msg + (extra ? ' → ' + extra : '')); }
-}
-function section(t) { console.log(''); console.log('== ' + t + ' =='); }
+const { ok, section, fails } = makeReporter({ sink: 'stdout' });
 const imp = (rel) => import(pathToFileURL(path.join(dist, rel)).href);
 const read = (rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
 

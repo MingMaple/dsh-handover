@@ -1,7 +1,7 @@
 /**
  * 首次安装向导：在用户粘贴的目录里建「全局根」，并把整套文件体系铺好。
  * 只用 node:fs / node:path（跨平台，Windows / macOS / Linux / Android 的 PRoot Ubuntu 都一样）。
- * 安全边界：只新建；目标已存在且非空就一个字都不改。已有文件绝不覆盖。
+ * 安全边界：只新建；目标已存在且非空就什么都不写。已有文件绝不覆盖。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -47,7 +47,8 @@ const FILES = [
   ['_Control_Center/standards/README.md', 'standards/README.md'],
   ['_Control_Center/standards/写作规范/README.md', 'standards/写作规范/README.md'],
   ['_Control_Center/standards/写作规范/依据_论文.md', 'standards/写作规范/依据_论文.md'],
-  // 规则类：工作区没有这份时，ho_charter 会退回同名内置版本；这里先铺一份可改的默认口径。
+  // 规则类：工作区没有这份文件时，ho_docmap 的 rules-read 退回同名内置版本。
+  // 这里先铺一份可修改的默认口径，便于用户按自己的习惯调整。
   ['_Control_Center/rules/Handover_Rules.md', 'rules/Handover_Rules.md'],
   ['_Control_Center/rules/Migration_Rules.md', 'rules/Migration_Rules.md'],
   ['_Control_Center/rules/Misc_Task_Standard.md', 'rules/Misc_Task_Standard.md'],
@@ -55,35 +56,46 @@ const FILES = [
   ['_Control_Center/user/Writing_Rules.md', 'rules/Writing_Rules.md'],
 ];
 
-/** 规整用户粘贴的路径：去掉引号/尾分隔符、展开 ~、解析成绝对路径。 */
+/** 规整用户粘贴的路径：去掉引号与末尾分隔符、展开 ~、解析成绝对路径。
+ * @param {string} input 用户在设置页粘贴的路径
+ * @returns {{parent?:string, createdParent?:boolean, path?:string, error?:string}} 成功给 parent，失败给 error
+ */
 function normalizeParent(input) {
   let s = String(input || '').trim();
-  if (!s) return { error: '请先填写目录（父目录，全局根建于其中）' };
+  if (!s) return { error: '现象：未填写目录。原因：全局根需要建在父目录中。处置：填写父目录后重试。' };
   s = s.replace(/^["']+|["']+$/g, '').trim();
-  if (!s) return { error: '请先填写目录' };
+  if (!s) return { error: '现象：目录名为空。原因：输入只含引号或空白。处置：填写有效路径后重试。' };
   if (s === '~') s = os.homedir();
   else if (s.startsWith('~/') || s.startsWith('~\\')) s = path.join(os.homedir(), s.slice(2));
   const abs = path.resolve(s);
   let st = null;
   try { st = fs.statSync(abs); } catch { st = null; }
-  if (st && !st.isDirectory()) return { error: '该路径不是目录：' + abs, path: abs };
+  if (st && !st.isDirectory()) {
+    return { error: '现象：该路径不是目录：' + abs + '。原因：全局根必须建在目录中。处置：改填目录路径后重试。', path: abs };
+  }
   // 目标父目录不存在就建：允许直接指定尚不存在的路径。
   if (!st) {
     try { fs.mkdirSync(abs, { recursive: true }); }
-    catch (e) { return { error: '无法创建该目录：' + abs + '（' + String(e && e.message ? e.message : e) + '）', path: abs }; }
+    catch (e) {
+      return { error: '现象：无法创建该目录：' + abs + '。原因：' + String(e && e.message ? e.message : e) + '。处置：检查路径权限后重试，或改填已有目录。', path: abs };
+    }
   }
   return { parent: abs, createdParent: !st };
 }
 
 /**
- * 在既有的全局根上补齐缺失的目录与说明文件：只新建，不覆盖，不删任何东西。
+ * 在既有的全局根上补齐缺失的目录与说明文件：只新建，不覆盖，不删除任何文件。
  * 用途：插件新增了目录（例如通用规范库）后，已部署的工作区靠它一次补齐。
+ * @param {string} root 已有全局根
+ * @returns {{ok:boolean, created?:string[], written?:string[], skipped?:string[], missingTemplates?:string[], error?:string}}
  */
 export function ensureScaffold(root) {
   const abs = String(root || '');
   let st = null;
   try { st = fs.statSync(abs); } catch { st = null; }
-  if (!st || !st.isDirectory()) return { ok: false, error: '全局根不存在或不是目录：' + (abs || '（空）') };
+  if (!st || !st.isDirectory()) {
+    return { ok: false, error: '现象：全局根不存在或不是目录：' + (abs || '（空）') + '。原因：补齐骨架要求目标目录已存在。处置：先建该目录，或改用 ho_workspace(action="create")。' };
+  }
 
   const created = [];
   const written = [];
@@ -95,7 +107,11 @@ export function ensureScaffold(root) {
     try {
       fs.mkdirSync(p, { recursive: true });
     } catch (e) {
-      return { ok: false, error: '建目录失败：' + d + '（' + String(e && e.message ? e.message : e) + '）', created, written, skipped };
+      return {
+        ok: false,
+        error: '现象：建目录失败：' + d + '。原因：' + String(e && e.message ? e.message : e) + '。处置：检查该路径的权限后重试。',
+        created, written, skipped,
+      };
     }
   }
   for (const [rel, tpl] of FILES) {
@@ -114,7 +130,11 @@ export function ensureScaffold(root) {
       fs.writeFileSync(dst, body, 'utf8');
       written.push(rel);
     } catch (e) {
-      return { ok: false, error: '写文件失败（' + rel + '）：' + (e && e.message ? e.message : e), created, written, skipped, missingTemplates };
+      return {
+        ok: false,
+        error: '现象：写文件失败：' + rel + '。原因：' + (e && e.message ? e.message : e) + '。处置：检查目录权限与磁盘空间后重试。',
+        created, written, skipped, missingTemplates,
+      };
     }
   }
   return { ok: true, created, written, skipped, missingTemplates };
@@ -122,9 +142,9 @@ export function ensureScaffold(root) {
 
 /**
  * 建全局根。
- * @param parentInput 用户在设置页粘贴的路径
- * @param opts {{ name?: string }} 根目录名，默认 _Workspace
- * @returns {{ ok: boolean, root?: string, created?: string[], written?: string[], skipped?: string[], error?: string }}
+ * @param {string} parentInput 用户在设置页粘贴的父目录路径
+ * @param {{name?:string}} [opts] 根目录名，缺省 _Workspace
+ * @returns {{ok:boolean, root?:string, existed?:boolean, created?:string[], written?:string[], skipped?:string[], error?:string}}
  */
 export function createGlobalWorkspace(parentInput, opts) {
   const t = normalizeParent(parentInput);
@@ -132,7 +152,7 @@ export function createGlobalWorkspace(parentInput, opts) {
 
   const name = (opts && typeof opts.name === 'string' && opts.name.trim()) || DEFAULT_ROOT_NAME;
   if (name.indexOf('/') !== -1 || name.indexOf('\\') !== -1 || name === '.' || name === '..') {
-    return { ok: false, error: '根目录名不得含路径分隔符：' + name };
+    return { ok: false, error: '现象：根目录名含路径分隔符：' + name + '。原因：根目录名只能是单级名字。处置：去掉分隔符后重试。' };
   }
   const sameName = pathKey(path.basename(t.parent)) === pathKey(name);
   const root = sameName ? t.parent : path.join(t.parent, name);
@@ -142,7 +162,11 @@ export function createGlobalWorkspace(parentInput, opts) {
     let names = null;
     try { names = fs.readdirSync(root); } catch { /* 读不了当作非空 */ }
     if (names === null || names.length > 0) {
-      return { ok: false, root, error: '目标已存在且非空，未做任何改动：' + root };
+      return {
+        ok: false,
+        root,
+        error: '现象：目标目录已存在且非空：' + root + '。原因：向导只新建，不覆盖已有内容。处置：改选空目录，或先移走已有内容后重试。',
+      };
     }
     existed = true;
   }
@@ -150,10 +174,10 @@ export function createGlobalWorkspace(parentInput, opts) {
   try {
     fs.mkdirSync(root, { recursive: true });
   } catch (e) {
-    return { ok: false, root, error: '建目录失败：' + (e && e.message ? e.message : e) };
+    return { ok: false, root, error: '现象：无法创建全局根。原因：' + (e && e.message ? e.message : e) + '。处置：检查父目录权限后重试。' };
   }
 
-  // 铺目录与说明文件走同一套清单：init 与 scaffold 两处不得各写一份。
+  // 铺目录与写说明文件共用同一套清单：init 与 scaffold 不各写一份，避免 2 处清单走偏。
   const sc = ensureScaffold(root);
   if (!sc.ok) return { ok: false, root, created: sc.created, written: sc.written, error: sc.error };
   return { ok: true, root, existed, created: sc.created, written: sc.written, skipped: sc.skipped };

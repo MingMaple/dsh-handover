@@ -1,12 +1,13 @@
 /**
- * 打包、校验、预演、恢复的实现（原 ho_pack / ho_pack_verify / ho_pack_restore / ho_pack_precheck 的代码搬到这里）。
- * 对外只经 ho_backup(action=…) 暴露：四份旧入口合为一份 schema，省下三份的固定开销。
+ * 打包、校验、预演与恢复的实现。
+ * 代码从 4 个旧工具迁入：ho_pack、ho_pack_verify、ho_pack_restore、ho_pack_precheck。
+ * 对外只经 ho_workspace(action="backup-pack") 暴露。
+ * 4 份旧入口合为 1 份 schema，省下 3 份的固定开销。
  * 共同口径：只报告绝对路径、不改写文件内容；恢复默认预演、覆盖前备份、从不删除目标文件。
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import { NL, isDir, isFile } from './text.mjs';
+import { NL, isDir, isFile, fmtMB } from './text.mjs';
 import { sevenZipBin, pack as z7pack, test as z7test, extract } from './sevenzip.mjs';
 import { packDirTarGz, listTarGz, extractTarGz, detectFormat, safeRel } from './archive.mjs';
 import { scanAbsoluteRefs, renderAbsoluteRefs } from './absrefs.mjs';
@@ -14,19 +15,20 @@ import { stampTz } from './brief.mjs';
 import { scanSessions } from './sessions.mjs';
 import { lintProject } from './lint.mjs';
 import { assertProjectName, assertTaskName } from './role.mjs';
+import { sha256 } from './handover-io.mjs';
 
 const SKIP_DIRS = ['__pycache__', '.git', 'node_modules', '.obsidian'];
 const SKIP_FILES = ['.DS_Store', 'Thumbs.db'];
 
 /**
  * 选归档格式：auto（有 7-Zip 用 7z，否则用内置 tar.gz）、7z、tar。
- * 内置归档器是**功能等价**的兜底：空白机器上没有 7-Zip 也必须能打包、校验、恢复。
+ * 内置归档器是功能等价的兜底方案：空白机器上没有 7-Zip 也必须能打包、校验、恢复。
  */
 function chooseFormat(args, cfg) {
   const want = String((args && args.format) || (cfg && cfg.packFormat) || 'auto').toLowerCase();
   if (want === '7z') {
     const bin = sevenZipBin(cfg && cfg.sevenZipPath);
-    if (!bin) throw new Error('指定 format=7z，但本机无 7-Zip。可省略 format 改用 auto，或写 format="tar" 使用内置归档器。');
+    if (!bin) throw new Error('现象：本机没有 7-Zip。原因：format=7z 要求 7-Zip 可用。处置：省略 format 改用 auto，或写 format="tar" 使用内置归档器。');
     return { fmt: '7z', bin };
   }
   if (want === 'tar' || want === 'targz' || want === 'tar.gz') return { fmt: 'tar', bin: '' };
@@ -34,7 +36,11 @@ function chooseFormat(args, cfg) {
   return bin ? { fmt: '7z', bin } : { fmt: 'tar', bin: '' };
 }
 
-/** 解包到 dir（按魔数判断格式，不看扩展名）。返回 { code, out }。 */
+/** 解包到 dir（按魔数判断格式，不看扩展名）。
+ * @param {string} packPath 包路径
+ * @param {string} dir 解包目标目录
+ * @returns {{code:number, out:string}} code 为 0 表示成功，out 为人类可读的过程说明
+ */
 function unpack(packPath, dir) {
   const fmt = detectFormat(packPath);
   if (fmt === 'targz') {
@@ -80,10 +86,6 @@ export function stampNow() {
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
 }
 
-function sha256(file) {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-}
-
 function walk(root, rel, out) {
   let names = [];
   try { names = fs.readdirSync(path.join(root, rel)); } catch { return out; }
@@ -112,7 +114,7 @@ export function packCheck(env, args, exec) {
   if (!items.length) throw new Error('action=check 需要 items（项目名列表，写 global 表示全局）');
   const minAge = (typeof args.min_age_min === 'number' ? args.min_age_min : (env.cfg.prepackMinAgeMin || 90)) * 60000;
   const now = Date.now();
-  const scan = scanSessions({ dir: env.cacheDir(), meId: env.selfId(exec), warn: 32, silentHours: env.cfg.sessionScanHours });
+  const scan = scanSessions({ dir: env.cacheDir(), meId: env.selfId(exec), cfg: env.cfg, silentHours: env.cfg.sessionScanHours });
   const out = [];
   let bad = 0;
   for (const item of items) {
@@ -170,7 +172,7 @@ export function packNow(env, args, exec) {
   if (!entries.length) throw new Error('没有可打包的文件：' + roots.map((r) => r[0]).join('、'));
   const total = entries.reduce((a, b) => a + b.bytes, 0);
   const out = [];
-  out.push('目标 ' + kind + (name ? ':' + name : '') + '，' + entries.length + ' 个文件 / ' + (total / 1048576).toFixed(2) + ' MB');
+  out.push('目标 ' + kind + (name ? ':' + name : '') + '，' + entries.length + ' 个文件 / ' + fmtMB(total));
   if (args.dry_run) {
     for (const e of entries.slice(0, 20)) out.push('  ' + e.rel + '  ' + e.bytes + ' B');
     const pre = scanAbsoluteRefs(ws, entries.map((e) => e.rel));
@@ -205,7 +207,7 @@ export function packNow(env, args, exec) {
   fs.writeFileSync(path.join(stagingRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
   fs.writeFileSync(path.join(stagingRoot, 'CHECKSUMS.sha256'), files.map((f) => f.sha256 + '  ' + f.path).join(NL) + NL, 'utf8');
   const absLines = renderAbsoluteRefs(abs, { title: '绝对路径体检（包内）', max: 200 });
-  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包内有 ' + abs.totalHits + ' 处写死的绝对路径，插件只报告、不改写文件内容，迁移后须由人工或项目会话修改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若为其他系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行与编码均须项目会话自行核对。', '', '## 目标环境前置（先完成这两项，再执行恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按其中内容恢复状态。', '', '## 恢复', '', 'ho_backup(action="restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身不迁移：连续性只依托交接文档。'].join(NL);
+  const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包内有 ' + abs.totalHits + ' 处写死的绝对路径，插件只报告、不改写文件内容，迁移后须由人工或项目会话修改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若为其他系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行与编码均须项目会话自行核对。', '', '## 目标环境前置（先完成这两项，再执行恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按其中内容恢复状态。', '', '## 恢复', '', 'ho_workspace(action="backup-restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身不迁移：连续性只依托交接文档。'].join(NL);
   fs.writeFileSync(path.join(stagingRoot, 'MIGRATION.md'), md, 'utf8');
   const outDir = args.out || path.join(ws, '_Archives', '_Global', 'Backups');
   fs.mkdirSync(outDir, { recursive: true });

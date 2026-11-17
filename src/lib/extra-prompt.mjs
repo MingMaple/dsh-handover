@@ -1,13 +1,14 @@
 /**
- * 用户全局前置提示词：存在本机 ~/.dsh/storages/ 下。
- * 与插件自身的会话约束无关：仅当用户显式开启且内容非空时注入全部会话；
- * 关闭或留空时不注册提示段，不占用注入点位，避免与其他提示词插件冲突。
+ * 用户全局前置提示词：保存于本机 `~/.dsh/storages/` 下。
+ * 该提示词与插件自身的会话约束无关，只表达用户本人的偏好。
+ * 仅在用户显式开启且内容非空时注入全部会话。
+ * 关闭或留空时不注册提示段，也不占用注入点位，以免与其他提示词插件冲突。
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-/** 与官方 SECTION_ORDERS 对齐：FILE_REFERENCE=900，工具段从 1000 起。 */
+/** 段序 950：位于官方 FILE_REFERENCE（900）之后、工具段（1000）之前，与 SECTION_ORDERS 对齐。 */
 export const EXTRA_PROMPT_ORDER = 950;
 export const EXTRA_PROMPT_SECTION = 'dsh-handover:extra-prompt';
 const EXTRA_PROMPT_MAX = 20000;
@@ -16,7 +17,11 @@ function storePath() {
   return path.join(os.homedir(), '.dsh', 'storages', 'dsh-handover.extra-prompt.json');
 }
 
-/** 返回 { enabled, text }。旧文件只有 text 时，按「内容非空即开启」迁移。 */
+/**
+ * 读取已保存的提示词。
+ * 旧版文件只有 text 字段时，按「内容非空即开启」迁移，避免升级后开关状态丢失。
+ * @returns {{enabled:boolean, text:string}} 文件缺失或内容损坏时返回关闭状态与空正文
+ */
 export function readExtraPrompt() {
   try {
     const j = JSON.parse(fs.readFileSync(storePath(), 'utf8'));
@@ -28,10 +33,19 @@ export function readExtraPrompt() {
   }
 }
 
-/** 保存并返回 { enabled, text }；空内容一律视为关闭。 */
+/**
+ * 保存提示词并返回落盘内容。
+ * 空内容一律视为关闭，因此关闭无需另行传 enabled=false。
+ * @param {string} text 提示词正文
+ * @param {boolean} [enabled] 开关；传 false 时即使正文非空也不注入
+ * @returns {{enabled:boolean, text:string, updatedAt:string}}
+ * @throws {Error} 正文超过 20000 字符时抛出，避免把过长的前缀写进每一轮请求
+ */
 export function writeExtraPrompt(text, enabled) {
   const clean = String(text == null ? '' : text).trim();
-  if (clean.length > EXTRA_PROMPT_MAX) throw new Error('全局前置提示词过长（上限 ' + EXTRA_PROMPT_MAX + ' 字符）');
+  if (clean.length > EXTRA_PROMPT_MAX) {
+    throw new Error('现象：全局前置提示词过长（' + clean.length + ' 字符）。原因：上限为 ' + EXTRA_PROMPT_MAX + ' 字符。处置：精简正文后重试。');
+  }
   const on = enabled !== false && clean.length > 0;
   const p = storePath();
   fs.mkdirSync(path.dirname(p), { recursive: true });

@@ -15,16 +15,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { textOutput } from '../lib/output.mjs';
 import { PEER_NAME } from '../lib/names.mjs';
-import { NL } from '../lib/text.mjs';
+import { NL, writeFileAtomic } from '../lib/text.mjs';
+import { bandsFor } from '../lib/pressure.mjs';
+import { findLog } from '../lib/zstd-log.mjs';
+import { readPressure } from '../lib/sessions.mjs';
+import { ABORTED_TEXT, abortableDelay, aborted, signalOf } from '../lib/abort.mjs';
 import {
-  readProjCache, rowLine, sessionRows, stamp, pressurePct, isSubagent, isBusy,
-  projectName, pick, peerMarker, resolveWorkspaceId, findSessionLog, decodeSessionLog, conversation,
+  readProjCache, rowLine, sessionRows, stamp, isSubagent, isBusy,
+  projectName, pick, peerMarker, resolveWorkspaceId, sessionsRoot, decodeSessionLog, conversation,
 } from '../lib/peer.mjs';
 
 export const ACTIONS = ['list', 'status', 'send', 'wait', 'collect', 'collab', 'peek', 'rename', 'new'];
 const GLOBAL_ONLY = ['list', 'peek', 'rename'];
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const COLLECT_POLL_MS = 30000;
 const WAIT_MIN_MS = 120000;
 
@@ -44,11 +47,7 @@ function loadCollect() {
   return { version: 1, cursors: {}, groups: [] };
 }
 function saveCollect(data) {
-  const file = collectFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+  writeFileAtomic(collectFile(), JSON.stringify(data, null, 2));
 }
 function callerOf(exec) {
   return String(exec?.agent?.session?.header?.id ?? 'unknown');
@@ -77,15 +76,18 @@ function assertNotReplyingInCollab(state, sender, target) {
     || (Array.isArray(g.members) && g.members.indexOf(String(target)) !== -1);
   if (!inGroup) return;
   throw new Error(
-    '协作注册期间，被交办方不得向交办者或同组成员发送明文消息（target=' + target + '）：'
-    + '完成即结束回合，最终回复即为结果，协调者用 peer(action="collect") 取回。'
-    + '如需请示，将问题写入最终回复并结束回合；普通对话不受此限制。',
+    '现象：协作注册期间，被交办方尝试向交办者或同组成员发送明文消息（`target=' + target + '`）。'
+    + '原因：成员的结果由协调者用 `peer(action="collect")` 取回，明文消息会打乱协作流程。'
+    + '处置：完成即结束回合，最终回复即为结果；如需请示，将问题写入最终回复并结束回合。普通对话不受此限制。',
   );
 }
 
 /**
  * 供宿主工具守卫使用：某会话是协作成员（非协调者）时返回拒绝理由，否则空串。
  * 用于拦住 DSH 自带的 send_message 等明文投递通道。
+ *
+ * @param {string} sid 待判定的会话 id。
+ * @returns {string} 拒绝理由；不受限制时为空串。
  */
 export function collabMemberReason(sid) {
   try {
@@ -93,7 +95,7 @@ export function collabMemberReason(sid) {
     const g = groupOf(state, sid);
     if (!g) return '';
     if (String(sid) === String(g.coordinator)) return '';
-    return '协作注册期间，被交办方不得发送明文消息：完成即结束回合，最终回复由协调者用 peer(action="collect") 取回。';
+    return '协作注册期间，被交办方不得发送明文消息。处置：完成即结束回合，最终回复由协调者用 `peer(action="collect")` 取回。';
   } catch (error) { void error; }
   return '';
 }
@@ -112,12 +114,12 @@ function collabText(args, exec) {
   }
   const members = (Array.isArray(args.sessions) ? args.sessions : [])
     .map((x) => String(x || '').trim()).filter(Boolean).filter((s) => s !== caller);
-  if (!members.length) throw new Error('peer(action="collab")：sessions 至少列一个协作会话');
+  if (!members.length) throw new Error('现象：`peer(action="collab")` 的 `sessions` 为空。原因：协作注册至少需要一个成员会话。处置：在 `sessions` 中列出至少一个协作会话。');
   state.groups = groupsOf(state).filter((g) => String(g.coordinator) !== String(caller));
   state.groups.push({ coordinator: caller, members, at: Date.now() });
   saveCollect(state);
   return '已注册协作：协调者 ' + caller + '，成员 ' + members.join('、')
-    + '。协作期间成员不得向协调者或同组成员发送明文消息；collect 取回全部结果后自动解除。';
+    + '。协作期间成员不得向协调者或同组成员发送明文消息；`collect` 取回全部结果后自动解除。';
 }
 
 /** 助手文本：读目标日志里 since 之后的助手回复，不定长截断。 */
@@ -130,7 +132,7 @@ function assistantReplies(file, sinceMs) {
 
 /** 单个目标的完成判定：这一轮已结束，且 since 之后有助手文本。 */
 function inspectTarget(sid, since) {
-  const file = findSessionLog(sid);
+  const file = findLog(sid, sessionsRoot());
   if (file === null) return { sid, state: 'missing', text: '' };
   let replies = null;
   try { replies = assistantReplies(file, since); } catch (error) { void error; }
@@ -144,38 +146,40 @@ function inspectTarget(sid, since) {
 }
 
 /** 一对一：等单个目标的回复。 */
-async function waitText(args) {
+async function waitText(args, signal) {
   const sid = String(args.session_id || '').trim();
-  if (!sid) throw new Error('peer(action="wait")：session_id 不能为空');
+  if (!sid) throw new Error('现象：`peer(action="wait")` 缺少 `session_id`。原因：等待回复须指定目标会话。处置：传入目标会话 id 后重试。');
   const timeout = Math.max(WAIT_MIN_MS, Math.min(3600000, Number(args.timeout_ms) || WAIT_MIN_MS));
   const since = Number(args.since_ms) || Date.now();
   const deadline = Date.now() + timeout;
   let lastError = '';
   for (;;) {
+    if (aborted(signal)) return ABORTED_TEXT;
     const one = inspectTarget(sid, since);
     if (one.state === 'done') return '回复 ' + sid + '：' + NL + one.text;
-    if (one.state === 'missing') throw new Error('peer(action="wait")：找不到目标会话日志：' + sid);
-    if (one.state === 'nozstd') throw new Error('peer(action="wait")：本 Node 构建没有 zstd 支持，读不了会话日志');
+    if (one.state === 'missing') throw new Error('现象：未找到目标会话日志：`' + sid + '`。原因：该会话没有可读取的日志文件。处置：先用 `peer(action="status")` 核对会话 id。');
+    if (one.state === 'nozstd') throw new Error('现象：当前 Node 构建不支持 zstd，无法读取会话日志。原因：运行环境缺少 zstd 解压能力。处置：升级 Node 至支持的版本后重试。');
     lastError = one.state;
     if (Date.now() >= deadline) break;
-    await sleep(2000);
+    if (await abortableDelay(2000, signal) === 'aborted') return ABORTED_TEXT;
   }
-  return '等待超时（' + String(Math.round(timeout / 1000)) + ' 秒）：' + sid + ' 状态 ' + lastError
-    + '。可先用 peer(action="status") 查看状态，稍后重试 wait。';
+  return '等待超时（' + String(Math.round(timeout / 1000)) + ' 秒）：`' + sid + '` 状态 ' + lastError
+    + '。处置：先用 `peer(action="status")` 查看状态，稍后重试 `wait`。';
 }
 
 /**
- * 多会话收集：列一串会话，谁先完成先返回；同时完成多个就一起返回。
- * 一次调用最多等 timeout_ms（最低 120 秒，由助手按任务预估设置）；到点一个都没完成则返回仍在运行的名单。
+ * 多会话收集：列出若干会话，谁先完成先返回；同时完成多个则一起返回。
+ * 一次调用最多等 timeout_ms，最低 120 秒，由助手按任务预估设置。
+ * 到点一个都没完成时，返回仍在运行的名单。
  */
-async function collectText(args, exec) {
+async function collectText(args, exec, signal) {
   const caller = callerOf(exec);
   const state = loadCollect();
   const list = Array.isArray(args.sessions)
     ? args.sessions.map((x) => String(x || '').trim()).filter(Boolean)
     : [];
   const targets = list.length ? list : Object.keys(state.cursors[caller] || {});
-  if (!targets.length) throw new Error('peer(action="collect")：sessions 为空，且没有已交办的目标');
+  if (!targets.length) throw new Error('现象：`peer(action="collect")` 的 `sessions` 为空，且没有已交办的目标。原因：收集须给出会话 id，或先有交办记录。处置：在 `sessions` 中列出目标会话 id。');
   const timeout = Math.max(WAIT_MIN_MS, Math.min(3600000, Number(args.timeout_ms) || WAIT_MIN_MS));
   const deadline = Date.now() + timeout;
   const explicitSince = Number(args.since_ms) || null;
@@ -184,6 +188,7 @@ async function collectText(args, exec) {
   const done = [];
   const running = new Map(targets.map((sid) => [sid, 'running']));
   for (;;) {
+    if (aborted(signal)) return ABORTED_TEXT;
     for (const sid of targets) {
       if (done.some((d) => d.sid === sid)) continue;
       const one = inspectTarget(sid, since[sid]);
@@ -204,11 +209,11 @@ async function collectText(args, exec) {
       return out.join(NL);
     }
     if (Date.now() >= deadline) break;
-    await sleep(COLLECT_POLL_MS);
+    if (await abortableDelay(COLLECT_POLL_MS, signal) === 'aborted') return ABORTED_TEXT;
   }
   const lines = ['本轮没有完成的会话（已等待 ' + String(Math.round(timeout / 1000)) + ' 秒）：'];
   for (const sid of targets) lines.push('  ' + sid + '  ' + (running.get(sid) || 'running'));
-  lines.push('可稍后重试 collect；已完成的会立即返回。');
+  lines.push('处置：稍后重试 `collect`；已完成的会立即返回。');
   return lines.join(NL);
 }
 
@@ -217,17 +222,17 @@ function roleOf(env, exec) {
 }
 
 function denyUnless(ok, action, why) {
-  if (!ok) throw new Error('peer(action="' + action + '")：' + why);
+  if (!ok) throw new Error('现象：`peer(action="' + action + '")` 被拒绝。原因：' + why + '。处置：改由具备该权限的会话执行。');
 }
 
-async function listText(env, args) {
+async function listText(env, args, signal) {
   const limit = Number.isFinite(args.limit) ? Math.max(1, Math.min(200, Math.trunc(args.limit))) : 40;
   const controller = env.controller();
   if (!controller || typeof controller.list !== 'function') {
-    throw new Error('peer(action="list")：sessionController 不可用（插件未注入该服务）');
+    throw new Error('现象：`peer(action="list")` 失败。原因：`sessionController` 未注入，会话列表不可用。处置：确认 DSH 版本与插件装配后重启。');
   }
-  const rows = await sessionRows(controller, args.include_subagents === true);
-  if (rows.length === 0) return 'no sessions';
+  const rows = await sessionRows(controller, args.include_subagents === true, signal);
+  if (rows.length === 0) return '没有可列的会话。';
   return rows.slice(0, limit).map((row) => {
     const cache = readProjCache(row.sessionId);
     const state = row.running ? 'running' : row.agentAvailable ? 'idle' : 'cold';
@@ -235,41 +240,43 @@ async function listText(env, args) {
   }).join(NL);
 }
 
-async function statusText(env, args) {
+async function statusText(env, args, signal) {
   const controller = env.controller();
   if (!controller || typeof controller.list !== 'function') {
-    throw new Error('peer(action="status")：sessionController 不可用（插件未注入该服务）');
+    throw new Error('现象：`peer(action="status")` 失败。原因：`sessionController` 未注入，会话列表不可用。处置：确认 DSH 版本与插件装配后重启。');
   }
   const sid = String(args.session_id || '').trim();
-  if (!sid) throw new Error('peer(action="status")：session_id 不能为空');
+  if (!sid) throw new Error('现象：`peer(action="status")` 缺少 `session_id`。原因：查询详情须指定目标会话。处置：传入目标会话 id 后重试。');
   const cache = readProjCache(sid);
-  const rows = await sessionRows(controller, true);
+  const rows = await sessionRows(controller, true, signal);
   const row = rows.find((r) => r.sessionId === sid) ?? null;
-  if (cache === null && row === null) return 'unknown session: ' + sid;
+  if (cache === null && row === null) return '现象：未找到会话：`' + sid + '`。原因：该会话 id 不存在，或缓存与日志均不可读。处置：先用 `peer(action="list")` 核对会话 id。';
   const stats = pick(cache, 'record', 'rows', 'sessionStats', 'val') ?? {};
-  const pct = cache === null ? null : pressurePct(cache);
+  const p = cache === null ? { used: null, win: null } : readPressure(cache);
+  const pct = p.used === null || !p.win ? null : (p.used / p.win) * 100;
+  const hot = p.used !== null && p.win && p.used >= bandsFor(env.cfg, p.win).soft;
   return [
-    'session  ' + sid,
-    'kind     ' + (cache === null ? '?' : isSubagent(cache) ? '子会话（subagent）' : '平级会话（peer）'),
-    'project  ' + (cache === null ? '-' : projectName(cache)),
-    'pressure ' + (pct === null ? '?' : pct.toFixed(1) + '%') + (pct !== null && pct >= 32 ? '  已进入预警区' : ''),
-    'state    ' + (isBusy(cache) === true ? 'running' : row === null ? 'cold' : row.agentAvailable ? 'idle' : 'cold'),
-    'turns    ' + String(stats.turns ?? '?') + '   steps ' + String(stats.steps ?? '?'),
-    'cwd      ' + String(row?.cwd ?? pick(cache, 'record', 'identity', 'cwd') ?? '-'),
-    'preset   ' + String(pick(cache, 'record', 'rows', 'agentPreset', 'val') ?? '-'),
-    'updated  ' + stamp(row?.updatedAt ?? pick(cache, 'record', 'identity', 'createdAt')),
+    '会话      ' + sid,
+    '类型      ' + (cache === null ? '?' : isSubagent(cache) ? '子会话（subagent）' : '平级会话（peer）'),
+    '项目      ' + (cache === null ? '-' : projectName(cache)),
+    '水位      ' + (pct === null ? '?' : pct.toFixed(1) + '%') + (hot ? '  已进入预警区' : ''),
+    '状态      ' + (isBusy(cache) === true ? 'running' : row === null ? 'cold' : row.agentAvailable ? 'idle' : 'cold'),
+    '轮次与步数 ' + String(stats.turns ?? '?') + ' / ' + String(stats.steps ?? '?'),
+    '工作目录  ' + String(row?.cwd ?? pick(cache, 'record', 'identity', 'cwd') ?? '-'),
+    '预设      ' + String(pick(cache, 'record', 'rows', 'agentPreset', 'val') ?? '-'),
+    '更新      ' + stamp(row?.updatedAt ?? pick(cache, 'record', 'identity', 'createdAt')),
   ].join(NL);
 }
 
-async function sendText(env, args, exec, info) {
+async function sendText(env, args, exec, info, signal) {
   const controller = env.controller();
   if (!controller || typeof controller.prompt !== 'function') {
-    throw new Error('peer(action="send")：sessionController.prompt 不可用（插件未注入该服务）');
+    throw new Error('现象：`peer(action="send")` 失败。原因：`sessionController.prompt` 未注入，消息投递不可用。处置：确认 DSH 版本与插件装配后重启。');
   }
   const target = String(args.session_id || '').trim();
-  if (!target) throw new Error('peer(action="send")：session_id 不能为空');
+  if (!target) throw new Error('现象：`peer(action="send")` 缺少 `session_id`。原因：投递消息须指定目标会话。处置：传入目标会话 id 后重试。');
   const message = typeof args.message === 'string' ? args.message : '';
-  if (message.trim() === '') throw new Error('peer(action="send")：message 不能为空');
+  if (message.trim() === '') throw new Error('现象：`peer(action="send")` 的 `message` 为空。原因：投递内容不得为空。处置：传入非空的 `message` 后重试。');
   const mode = args.mode === 'steer' ? 'steer' : 'queue';
   // 来源标记：dsh 把宿主投递的消息记成 source.kind === "user"，不加标记的话，
   // 平级会话的消息在日志和界面上与用户消息完全无法区分。
@@ -278,11 +285,19 @@ async function sendText(env, args, exec, info) {
   const body = message.startsWith(marker) ? message : marker + NL + message;
   const before = loadCollect();
   assertNotReplyingInCollab(before, sender, target);
+  if (aborted(signal)) return ABORTED_TEXT;
   const since = Date.now();
-  const receipt = await controller.prompt(
-    { requestId: randomUUID(), sessionId: target, mode, content: [{ type: 'text', text: body }] },
-    new AbortController().signal,
-  );
+  let receipt = null;
+  try {
+    receipt = await controller.prompt(
+      { requestId: randomUUID(), sessionId: target, mode, content: [{ type: 'text', text: body }] },
+      signal || new AbortController().signal,
+    );
+  } catch (e) {
+    // 投递已发出后被终止：消息不撤回，按中止返回，不当作投递失败。
+    if (aborted(signal)) return ABORTED_TEXT;
+    throw e;
+  }
   try {
     const state = loadCollect();
     setSince(state, sender, target, since);
@@ -290,22 +305,22 @@ async function sendText(env, args, exec, info) {
   } catch (error) { void error; }
   const head = 'accepted=' + String(receipt.accepted) + ' mode=' + mode + ' target=' + target + ' from=' + sender;
   if (args.wait === true) {
-    return head + NL + await waitText({ session_id: target, since_ms: since, timeout_ms: args.timeout_ms });
+    return head + NL + await waitText({ session_id: target, since_ms: since, timeout_ms: args.timeout_ms }, signal);
   }
   return head;
 }
 
 async function peekText(args) {
   const sid = String(args.session_id || '').trim();
-  if (!sid) throw new Error('peer(action="peek")：session_id 不能为空');
+  if (!sid) throw new Error('现象：`peer(action="peek")` 缺少 `session_id`。原因：读取历史须指定目标会话。处置：传入目标会话 id 后重试。');
   const limit = Number.isFinite(args.limit) ? Math.max(1, Math.min(40, Math.trunc(args.limit))) : 8;
-  const file = findSessionLog(sid);
-  if (file === null) return 'no session log found for ' + sid;
+  const file = findLog(sid, sessionsRoot());
+  if (file === null) return '现象：未找到会话日志：`' + sid + '`。原因：该会话没有可读取的日志文件。处置：先用 `peer(action="status")` 核对会话 id。';
   const events = decodeSessionLog(file);
-  if (events === null) return 'this Node build has no zstd support; cannot read the session log';
+  if (events === null) return '现象：当前 Node 构建不支持 zstd，无法读取会话日志。原因：运行环境缺少 zstd 解压能力。处置：升级 Node 至支持的版本后重试。';
   const items = conversation(events, limit);
-  const head = 'session ' + sid + '  |  最近 ' + String(items.length) + ' 条  |  ' + file;
-  if (items.length === 0) return head + NL + '(没有可读的会话历史)';
+  const head = '会话 ' + sid + '  |  最近 ' + String(items.length) + ' 条  |  ' + file;
+  if (items.length === 0) return head + NL + '（没有可读的会话历史）';
   const body = items.map((it) => {
     const one = it.text.replace(/\s+/g, ' ').trim();
     const cut = one.length > 400 ? one.slice(0, 400) + ' …' : one;
@@ -317,25 +332,25 @@ async function peekText(args) {
 async function renameText(env, args) {
   const controller = env.controller();
   if (!controller || typeof controller.rename !== 'function') {
-    throw new Error('peer(action="rename")：sessionController.rename 不可用（插件未注入该服务）');
+    throw new Error('现象：`peer(action="rename")` 失败。原因：`sessionController.rename` 未注入，改名不可用。处置：确认 DSH 版本与插件装配后重启。');
   }
   const sid = String(args.session_id || '').trim();
-  if (!sid) throw new Error('peer(action="rename")：session_id 不能为空');
+  if (!sid) throw new Error('现象：`peer(action="rename")` 缺少 `session_id`。原因：改名须指定目标会话。处置：传入目标会话 id 后重试。');
   const title = String(args.title ?? '').trim();
-  if (title === '') throw new Error('peer(action="rename")：title 不能为空');
+  if (title === '') throw new Error('现象：`peer(action="rename")` 的 `title` 为空。原因：标题不得为空。处置：传入非空的 `title` 后重试。');
   await controller.rename({ sessionId: sid, title });
-  return 'renamed ' + sid + ' -> ' + title;
+  return '已改名：`' + sid + '` → ' + title + '。';
 }
 
-async function newText(env, args, info) {
+async function newText(env, args, info, signal) {
   const controller = env.controller();
   if (!controller || typeof controller.create !== 'function') {
-    throw new Error('peer(action="new")：sessionController.create 不可用（插件未注入该服务）');
+    throw new Error('现象：`peer(action="new")` 失败。原因：`sessionController.create` 未注入，新建会话不可用。处置：确认 DSH 版本与插件装配后重启。');
   }
   // 会话创建仅属全局；杂项可以把会话建在 Misc 下（落到本任务体系内）。
   const wantsWorkspace = typeof args.workspace === 'string' && args.workspace.trim() !== '';
   if (wantsWorkspace && args.cwd !== undefined) {
-    throw new Error('peer(action="new")：传 workspace 时不得再传 cwd，session.create 只接受其中之一（cwd 会自动取该工作区的 path）');
+    throw new Error('现象：同时传入了 `workspace` 与 `cwd`。原因：`session.create` 只接受其中之一，传 `workspace` 时 `cwd` 自动取该工作区路径。处置：删除 `cwd` 后重试。');
   }
   const targetText = String(args.workspace || args.cwd || '').toLowerCase();
   const allowed = info.role === 'global' || (info.role === 'misc' && targetText.indexOf('misc') !== -1);
@@ -344,73 +359,89 @@ async function newText(env, args, info) {
   if (wantsWorkspace) {
     const workspaceId = resolveWorkspaceId(args.workspace);
     if (workspaceId === null || workspaceId === undefined) {
-      throw new Error('peer(action="new")：找不到工作区「' + args.workspace + '」（可用 id / 标题 / 路径；数据源 storages/workspace.json）');
+      throw new Error('现象：未找到工作区「' + args.workspace + '」。原因：该名称不在工作区登记表中，数据源为 `storages/workspace.json`。处置：改用工作区 id、标题或路径之一重试。');
     }
     request = { workspaceId };
   } else if (args.cwd !== undefined) {
     request = { cwd: args.cwd };
   }
+  if (aborted(signal)) return ABORTED_TEXT;
   const created = await controller.create(request);
   const id = created.sessionId;
   if (typeof args.title === 'string' && args.title.trim() !== '') {
     try {
       await controller.rename({ sessionId: id, title: args.title.trim() });
     } catch (error) {
-      if (typeof env.log === 'function') env.log('peer(action="new")：改标题失败：' + String(error));
+      if (typeof env.log === 'function') env.log('改标题失败：' + String(error));
     }
   }
   let tail = '';
   if (typeof args.message === 'string' && args.message.trim() !== '') {
-    await controller.prompt(
-      { requestId: randomUUID(), sessionId: id, mode: 'queue', content: [{ type: 'text', text: args.message }] },
-      new AbortController().signal,
-    );
-    tail = ' (opening message delivered)';
+    if (aborted(signal)) return '已创建会话 `' + id + '`（未投递启动消息）。' + NL + ABORTED_TEXT;
+    try {
+      await controller.prompt(
+        { requestId: randomUUID(), sessionId: id, mode: 'queue', content: [{ type: 'text', text: args.message }] },
+        signal || new AbortController().signal,
+      );
+    } catch (e) {
+      if (aborted(signal)) return '已创建会话 `' + id + '`。' + NL + ABORTED_TEXT;
+      throw e;
+    }
+    tail = '（启动消息已投递）';
   }
-  return 'created ' + id + tail;
+  return '已创建会话 `' + id + '`' + tail + '。';
 }
 
+/**
+ * 构造 `peer` 工具定义。
+ *
+ * 动作级权限在此再判一次，因为角色矩阵只决定工具是否可见。
+ *
+ * @param {object} env 插件环境，提供 `controller`、`roleOf` 与 `cfg`。
+ * @returns {object} 工具定义，供宿主注册。
+ * 副作用：`send` 消耗目标会话 token；`new` 创建会话。
+ */
 export function pmPeerTool(env) {
   return {
     name: PEER_NAME,
-    description:
-      '平级会话：action=list 会话一览、status 单会话详情、send 投递消息（wait=true 时同轮等待回复）、wait 等待单个回复、collect 收集多个会话中先完成的最终回复、collab 注册或结束协作、peek 读取历史、rename 修改标题、new 新建会话。list、peek、rename 与 new 仅全局会话可用。',
+    description: '平级会话通信；列举、历史、改名与新建仅全局。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ACTIONS, description: '要执行的动作' },
-        session_id: { type: 'string', description: 'status、send、wait、peek、rename：目标会话 id' },
-        sessions: { type: 'array', items: { type: 'string' }, description: 'collect：要等待的会话 id 列表；留空则取已交办的目标' },
-        message: { type: 'string', description: 'send：要投递的正文' },
-        mode: { type: 'string', enum: ['queue', 'steer'], description: 'send：queue（缺省）或 steer' },
-        wait: { type: 'boolean', description: 'send：投递后在同一轮等待回复（一对一对话用）' },
-        collabMode: { type: 'string', enum: ['start', 'end'], description: 'collab：start 注册协作（缺省）、end 结束并解除限制' },
-        timeout_ms: { type: 'number', description: 'wait、collect：单次等待上限（毫秒，最低 120000，按任务预估设置）' },
-        since_ms: { type: 'number', description: 'wait、collect：从哪一时刻之后查找回复（缺省取交办时刻）' },
-        limit: { type: 'number', description: 'list：最多多少行（缺省 40）；peek：最近多少条（缺省 8，上限 40）' },
-        include_subagents: { type: 'boolean', description: 'list：同时列出子会话' },
-        title: { type: 'string', description: 'new、rename：显示标题' },
-        workspace: { type: 'string', description: 'new：工作区 id、标题或路径（与 cwd 互斥）' },
-        cwd: { type: 'string', description: 'new：新会话的工作目录' },
+        action: { type: 'string', enum: ACTIONS, description: '动作，必填。例：`send`。' },
+        session_id: { type: 'string', description: '目标会话 id，取自 `list` 输出。例：`session-3f2a9c`。' },
+        sessions: { type: 'array', items: { type: 'string' }, description: '`collect`、`collab` 的目标会话 id 清单。例：`["session-a1","session-b2"]`。' },
+        message: { type: 'string', description: '`send` 的消息正文，不得为空。' },
+        mode: { type: 'string', enum: ['queue', 'steer'], description: '`send` 的投递方式：`queue` 排队，`steer` 立即插入。缺省 `queue`。' },
+        wait: { type: 'boolean', description: '`send` 为 `true` 时投递后等待回复。缺省 `false`。' },
+        collabMode: { type: 'string', enum: ['start', 'end'], description: '`collab` 的开关：`start` 注册协作，`end` 解除限制。' },
+        timeout_ms: { type: 'number', description: '`send`、`wait`、`collect` 的等待上限，单位毫秒，最低 120000。' },
+        since_ms: { type: 'number', description: '只读取该毫秒时间戳之后的回复。缺省取当前时间。' },
+        limit: { type: 'number', description: '`list`、`peek` 的返回条数上限。缺省分别为 40 与 8。' },
+        include_subagents: { type: 'boolean', description: '`list` 是否连子会话一并列出。缺省 `false`。' },
+        title: { type: 'string', description: '`rename`、`new` 的显示标题，不得为空。例：`Demo 2`。' },
+        workspace: { type: 'string', description: '`new` 的目标工作区，可传 id、标题或路径；与 `cwd` 互斥。' },
+        cwd: { type: 'string', description: '`new` 的工作目录绝对路径；与 `workspace` 互斥。' },
       },
     },
     output: textOutput(),
     async execute(args, exec) {
       const action = String(args.action || '');
-      if (ACTIONS.indexOf(action) === -1) throw new Error('peer：action 只能是 ' + ACTIONS.join(' | ') + '（收到 ' + JSON.stringify(action) + '）');
+      if (ACTIONS.indexOf(action) === -1) throw new Error('现象：`action` 取值不在允许范围。原因：收到 `' + JSON.stringify(action) + '`，只接受 ' + ACTIONS.join('、') + '。处置：改用上述取值之一后重试。');
+      const signal = signalOf(exec);
       const info = roleOf(env, exec);
       if (GLOBAL_ONLY.indexOf(action) !== -1) denyUnless(info.role === 'global', action, '该动作仅全局会话可用');
-      if (action === 'list') return { text: await listText(env, args) };
-      if (action === 'status') return { text: await statusText(env, args) };
-      if (action === 'send') return { text: await sendText(env, args, exec, info) };
-      if (action === 'wait') return { text: await waitText(args) };
-      if (action === 'collect') return { text: await collectText(args, exec) };
+      if (action === 'list') return { text: await listText(env, args, signal) };
+      if (action === 'status') return { text: await statusText(env, args, signal) };
+      if (action === 'send') return { text: await sendText(env, args, exec, info, signal) };
+      if (action === 'wait') return { text: await waitText(args, signal) };
+      if (action === 'collect') return { text: await collectText(args, exec, signal) };
       if (action === 'collab') return { text: collabText(args, exec) };
       if (action === 'peek') return { text: await peekText(args) };
       if (action === 'rename') return { text: await renameText(env, args) };
-      return { text: await newText(env, args, info) };
+      return { text: await newText(env, args, info, signal) };
     },
   };
 }

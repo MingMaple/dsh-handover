@@ -1,32 +1,27 @@
-/**
- * 会话管理的实现（原 ho_session_new / ho_prompt / ho_session_archive / ho_session_unarchive 的代码搬到这里）。
- * 对外只经 ho_sessions(action=…) 暴露，少 4 份 schema 的固定开销。
+﻿/**
+ * 会话管理的实现。原 ho_session_new 等 4 个入口的代码已并入本文件。
+ * 对外只经 ho_sessions(action=…) 暴露，省去 4 份 schema 的固定开销。
  */
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { NL, readUtf8, isDir, isFile } from './text.mjs';
 import { handoverPathFor, assertProjectName, assertTaskName } from './role.mjs';
-import { readHandover } from './handover-io.mjs';
 import { workspaceRows } from './registry.mjs';
-import { checkConsent } from './consent.mjs';
-import { watermark } from './facts.mjs';
+import { bandsFor } from './pressure.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { newSessionIn } from './session-create.mjs';
+import { ABORTED_TEXT, aborted } from './abort.mjs';
 import { lineageKeyOf, loadOffice, registerHolder } from './office.mjs';
 import { migrateIdentity } from './identity.mjs';
 import { pathKey } from './pathkey.mjs';
 
 const FENCE = String.fromCharCode(96, 96, 96);
 
-function normPath(p) {
-  return pathKey(String(p || ''));
-}
-
 /** 路径比较：先比写法；再取 realpath 比，兼容旧的 junction 路径与真实路径。 */
 function sameLoosePath(a, b) {
-  if (normPath(a) === normPath(b)) return true;
-  try { return normPath(fs.realpathSync(String(a))) === normPath(fs.realpathSync(String(b))); } catch { return false; }
+  if (pathKey(a) === pathKey(b)) return true;
+  try { return pathKey(fs.realpathSync(String(a))) === pathKey(fs.realpathSync(String(b))); } catch { return false; }
 }
 
 /** 在 ~/.dsh/storages/workspace.json 里按 id、标题、路径找 workspaceId。 */
@@ -44,7 +39,7 @@ function findWorkspaceId(key) {
 }
 
 /**
- * 新建会话落哪个工作区：用户指定的 workspace／cwd 优先，项目按标题或路径自动匹配，全局落到当前工作区。
+ * 新建会话落在哪个工作区：优先用用户指定的 workspace 或 cwd。项目按标题或路径自动匹配；全局落到当前工作区。
  * 返回 workspaceId；找不到时抛出可直接展示的中文错误，并列出已注册的工作区。
  * @param {object} env 插件环境
  * @param {object} exec 工具执行上下文（用来取当前工作区根）
@@ -86,7 +81,7 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
     const want = String(project).toLowerCase();
     const hit = rows.find((r) => {
       if (String(r.title || '') === String(project)) return true;
-      const p = normPath(r.path);
+      const p = pathKey(r.path);
       return p.indexOf('/projects/' + want) !== -1 || p.indexOf('/_project_meta/' + want) !== -1;
     });
     if (!hit) {
@@ -99,7 +94,7 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
   if (wantGlobalWs) return pickWorkspace(ws);
   throw new Error('新建会话须指明工作区：传 workspace（id、标题或路径），或 cwd（某个已注册工作区的根）。' + NL
     + '已注册的工作区：' + NL + choices + NL
-    + '全局会话落在标题含「全局」的工作区；项目会话同时传 project 与该项目的工作区；杂项会话传该项目之外的独立工作区。');
+    + '全局会话落在标题含「全局」的工作区。项目会话同时传 project 与该项目的 workspace；杂项会话传该项目之外的独立工作区。');
 }
 
 /**
@@ -107,7 +102,7 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
  * 换任时用来让接任者落回本会话所在的那个工作区，而不是工作区根。
  */
 export function workspaceIdOfPath(env, p) {
-  const want = normPath(p);
+  const want = pathKey(p);
   if (!want || want === '-') return '';
   const hit = listWorkspaces(env).find((r) => {
     const rp = String(r.path || '');
@@ -170,7 +165,7 @@ function fill(tpl, map) {
 // ---------------------------------------------------------------- action: new
 
 /**
- * 复用判据：同一类别已有在任会话且其水位低于提醒线时，返回中文拒绝理由；否则返回空串。
+ * 复用判据：同一类别已有在任会话且其水位未到整理线时，返回中文拒绝理由；否则返回空串。
  * 只读在任登记表与水位缓存，不写任何文件；取不到水位就放行。
  */
 function reuseBlocker(env, ws, kind, key) {
@@ -179,19 +174,26 @@ function reuseBlocker(env, ws, kind, key) {
   const lin = loadOffice(ws).lineages[key];
   const cur = lin && lin.current;
   if (!cur || !cur.sessionId) return '';
-  let pct = null;
-  try { pct = typeof env.selfPct === 'function' ? env.selfPct(cur.sessionId) : null; } catch { pct = null; }
-  if (pct === null || pct === undefined || !(Number(pct) < watermark(env.cfg).reuseValue)) return '';
+  let used = null;
+  let win = null;
+  try {
+    const p = typeof env.selfPressure === 'function' ? env.selfPressure(cur.sessionId) : null;
+    used = p && typeof p.used === 'number' && Number.isFinite(p.used) ? p.used : null;
+    win = p && typeof p.win === 'number' && Number.isFinite(p.win) && p.win > 0 ? p.win : null;
+  } catch { used = null; win = null; }
+  if (used === null || win === null) return '';
+  const soft = bandsFor(env.cfg, win).soft;
+  if (used >= soft) return '';
   const label = kind === 'global' ? '全局类别' : kind === 'project' ? '项目「' + key + '」' : '杂项任务「' + key + '」';
   return '拒绝新建：' + label + '已有在任会话 ' + (cur.name || '（未命名）') + '（' + cur.sessionId + '），水位 '
-    + Number(pct).toFixed(1) + '%，低于 ' + watermark(env.cfg).handover + '。建议用 peer（action="send"）复用；确需另建，请传 force=true。';
+    + used + ' token，未到整理线 ' + soft + '。建议用 peer（action="send"）复用；确需另建，请传 force=true。';
 }
 
-export async function sessionNew(env, args, exec) {
+export async function sessionNew(env, args, exec, signal) {
   const ws = env.resolveWs(exec);
   const controller = env.controller();
   // 换任（新建接班会话）先问用户。
-  if (args.confirm !== true) throw new Error('新建会话（换任）须经当前用户确认：先向当前用户说明将建立接任会话并取得同意，再传 confirm=true');
+  if (args.confirm !== true) throw new Error('新建会话（换任）须经当前用户确认：先说明将建立接任会话并取得同意，再传 confirm=true');
   if (!controller) throw new Error('ctx.sessionController 不可用');
   // 名字要落成目录：先校验，别等会话建完、写角色表时才失败（那样会留下一个没有角色的会话）。
   if (args.project) assertProjectName(String(args.project));
@@ -206,6 +208,14 @@ export async function sessionNew(env, args, exec) {
   const finalRole = title.indexOf('全局') !== -1 ? 'global'
     : (role === 'project' || role === 'misc' ? role : (project ? 'project' : ''));
   const officeKind = finalRole === 'project' || finalRole === 'misc' || finalRole === 'global' ? finalRole : '';
+
+  // 角色要落成「类别名 + 角色」的持久化条目：先把必要字段校验完，避免会话建完才在登记时失败。
+  if (finalRole === 'project' && project === '') {
+    throw new Error('现象：新建项目会话缺少项目名。原因：角色为 project 时须给出 project，否则角色表与在任登记都无法落条目。处置：补传 project（或改传 role=global 或 misc 与对应名称）后重试。');
+  }
+  if (finalRole === 'misc' && task === '') {
+    throw new Error('现象：新建杂项会话缺少任务名。原因：角色为 misc 时须给出 task，否则角色表与在任登记都无法落条目。处置：补传 task 后重试。');
+  }
 
   // 建会话之前先读在任登记表：同类已有低水位在任会话时，复用比新建更省。校验在一切写入之前。
   if (args.force !== true && officeKind) {
@@ -238,9 +248,11 @@ export async function sessionNew(env, args, exec) {
     wantGlobal: title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global',
   });
 
-  const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task });
+  if (aborted(signal)) throw new Error(ABORTED_TEXT);
+  const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task }, signal);
   const sessionId = made.sessionId || '';
   if (!sessionId) throw new Error(made.error || 'create 没有返回 sessionId');
+  if (made.error) throw new Error(made.error + '（会话 id：' + sessionId + '；不回收已建会话）');
   out.push('已建会话 ' + sessionId + (finalRole ? '，角色 ' + finalRole + (project ? '（' + project + '）' : '') : ''));
   // 建会话即登记在任：全局手工建/换会话与自服务换任共用一张登记表，不让注册表漏记或与实况分叉。
   try {
@@ -268,11 +280,25 @@ export async function sessionNew(env, args, exec) {
     '待当前用户指派后再开始作业。交接无待办时如实说明，不得编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '全局会话 id：' : '创建者会话 id：') + meId,
-    '默认沉默：仅在下列三种时机向全局发送一条 peer（action="send"）：水位不低于 ' + watermark(env.cfg).remind + ' 且已写交接；需当前用户决定；全局口径有误。',
+    '默认沉默：仅在下列 3 种时机向全局发送一条 peer（action="send"）。水位不低于建议线（advise）且已写交接；需当前用户决定；全局口径有误。',
     '任务完成不报全局，任务属本会话内部事务。会话之间可直接 peer（action="send"），不必经全局转述。',
     '不得每轮回执，不得发送「收到」「已完成」一类确认；全局以文件末态为准。',
   ].join(NL);
-  const r = await sendPrompt(env.controller(), sessionId, text, 'queue');
+  if (aborted(signal)) {
+    out.push(ABORTED_TEXT);
+    return out.join(NL);
+  }
+  let r = null;
+  try {
+    r = await sendPrompt(env.controller(), sessionId, text, 'queue', signal);
+  } catch (e) {
+    // 已建成会话与已投递消息都不回收；中止按可读文案返回。
+    if (aborted(signal)) {
+      out.push(ABORTED_TEXT);
+      return out.join(NL);
+    }
+    throw e;
+  }
   out.push('已投启动提示词 accepted=' + String(r && r.accepted) + '（' + text.length + ' 字）');
   return out.join(NL);
 }
@@ -346,9 +372,9 @@ export function promptFor(env, opts) {
   if (kind === 'project' && project) {
     extraLines.push('库根：Projects/' + project + '/；元数据：_Project_Meta/' + project + '/；快照：_Temp/' + project + '/Snapshots/');
     extraLines.push('作业前读库根 SKILL.md；修改文档时另读 _Control_Center/rules/ 下的对应规范。');
-    extraLines.push('进入预警区后写交接。换任须由当前用户在聊天框发送 /allow-succeed 授权，再由本会话调用 ho_succeed 完成，不向全局请求。');
+    extraLines.push('进入预警区后写交接。上下文重置与换任须由当前用户授权：在聊天框发送 /allow-reset，再由本会话调用 succeed 完成，不向全局请求。');
   }
-  if (kind === 'misc') extraLines.push('标准见 rules/Misc_Task_Standard.md。换任须经当前用户授权，再由本会话调用 ho_succeed。');
+  if (kind === 'misc') extraLines.push('标准见 rules/Misc_Task_Standard.md。换任须经当前用户授权，再由本会话调用 ho_sessions(action="succeed")。');
   if (kind === 'migration') extraLines.push('迁移口径见 rules/Migration_Rules.md。通过顶层闸门后再开始作业。');
   if (o.extra) extraLines.push(String(o.extra));
   return [body].concat(extraLines.length ? ['', ...extraLines] : []).join(NL);
@@ -419,8 +445,8 @@ function orderHandoverText(env, sid, extra) {
   lines.push("【全局指令：执行交接流程】将当前工作写成交接。写毕立即停止操作，等待换任；本轮不再进行项目作业。");
   lines.push("");
   lines.push("1) 目标文件：" + (hp && hp.path ? hp.path : "（角色未定，须先由全局设定角色）"));
-  lines.push("   按固定流程重写：① ho_handover(action=\"read\") 读旧交接；② ho_handover(action=\"archive\") 归档；③ 读模板 _Control_Center/templates/Handover.md；④ ho_handover(action=\"new\", text=...) 新建空白写入。不传 path：路径已按本会话角色（" + (info && info.role ? info.role : "unknown") + "）解析。");
-  lines.push("2) 必写 5 项：① 当前进度（版本、产物、是否通过）；② 环境与路径（版本号、安装位置、下载源）；③ 下一步清单，按顺序列出，每条可直接执行；④ 已完成待验收与要求未实现的部分；⑤ 已知问题与已出现的错误。");
+  lines.push("   按固定流程重写：一步完成归档旧交接、写入新正文与结构体检。承接项由返回给出，需自行并入新正文。不传 path：路径已按本会话角色（" + (info && info.role ? info.role : "unknown") + "）解析。");
+  lines.push("2) 必写 5 项。1）当前进度（版本、产物、是否通过）。2）环境与路径（版本号、安装位置、下载源）。3）下一步清单，按顺序列出，每条可直接执行。4）已完成待验收与要求未实现的部分。5）已知问题与已出现的错误。");
   lines.push("3) 机密只写位置，不写值：密码、token、密钥均写明所在文件。");
   lines.push("4) 写毕只向全局回一条 peer（action=\"send\"）：`交接已写 <绝对路径>`，附一句状态，不复述全文。");
   lines.push("5) 不得压缩上下文，不得新建会话（新建会话属全局权限）。");
@@ -428,13 +454,13 @@ function orderHandoverText(env, sid, extra) {
   return lines.join(NL);
 }
 
-export async function sessionOrder(env, args) {
+export async function sessionOrder(env, args, signal) {
   const sid = String(args.session_id || "").trim();
   const order = String(args.order || "").trim();
   if (!sid) throw new Error("order 需要 session_id");
   if (order !== "handover" && order !== "compact") throw new Error("order 只能是 handover 或 compact");
   // 给别的会话下「交接、压缩」指令，也要先问用户。
-  if (args.confirm !== true) throw new Error("下交接、压缩指令需要当前用户确认：先说明将唤醒目标会话并要求其交接或压缩，取得同意后传 confirm=true");
+  if (args.confirm !== true) throw new Error("下发交接或压缩指令须经当前用户确认：先说明将唤醒目标会话，取得同意后传 confirm=true");
   const extra = typeof args.extra === "string" ? args.extra.trim() : "";
   const hp = env.handoverForSid(sid);
   const info = env.infoOfSid(sid);
@@ -446,57 +472,15 @@ export async function sessionOrder(env, args) {
   }
   if (order === "handover") {
     const text = orderHandoverText(env, sid, extra);
-    const r = await sendPrompt(env.controller(), sid, text, "queue");
+    const r = await sendPrompt(env.controller(), sid, text, "queue", signal);
     out.push("已投递交接指令 accepted=" + String(r && r.accepted) + "（将唤醒目标会话一轮）");
     out.push("收到目标会话回的 `交接已写 <路径>` 后，再用 ho_sessions(action=\"new\") 建立接任会话。");
     return out.join(NL);
   }
-  // order === compact
-  const agent = typeof env.agentOfSid === "function" ? env.agentOfSid(sid) : null;
-  if (!agent) {
-    out.push("拒绝排压缩：目标会话不在内存（已休眠）。先让目标会话开一轮（ho_sessions(action=\"order\", order=\"handover\")），再排压缩。");
-    return out.join(NL);
-  }
-  const st = typeof env.compactionStateOfSid === "function" ? env.compactionStateOfSid(sid) : null;
-  if (st && st.lock === "open") {
-    out.push("拒绝排压缩：目标会话日志中有未闭合的压缩锁（compaction/start 无配对 end）。待其结束后再复查。");
-    return out.join(NL);
-  }
-  const cur = readHandover(hp.path);
-  if (cur.text === null || String(cur.text).trim() === "") {
-    out.push("拒绝排压缩：磁盘上没有合格交接 " + hp.path + "。压缩会丢失历史，先执行 order=handover。");
-    return out.join(NL);
-  }
-  const used = st && typeof st.used === "number" ? st.used : 0;
-  const max = (env.cfg && env.cfg.maxCompactions) || 3;
-  const n = used + 1;
-  if (n > max) {
-    out.push("已压满 " + used + "/" + max + "：不再压缩。应执行 ho_succeed 自行换任（先请当前用户发送 /allow-succeed 授权）；全局会话自身也可用 ho_sessions(action=\"new\")。新会话读毕交接后会先向你报告，等待指派。");
-    return out.join(NL);
-  }
-  const recentSec = st && st.lastSummaryMs ? (Date.now() - st.lastSummaryMs) / 1000 : null;
-  if (recentSec !== null && recentSec < 120 && args.force !== true) {
-    out.push("拒绝排压缩：" + Math.round(recentSec) + " 秒前目标会话刚压缩过一次。如确需再次压缩，加 force=true。");
-    return out.join(NL);
-  }
-  // 严格闸门：代排也要用户点过授权，AI 不能自行批准。
-  const cs = checkConsent(sid);
-  if (!cs.ok) {
-    out.push("拒绝排压缩：" + cs.reason + "。");
-    out.push("请当前用户在设置页的 dsh-handover 中，点击「授权」内的「授权压缩」（5 分钟内有效），再重新下达本指令。");
-    return out.join(NL);
-  }
-  const resume = args.resume === "continue" ? "continue" : "wait";
-  env.schedule(sid, n, { resume });
-  out.push("当前用户已授权（" + (cs.atText || '') + " 点击，剩余 " + Math.round((cs.leftMs || 0) / 1000) + " 秒）。");
-  out.push("已登记压缩（目标会话自身第 " + n + "/" + max + " 次），待目标会话空闲后执行。");
-  if (resume === "wait") {
-    out.push("去向：wait（缺省）—— 压缩后不再唤醒目标会话，等待当前用户派新任务，或由新会话接手。");
-  } else {
-    out.push("去向：continue —— 压缩后目标会话会自动收到其自身的续跑消息（含其自身交接路径）。");
-  }
-  out.push("压缩由插件调度器执行（compactNow 仅在空闲时可用），不向目标会话发消息令其自行压缩。");
-  out.push("若目标会话正在运行，调度器会等待其空闲（上限 " + Math.round(((env.cfg && env.cfg.waitIdleMs) || 180000) / 1000) + " 秒）。");
+  // order === compact：不再由全局代排。压缩只能在目标会话自身的轮次内执行，
+  // 到线提示后由该会话的助手调用 ho_handover(action="compact")，或由插件在强制线强制压缩。
+  out.push("压缩不由全局代排：判定权归目标会话的助手。");
+  out.push("处置：用 peer 通知目标会话，请其在安全断点调用 compact。到强制线时插件会自行强制压缩。");
   return out.join(NL);
 }
 

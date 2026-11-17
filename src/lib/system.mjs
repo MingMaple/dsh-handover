@@ -12,8 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { NL, readUtf8, isFile, isDir } from './text.mjs';
-import { projectNameOk, taskNameOk } from './role.mjs';
+import { NL, readUtf8, isFile, isDir, writeFileAtomic } from './text.mjs';
 import { readProfile } from './profile.mjs';
 
 export const GLOBAL_REGISTRY_REL = path.join('_Control_Center', 'records', 'systems.md');
@@ -40,7 +39,7 @@ export function lineageLabel(info) {
 }
 
 /** 任务库根（相对工作区）。项目优先取骨架档案登记的根，其次 `<项目>库`，最后项目目录。 */
-export function taskRoot(ws, info) {
+function taskRoot(ws, info) {
   const lin = lineageOf(info);
   if (!lin) return '';
   if (lin.kind === 'project') {
@@ -87,7 +86,7 @@ function cellsOf(line) {
 }
 
 /** 解析任务级注册：返回 { title, structure: [{path, about}], files: [{path, about, when}], plan }。 */
-export function parseRegistry(text) {
+function parseRegistry(text) {
   const out = { title: '', structure: [], files: [], plan: '' };
   let section = '';
   for (const raw of String(text || '').split(/\r?\n/)) {
@@ -141,7 +140,7 @@ export function readRegistry(ws, info) {
 }
 
 /** 路径合法且存在：只收工作区相对路径。 */
-export function pathProblem(ws, p) {
+function pathProblem(ws, p) {
   const raw = normRel(p);
   if (!raw) return '路径为空';
   if (/^[a-zA-Z]:/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return '须写工作区相对路径，不得写绝对路径';
@@ -159,21 +158,6 @@ export function validateEntries(ws, entries) {
     if (problem) bad.push({ path: e.path, problem });
   }
   return bad;
-}
-
-/** 解析全局总注册：返回 [{ task, kind, path }]。 */
-export function parseGlobalRegistry(text) {
-  const rows = [];
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line.startsWith('|')) continue;
-    const cells = cellsOf(line);
-    if (cells.length < 3) continue;
-    if (cells[0] === '任务') continue;
-    if (cells.every((c) => /^[-:\s]*$/.test(c))) continue;
-    rows.push({ task: cells[0], kind: cells[1] || '', path: cells[2] });
-  }
-  return rows;
 }
 
 const KIND_LABEL = { project: '项目', misc: '杂项', 'global-task': '全局任务' };
@@ -205,12 +189,7 @@ export function syncGlobalRefs(ws) {
   const body = lines.join(NL) + NL;
   let changed = true;
   try { changed = readUtf8(file) !== body; } catch { changed = true; }
-  if (changed) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = file + '.tmp-' + process.pid;
-    fs.writeFileSync(tmp, body, 'utf8');
-    fs.renameSync(tmp, file);
-  }
+  if (changed) writeFileAtomic(file, body);
   return { rows, file, changed, body };
 }
 
@@ -304,9 +283,7 @@ export function writeRegistry(ws, info, data) {
     try { fs.copyFileSync(file, backup); } catch { backup = ''; }
   }
   const body = renderRegistry(info, data);
-  const tmp = file + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, body);
   return { file, backup, bytes: Buffer.byteLength(body, 'utf8') };
 }
 
@@ -332,7 +309,7 @@ export function archivePlan(ws, info) {
 }
 
 /** 计划模板要求的节次；写入时逐节校验，缺节即拒收。 */
-export const PLAN_SECTIONS = ['目标', '步骤', '验收', '风险', '状态'];
+const PLAN_SECTIONS = ['目标', '步骤', '验收', '风险', '状态'];
 
 /** 返回计划正文缺少的模板节次（空数组表示齐全）。 */
 export function planSectionProblems(text) {
@@ -356,9 +333,7 @@ export function writePlan(ws, info, text) {
   const abs = path.join(String(ws || ''), rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const body = String(text || '');
-  const tmp = abs + '.tmp-' + process.pid;
-  fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, abs);
+  writeFileAtomic(abs, body);
   return { rel, archived, bytes: Buffer.byteLength(body, 'utf8') };
 }
 

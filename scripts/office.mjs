@@ -2,7 +2,7 @@
 /**
  * 命令行查在任登记表：`node scripts/office.mjs 全局 全局3 Demo1`
  *
- * 与工具 ho_office 同一份实现、同一份记录（_Control_Center/records/Office.json），
+ * 与工具 ho_sessions 的 office-read 动作同一份实现、同一份记录（_Control_Center/records/Office.json），
  * 区别只是不起会话也能查。工作区根按 --root → DSH_OFFICE_ROOT → 从 cwd 向上找 _Control_Center 的顺序解析。
  */
 import path from 'node:path';

@@ -1,4 +1,4 @@
-/** 文本/文件小工具：无第三方依赖，全部同步 IO（工具调用内使用）。 */
+/** 文本与路径小工具：无第三方依赖，全部同步 IO，仅供工具调用内部使用。 */
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -17,9 +17,10 @@ export function isDir(p) {
 }
 
 /**
- * 项目名与任务名要当目录名用，必须在 Windows／macOS／Linux 上都合法。
+ * 项目名与任务名要当目录名用，必须在 Windows、macOS、Linux 上都合法。
  * 规则：非空、不超过 24 字符、不含控制字符与 < > : " / \ | ? *、不以点或空格结尾、不是设备保留名。
- * 名字来自首条提示等自由文本时尤其要校验：Markdown 里的 `Projects/**` 这类通配写法会被误当成名字（实测踩过）。
+ * 名字常来自首条提示等自由文本，须逐一校验。
+ * Markdown 里的 `Projects/**` 这类通配写法曾被误当成名字，现已由下列规则拦下。
  */
 const RESERVED_NAMES = ['con', 'prn', 'aux', 'nul',
   'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
@@ -44,33 +45,79 @@ export function assertSafeName(name, label, maxLen) {
 }
 
 /**
- * 读目录下全部 *.json，返回 [{ name, path, data, mtimeMs }]，读不动的跳过。
+ * 读目录下全部 *.json，返回 [{ name, path, data, mtimeMs }]；读不动的条目跳过。
  *
- * 投影缓存里有几百个文件、几十 MB，单次读取约 0.2 秒；按会话逐条判定角色时会反复调用。
- * 因此加一层 1.5 秒的进程内缓存：同一轮状态计算只解析一次，跨轮仍是新数据。
+ * 投影缓存有几百个文件、几十 MB，单次全量解析约 130ms。按会话判定角色时会反复调用该函数。
+ * 因此加进程内缓存：30 秒内直接复用解析结果。
+ * 超过 30 秒先算目录签名（文件数、总字节、最新 mtime），签名未变则沿用结果。
+ * DSH 会话日志每步追加，旧实现的 1.5 秒 TTL 短于追加间隔，等于每步都冷扫一遍。
  */
-const JSON_DIR_TTL_MS = 1500;
+const JSON_DIR_TTL_MS = 30000;
 const jsonDirCache = new Map();
+
+/** 目录签名：名字数 + *.json 总字节 + 最新 mtimeMs。任一变化都说明需要重解析。 */
+function dirSignature(dir, names) {
+  let count = 0;
+  let bytes = 0;
+  let latest = 0;
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const st = fs.statSync(path.join(dir, name));
+      if (!st.isFile()) continue;
+      count++;
+      bytes += st.size;
+      if (st.mtimeMs > latest) latest = st.mtimeMs;
+    } catch { /* 跳过坏文件 */ }
+  }
+  return { count, bytes, latest };
+}
 
 export function readJsonDir(dir) {
   const key = String(dir);
   const now = Date.now();
   const hit = jsonDirCache.get(key);
   if (hit && now - hit.at < JSON_DIR_TTL_MS) return hit.items;
-  const out = [];
   let names = [];
-  try { names = fs.readdirSync(dir); } catch { return out; }
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  if (hit) {
+    const sig = dirSignature(dir, names);
+    if (sig.count === hit.sig.count && sig.bytes === hit.sig.bytes && sig.latest === hit.sig.latest) {
+      hit.at = now;
+      return hit.items;
+    }
+  }
+  const out = [];
+  const sig = { count: 0, bytes: 0, latest: 0 };
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const p = path.join(dir, name);
     try {
       const st = fs.statSync(p);
       if (!st.isFile()) continue;
+      sig.count++;
+      sig.bytes += st.size;
+      if (st.mtimeMs > sig.latest) sig.latest = st.mtimeMs;
       out.push({ name, path: p, data: JSON.parse(fs.readFileSync(p, 'utf8')), mtimeMs: st.mtimeMs });
     } catch { /* 跳过坏文件 */ }
   }
-  jsonDirCache.set(key, { at: Date.now(), items: out });
+  jsonDirCache.set(key, { at: Date.now(), sig, items: out });
   return out;
+}
+
+/**
+ * 按候选文件名逐个直读 <dir>/<stem>.json，命中即返回 { name, data }，全部失败返回 null。
+ * 只取单个会话的数据时不要调用 readJsonDir：该函数会全量解析 400 多个文件。
+ */
+export function readJsonFileLazy(dir, stems) {
+  const list = Array.isArray(stems) ? stems : [stems];
+  for (const stem of list) {
+    const s = String(stem === undefined || stem === null ? '' : stem);
+    if (!s) continue;
+    const p = path.join(String(dir), s + '.json');
+    try { return { name: s + '.json', data: JSON.parse(fs.readFileSync(p, 'utf8')) }; } catch { /* 试下一个候选 */ }
+  }
+  return null;
 }
 
 /** 安全按路径取值，无法获取返回 null。 */
@@ -98,4 +145,31 @@ export function sectionLines(text, name) {
     }
   }
   return null;
+}
+
+/** 字节数转可读大小：GB 保留 2 位小数、MB/KB 保留 1 位，不足 1 KB 按字节。 */
+export function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1024 * 1024 * 1024) return (v / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  if (v >= 1024 * 1024) return (v / (1024 * 1024)).toFixed(1) + ' MB';
+  if (v >= 1024) return (v / 1024).toFixed(1) + ' KB';
+  return v + ' B';
+}
+
+/** 固定按 MB 保留 2 位小数（打包与快照清单用，不随量级换算）。 */
+export function fmtMB(n) {
+  return ((Number(n) || 0) / 1048576).toFixed(2) + ' MB';
+}
+
+/** 缺目录时先创建；写入同目录临时文件后 rename，rename 失败则回退为复制。 */
+export function writeFileAtomic(file, text) {
+  const dir = path.dirname(String(file));
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, '.tmp-' + process.pid + '-' + Math.random().toString(36).slice(2, 10));
+  fs.writeFileSync(tmp, text, 'utf8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch {
+    try { fs.copyFileSync(tmp, file); } finally { try { fs.unlinkSync(tmp); } catch { /* ignore */ } }
+  }
 }

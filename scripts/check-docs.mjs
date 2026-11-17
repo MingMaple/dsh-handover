@@ -57,8 +57,10 @@ for (const file of releaseFiles) {
   }
 }
 
-// 3. 工具名：文档里出现的 ho_* 与 peer_* 必须在 names.mjs 中
+// 3. 工具名：文档里出现的 ho_* 与 peer_* 必须在 names.mjs 中。
+// 版本说明属历史记录，可能引用后来撤除的工具名，工具名检查只覆盖当前文档。
 for (const file of files) {
+  if (path.dirname(file) === releasesDir) continue;
   const text = fs.readFileSync(file, 'utf8');
   const hits = text.match(/\b(?:ho|peer)_[a-z_]+\b/g) || [];
   for (const name of hits) {

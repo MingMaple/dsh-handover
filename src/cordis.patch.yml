@@ -8,9 +8,26 @@
     - id: dsh-handover
       name: '@mingmaple/dsh-handover'
       config:
-        warnRatio: 0.32
-        handoverRatio: 0.35
-        hardRatio: 0.85
-        maxCompactions: 3
+        maxCompactionsPerSession: 4
+        maxCompactionsHardCap: 6
+        hostSummaryRatio: 0.80
+        retainTokens: 20000
+        shadowTarget: 0.55
+        keepMinMessages: 20
+        minKeepTokens: 8000
+        roiFloor: 0.30
+        anchorMaxTokens: 1500
+        capsuleMaxChars: 1600
+        constraintMax: 8
+        budgetMode: 'ratio'
+        budgetSoft: 80000
+        budgetAdvise: 120000
+        budgetHard: 180000
+        reservedOutput: 13000
+        softRatio: 0.35
+        adviseRatio: 0.50
+        hardRatioCap: 0.65
+        backfillMergeMs: 300000
+        bypassModel: false
         autoResume: true
         sessionScanHours: 12

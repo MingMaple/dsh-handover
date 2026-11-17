@@ -1,6 +1,7 @@
 /**
- * 绝对路径体检：扫「文件内容里写死的本机绝对路径」，只报告、不改写。
- * 跨机器/跨平台迁移时，这些位置必须由人或项目会话自己处理——插件改不了用户文件里的路径语义。
+ * 绝对路径体检：扫描「文件内容里写死的本机绝对路径」，只报告、不改写。
+ * 跨机器或跨平台迁移时，这些位置必须由人或项目会话自行处理。
+ * 插件不改写用户文件里的路径语义，否则会破坏用户原本的引用。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,7 +20,8 @@ const MAX_PER_FILE = 3;
 
 /**
  * 识别模式：本机路径的典型写法。
- * 盘符前必须是词边界、冒号后不能再跟斜杠——否则 https:// 、file:/// 的尾字母会被误判成盘符。
+ * 盘符前必须是词边界，冒号后不能再跟斜杠。
+ * 否则 https:// 与 file:/// 的尾字母会被误判成盘符。
  */
 const PATTERNS = [
   ['盘符路径', /(?<![A-Za-z0-9_])[A-Za-z]:[\\/](?![\\/])[^\s'"`<>|]*/g],
@@ -43,7 +45,7 @@ function walk(root, rel, out) {
 }
 
 /**
- * 扫一个目录（或给定相对清单）里的绝对路径引用。
+ * 扫描一个目录（或给定的相对清单）中的绝对路径引用。
  * @returns {{files:number, scanned:number, skipped:number, hits:Array, totalHits:number, crlf:number, lf:number, nonUtf8:Array, mixed:Array}}
  */
 export function scanAbsoluteRefs(root, relPaths) {
@@ -90,7 +92,7 @@ export function scanAbsoluteRefs(root, relPaths) {
   return res;
 }
 
-/** 渲染成给人看的中文结论。 */
+/** 渲染为面向用户的中文结论。 */
 export function renderAbsoluteRefs(res, opts) {
   const o = opts || {};
   const out = [];

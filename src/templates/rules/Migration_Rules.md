@@ -1,26 +1,26 @@
-# 迁移规范（插件自带默认口径）
+﻿# 迁移规范（插件自带默认口径）
 
-> 迁移使用 `ho_backup` 的 4 个动作：`check` → `pack` → `verify` → `restore`。
+> 迁移使用 `ho_workspace` 的 4 个备份动作：`backup-check` → `backup-pack` → `backup-verify` → `backup-restore`。
 
-## 1. 前置检查 `action="check"`
+## 1. 前置检查 `action="backup-check"`
 
-- 在役会话必须**静止**（默认 90 分钟无活动，且未在运行）。
+- 在任会话必须**静止**（默认 90 分钟无活动，且未在运行）。
 - 交接必须存在且体检通过。
 - 未通过时等待，不得先行打包。
 
-## 2. 打包 `action="pack"`
+## 2. 打包 `action="backup-pack"`
 
 - 目标：`kind=global|project|task` ＋ `name`。
 - 产物含 `manifest.json`（逐文件 sha256）、`CHECKSUMS.sha256`、`MIGRATION.md`。
 - 打包格式：本机安装 7-Zip 时生成 `.7z`，未安装时自动生成 `.tar.gz`（插件自带归档器，二者功能等价）。
-- 包内**只报告绝对路径、不改写文件内容**。迁移后由用户或项目会话按新机器环境修改。
+- 包内**只报告绝对路径、不改写文件内容**。迁移后由当前用户或项目会话按新机器环境修改。
 
-## 3. 校验 `action="verify"`
+## 3. 校验 `action="backup-verify"`
 
-- 逐文件比对 sha256：一致 / 漂移 / 缺失。
+- 逐文件比对 sha256，结论取「一致」「漂移」「缺失」。
 - 漂移≠0 时包已作废，须重新打包。
 
-## 4. 恢复 `action="restore"`
+## 4. 恢复 `action="backup-restore"`
 
 - **默认预演**：只报「新增 N / 覆盖 M」，不动任何文件。
 - `apply=true` 才写；被覆盖的旧文件先备份到 `_Temp/_Global/Snapshots/restore-<时间>/`。

@@ -1,6 +1,6 @@
 /**
  * 空白环境冒烟：不依赖任何真实工作区，验「装上就能跑」。
- * 1) 宿主半在假 ctx 上 apply：14 个工具、手册段、状态路由（200/404/405/HEAD）、只读工具不抛
+ * 1) 宿主半在假 ctx 上 apply：6 个工具、手册段、状态路由（200/404/405/HEAD）、只读工具不抛
  * 2) 浏览器半在假 window/React 上装载：bundle 外形、settings.section 注册、成体视图能渲染
  * 用法：node scripts/blank-smoke.mjs [--dist <dist 目录>]
  */
@@ -9,14 +9,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { listFiles, scanFiles } from './lib/register.mjs';
+import { makeReporter } from './lib/harness.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
 const argIdx = process.argv.indexOf('--dist');
 const dist = argIdx !== -1 ? path.resolve(process.argv[argIdx + 1]) : path.join(repo, 'dist');
 
-const fails = [];
-const ok = (cond, msg, extra) => { if (!cond) fails.push(msg + (extra ? ' → ' + extra : '')); };
+const { ok, fails } = makeReporter({ sink: 'stdout', style: 'silent' });
 
 // 空白 HOME：没有 workspace.json、没有 _Control_Center
 const BLANK = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-blank-'));
@@ -58,7 +58,7 @@ const ctx = {
 };
 apply(ctx, {});
 
-ok(reg.tools.length === 14, '工具数应为 14', String(reg.tools.length));
+ok(reg.tools.length === 6, '工具数应为 6', String(reg.tools.length));
 ok(reg.sections.length === 0, '未开启全局前置提示词时不得注册提示段', String(reg.sections.length));
 ok(reg.tools.filter((t) => !t || !t.name || !t.description || !t.execute).length === 0, '每个工具都要有 name/description/execute');
 // 上下文成本实测：工具描述是每次请求都要付的固定开销。参考值只用于展示，不作为通过条件。
@@ -68,11 +68,11 @@ const budget = await import(pathToFileURL(path.join(dist, 'lib', 'facts.mjs')).h
   const widest = rows.slice().sort((a, b) => b.n - a.n)[0];
   console.log('工具描述 token 实测：最宽 ' + widest.name + ' ' + widest.n + '（参考值 ' + budget.TOKEN_BUDGET.toolDescTokens + '，不判失败）');
 }
-ok(reg.tools.filter((t) => t.name.startsWith('ho_')).length === 13, 'ho_* 应为 13 个', String(reg.tools.filter((t) => t.name.startsWith('ho_')).length));
+ok(reg.tools.filter((t) => t.name.startsWith('ho_')).length === 5, 'ho_* 应为 5 个', String(reg.tools.filter((t) => t.name.startsWith('ho_')).length));
 ok(reg.tools.filter((t) => t.name === 'peer').length === 1, '平级会话工具应合并为一个 peer');
 // 每步条件启用：内核 0.2.2 起工具按「步」解析，子会话在解析工具表这一步就要被排除，
-// 否则它的首轮提示词会带着 14 个用不了的 schema（每步白付约 1.5k token）。
-ok((reg.toolOpts || []).length === 14 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '14 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
+// 否则它的首轮提示词会带着 6 个用不了的 schema（每步白付固定开销）。
+ok((reg.toolOpts || []).length === 6 && (reg.toolOpts || []).every((o) => o && typeof o.when === 'function'), '6 个工具都应带每步启用条件', String((reg.toolOpts || []).length));
 
 /** 取某个工具的每步启用条件（0.2.2 起工具按步解析）。 */
 const gateFor = (name) => {
@@ -92,9 +92,9 @@ const gateFor = (name) => {
     const roleMod = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
     roleMod.writeRole({}, 'session-boss', { role: 'global' });
     ok(gate({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_status');
-    const gatePlain = gateFor('ho_office');
-    ok(typeof gatePlain === 'function' && gatePlain({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_office');
-    ok(gatePlain({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '普通角色不可见 ho_office');
+    const gatePlain = gateFor('ho_sessions');
+    ok(typeof gatePlain === 'function' && gatePlain({ agent: { session: { header: { id: 'session-boss', cwd: path.join(BLANK, 'nowhere') } } } }) === true, '全局角色应可见 ho_sessions');
+    ok(gatePlain({ agent: { session: { header: { id: 'session-plain', cwd: path.join(BLANK, 'nowhere') } } } }) === false, '普通角色不可见 ho_sessions');
   }
 }
 // 可选注入多了 connection（/api 载体）。两个都必须是**可选**的，否则旧宿主整插件不激活。
@@ -165,11 +165,11 @@ let payload = null;
 try { payload = JSON.parse(r1.body); } catch (e) { fails.push('返回不是 JSON：' + e.message); }
 if (payload) {
   ok(payload.plugin.version && payload.plugin.version !== '?', '应报出版本号', String(payload.plugin.version));
-  ok(payload.plugin.tools === 14, 'payload 工具数应为 14', String(payload.plugin.tools));
+  ok(payload.plugin.tools === 6, 'payload 工具数应为 6', String(payload.plugin.tools));
   ok(payload.workspace && payload.workspace.found === false, '空白 HOME 下应判定为没找到工作区', JSON.stringify(payload.workspace));
   ok(Array.isArray(payload.notes) && payload.notes.length > 0, '没找到工作区时应给中文提示');
   ok(payload.guide && Array.isArray(payload.guide.situations) && payload.guide.situations.length >= 8, 'payload 应带「怎么用」的时机表');
-  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 14, '工具明细里应列全 14 个工具', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
+  ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 6, '工具明细里应列全 6 个入口', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
   ok(payload.plugin.initErrors && payload.plugin.initErrors.length === 0, '初始化错误应为空', JSON.stringify(payload.plugin.initErrors));
 }
 ok((await call('GET', '/dsh-handover/nope.json')).code === 404, '未知路径应 404');
@@ -296,11 +296,11 @@ if (initTool) {
   ok(/未建立/.test(ri2.text), 'ho_workspace(action=init) 对非空目标应拒绝且不改动', ri2.text.split('\n')[0]);
 }
 
-const readonly = ['ho_status', 'ho_sessions', 'ho_gate', 'ho_charter', 'ho_workspace'];
+const readonly = ['ho_status', 'ho_sessions', 'ho_docmap', 'ho_workspace'];
 for (const t of reg.tools) {
   if (readonly.indexOf(t.name) === -1) continue;
   try {
-    const args = t.name === 'ho_gate' ? { scope: 'all' } : t.name === 'ho_workspace' ? { action: 'list' } : t.name === 'ho_charter' ? { doc: 'runtime' } : {};
+    const args = t.name === 'ho_docmap' ? { action: 'rules-read', doc: 'runtime' } : t.name === 'ho_workspace' ? { action: 'list' } : {};
     const out = await t.execute(args, null);
     ok(out && typeof out.text === 'string' && out.text.length > 0, t.name + ' 在空白环境应返回文本');
   } catch (e) {
@@ -356,11 +356,11 @@ fs.mkdirSync(path.join(WS, '_Misc', 'tasks', '示例任务'), { recursive: true 
     selfId: () => 'session-hold',
     handoverFor: () => ({ path: handover, reason: '' }),
     resolveWs: () => WS,
-    selfPct: () => 10,
+    selfPressure: () => ({ used: 10000, win: 1000000 }),
     registry: () => ({ list: () => [] }),
   };
   const succLow = await runSuccession(succEnv, null, {});
-  ok(/水位 10\.0%/.test(succLow) && /通常无需换任/.test(succLow) && /force=true/.test(succLow), '换任：本会话水位未到线时应拒绝并建议 force', succLow);
+  ok(/未到建议线/.test(succLow) && /通常无需换任/.test(succLow) && /force=true/.test(succLow), '换任：本会话水位未到线时应拒绝并建议 force', succLow);
   const succForce = await runSuccession(succEnv, null, { force: true });
   ok(succForce.indexOf('尚未到线') === -1, '换任：force=true 应越过水位判据', succForce);
   consumedConsent('session-hold', 'succeed');
@@ -405,16 +405,18 @@ const hpU = handoverPathFor(WS, { role: 'plain' });
 ok(hpU.path === null && !!hpU.reason, '普通会话不得给出交接路径（不退回全局）', JSON.stringify(hpU));
 
 const tsG = toolsetFor('global');
-ok(tsG.allow.length === 14 && tsG.deny.length === 0, '全局应可见全部 14 个工具', JSON.stringify([tsG.allow.length, tsG.deny.length]));
+ok(tsG.allow.length === 6 && tsG.deny.length === 0, '全局应可见全部 6 个工具', JSON.stringify([tsG.allow.length, tsG.deny.length]));
 const tsP = toolsetFor('project');
-ok(tsP.allow.length === 11, '项目角色应可见 11 个工具', String(tsP.allow.length));
-ok(tsP.allow.indexOf('ho_handover') !== -1 && tsP.allow.indexOf('ho_checkpoint') !== -1, '项目角色必须能写自己的交接与压缩');
-ok(tsP.allow.indexOf('ho_sessions') === -1 && tsP.allow.indexOf('ho_changelog') === -1, '项目角色不该看见全局管理工具');
+ok(tsP.allow.length === 5, '项目角色应可见 5 个工具', String(tsP.allow.length));
+ok(tsP.allow.indexOf('ho_handover') !== -1 && tsP.allow.indexOf('ho_sessions') !== -1, '项目角色必须能写自己的交接与换任');
+ok(tsP.allow.indexOf('ho_status') !== -1, '项目角色必须能回读压缩前原文');
+ok(tsP.allow.indexOf('ho_workspace') === -1 && tsP.allow.indexOf('ho_docmap') !== -1, '项目角色不该看见工作区与备份入口');
 ok(tsP.deny.indexOf('ho_handover') === -1 && tsP.deny.indexOf('run_code') === -1, 'deny 名单不得含保留名或本角色已允许的工具');
 const tsM = toolsetFor('misc');
-ok(tsM.allow.length === 10 && tsM.allow.indexOf('peer') !== -1 && tsM.allow.indexOf('ho_gate') === -1, '杂项角色：10 个，含 peer、不含 ho_gate', String(tsM.allow.length));
+ok(tsM.allow.length === 5 && tsM.allow.indexOf('peer') !== -1 && tsM.allow.indexOf('ho_workspace') === -1, '杂项角色：5 个，含 peer、不含 ho_workspace', String(tsM.allow.length));
+ok(tsM.allow.indexOf('ho_status') !== -1, '杂项角色可回读压缩前原文');
 const tsU = toolsetFor('plain');
-ok(tsU.allow.length === 0 && tsU.deny.length === 14, '普通会话不载入任何插件工具', JSON.stringify([tsU.allow.length, tsU.deny.length]));
+ok(tsU.allow.length === 0 && tsU.deny.length === 6, '普通会话不载入任何插件工具', JSON.stringify([tsU.allow.length, tsU.deny.length]));
 const rSub = resolveRole({ sessionId: 'session-sub', title: 'Demo1', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), subagent: true });
 ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普通处理，不按 cwd 判项目', JSON.stringify(rSub));
 
@@ -438,7 +440,7 @@ ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普�
   fs.writeFileSync(path.join(WS, 'Projects', 'Demo', 'README.md'), 'x', 'utf8');
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo1', sessionId: 'session-dm', workspace: WS });
   const dm = pmDocmapTool(dmEnv);
-  const wroteDm = await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: '项目简介', when: '动手前', section: 'files' }] }, dmExec('session-dm'));
+  const wroteDm = await dm.execute({ action: 'registry-write', entries: [{ path: 'Projects/Demo/README.md', about: '项目简介', when: '动手前', section: 'files' }] }, dmExec('session-dm'));
   ok(/已写入/.test(wroteDm.text), '体系注册：在任者写自己的注册应成功', wroteDm.text.split('\n')[0]);
   const readBack = readRegistry(WS, dmInfo);
   ok(readBack.exists && readBack.data.files.length === 1 && readBack.data.files[0].path === 'Projects/Demo/README.md', '体系注册：写盘后可解析回一条', JSON.stringify(readBack.data.files));
@@ -447,41 +449,41 @@ ok(rSub.role === 'plain' && rSub.source === 'subagent', '子会话默认按普�
   const injectedDm = manDm.scopedManual(dmInfo, { ws: WS, system: sysBlock });
   ok(injectedDm.indexOf('体系注册') !== -1 && injectedDm.split('体系注册').length === 2, '体系注册：注入段只出现一次', String(injectedDm.split('体系注册').length - 1));
   let missErr = '';
-  try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/nope.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { missErr = String(e && e.message ? e.message : e); }
+  try { await dm.execute({ action: 'registry-write', entries: [{ path: 'Projects/Demo/nope.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { missErr = String(e && e.message ? e.message : e); }
   ok(/未写入/.test(missErr) && /nope\.md/.test(missErr), '体系注册：路径不存在应整条拒绝并点名', missErr);
   ok(readRegistry(WS, dmInfo).data.files.length === 1, '体系注册：拒绝后原注册不得被改');
   let planMissErr = '';
-  try { await dm.execute({ action: 'plan', mode: 'write', text: '# 行动计划\n\n## 1 目标\n试跑\n' }, dmExec('session-dm')); } catch (e) { planMissErr = String(e && e.message ? e.message : e); }
+  try { await dm.execute({ action: 'plan-write', text: '# 行动计划\n\n## 1 目标\n试跑\n' }, dmExec('session-dm')); } catch (e) { planMissErr = String(e && e.message ? e.message : e); }
   ok(/缺少模板要求的节/.test(planMissErr) && /步骤/.test(planMissErr) && /Plan\.skeleton\.md/.test(planMissErr), '行动计划：缺节拒收并指向模板', planMissErr.slice(0, 80));
   const PLAN_OK = '# 行动计划\n\n## 1 目标\n完成冒烟\n\n## 2 步骤\n| # | 步骤 |\n|---|---|\n| 1 | 写\n\n## 3 验收\n- 可判定\n\n## 4 风险\n- 无\n\n## 5 状态\n| 项 | 值 |\n|---|---|\n| 状态 | 进行中 |\n';
-  const planWrote = await dm.execute({ action: 'plan', mode: 'write', text: PLAN_OK }, dmExec('session-dm'));
+  const planWrote = await dm.execute({ action: 'plan-write', text: PLAN_OK }, dmExec('session-dm'));
   ok(/已写入计划/.test(planWrote.text) && /无旧计划/.test(planWrote.text), '行动计划：可写入任务根', planWrote.text.split('\n')[0]);
   const planAbs = path.join(WS, planRelPath(WS, dmInfo));
   ok(fs.existsSync(planAbs), '行动计划：落在任务根 PLAN.md');
-  const planWrote2 = await dm.execute({ action: 'plan', mode: 'write', text: PLAN_OK.split('完成冒烟').join('第二版') }, dmExec('session-dm'));
+  const planWrote2 = await dm.execute({ action: 'plan-write', text: PLAN_OK.split('完成冒烟').join('第二版') }, dmExec('session-dm'));
   const archDir = path.join(path.dirname(planAbs), '_archive');
   const archFiles = fs.existsSync(archDir) ? fs.readdirSync(archDir).filter((f) => /^PLAN_\d{8}_\d{6}\.md$/.test(f)) : [];
   ok(/旧计划已归档/.test(planWrote2.text) && archFiles.length === 1, '行动计划：写新计划前旧计划自动归档', planWrote2.text.split('\n')[0] + ' / ' + archFiles.join(','));
   ok(fs.readFileSync(planAbs, 'utf8').indexOf('第二版') !== -1, '行动计划：写入后文件为全新内容');
-  const planRead = await dm.execute({ action: 'plan', mode: 'read' }, dmExec('session-dm'));
+  const planRead = await dm.execute({ action: 'plan-read' }, dmExec('session-dm'));
   ok(/行动计划/.test(planRead.text), '行动计划：可读回');
   registerHolder(WS, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: 'session-dm2', workspace: WS });
   let oldErr = '';
-  try { await dm.execute({ action: 'write', entries: [{ path: 'Projects/Demo/README.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { oldErr = String(e && e.message ? e.message : e); }
-  ok(/只有在任会话可以写/.test(oldErr), '体系注册：已交出的旧会话只读', oldErr);
-  const emptyDm = await dm.execute({ action: 'write', entries: [] }, dmExec('session-dm2'));
+  try { await dm.execute({ action: 'registry-write', entries: [{ path: 'Projects/Demo/README.md', about: 'x' }] }, dmExec('session-dm')); } catch (e) { oldErr = String(e && e.message ? e.message : e); }
+  ok(/只读/.test(oldErr) && /在任会话/.test(oldErr), '体系注册：已交出的旧会话只读', oldErr);
+  const emptyDm = await dm.execute({ action: 'registry-write', entries: [] }, dmExec('session-dm2'));
   ok(/已写入/.test(emptyDm.text) && /目录 0 条、规范 0 条/.test(emptyDm.text), '体系注册：空 entries 写入空注册', emptyDm.text.split('\n')[0]);
   ok(systemBlock(WS, dmInfo).indexOf('体系注册（项目「Demo」）') !== -1, '体系注册：空注册只注入标题一行');
   ok(registryRelPath(dmInfo).replace(/\\/g, '/') === '_Project_Meta/Demo/System.md', '体系注册：文件按任务独立存放', registryRelPath(dmInfo));
 
-  grantConsent('session-dm2', 'blank-smoke', 'compact');
+  grantConsent('session-dm2', 'blank-smoke', 'succeed');
   const actDm = activeConsentsFor('session-dm2');
   const consentLines = consentPromptLines(actDm);
-  ok(actDm.length === 1 && consentLines.length === 1 && /用户已授权压缩/.test(consentLines[0]), '授权：有效期内应生成一行提示', JSON.stringify(consentLines));
+  ok(actDm.length === 1 && consentLines.length === 1 && /用户已授权上下文重置/.test(consentLines[0]), '授权：有效期内应生成一行提示', JSON.stringify(consentLines));
   ok(activeConsentsFor('session-other').length === 0, '授权：别的会话看不到', JSON.stringify(activeConsentsFor('session-other')));
   const withConsent = manDm.scopedManual(dmInfo, { ws: WS, system: '', consents: actDm });
-  ok(withConsent.indexOf('用户已授权压缩') !== -1, '授权：提示段应带那一行', withConsent.slice(-160));
-  consumedConsent('session-dm2', 'compact');
+  ok(withConsent.indexOf('用户已授权上下文重置') !== -1, '授权：提示段应带那一行', withConsent.slice(-160));
+  consumedConsent('session-dm2', 'succeed');
   ok(consentPromptLines(activeConsentsFor('session-dm2')).length === 0, '授权：用掉后提示消失（不占位）');
   const afterUse = manDm.scopedManual(dmInfo, { ws: WS, system: '', consents: activeConsentsFor('session-dm2') });
   ok(afterUse.indexOf('已授权') === -1, '授权：用掉后提示段不再有该行');
@@ -506,20 +508,20 @@ const pv = prof.validateProfile(WS, { role: 'project', project: 'Demo' }, rd.pro
 ok(pv.ok, '骨架校验应通过', JSON.stringify(pv));
 const badPf = prof.normalizeProfile({ ...pf, required: ['../x'] }, { role: 'project', project: 'Demo' });
 ok(badPf.errors.length > 0, '骨架不应接受 .. 路径', JSON.stringify(badPf.errors));
-const profTool = reg.tools.find((t) => t.name === 'ho_profile');
-ok(!!profTool, '应注册 ho_profile');
+const profTool = reg.tools.find((t) => t.name === 'ho_docmap');
+ok(!!profTool, '应注册 ho_docmap');
 if (profTool) {
   const profExec = { agent: { session: { header: { id: 'session-prof', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), title: 'Demo1' } } } };
-  const pres = await profTool.execute({ action: 'presets' }, profExec);
-  ok(/application/.test(pres.text) && /animation/.test(pres.text), 'ho_profile 应返回预设');
-  const rr = await profTool.execute({ action: 'read' }, profExec);
-  ok(/已注册/.test(rr.text) && /application/.test(rr.text), 'ho_profile read 应读到已注册骨架');
-  const vv = await profTool.execute({ action: 'validate' }, profExec);
-  ok(/结论：通过/.test(vv.text), 'ho_profile validate 应通过', vv.text.slice(0, 120));
+  const pres = await profTool.execute({ action: 'profile-presets' }, profExec);
+  ok(/application/.test(pres.text) && /animation/.test(pres.text), 'ho_docmap 应返回骨架预设');
+  const rr = await profTool.execute({ action: 'profile-read' }, profExec);
+  ok(/已注册/.test(rr.text) && /application/.test(rr.text), 'ho_docmap profile-read 应读到已注册骨架');
+  const vv = await profTool.execute({ action: 'profile-validate' }, profExec);
+  ok(/结论：通过/.test(vv.text), 'ho_docmap profile-validate 应通过', vv.text.slice(0, 120));
   // 项目会话只处理自己的骨架：传别的项目名要报错，不能静默忽略入参（实测踩过）。
   let crossErr = '';
-  try { await profTool.execute({ action: 'validate', project: '学习' }, profExec); } catch (e) { crossErr = e.message; }
-  ok(/只能读写自己的骨架/.test(crossErr), '项目会话传别的项目名应明确报错', crossErr);
+  try { await profTool.execute({ action: 'profile-validate', project: '学习' }, profExec); } catch (e) { crossErr = e.message; }
+  ok(/无权读写/.test(crossErr), '项目会话传别的项目名应明确报错', crossErr);
 }
 
 // 回归锁：压缩调度器拿的是**会话 id 字符串**。早期版本这里错配了 exec 版函数，
@@ -543,20 +545,21 @@ ok(tp.indexOf('Global_Handover.md') === -1, '项目会话的续跑文案不得�
 const tu = fillResumePrompt(tcfg, { n: 1, handover: '', role: 'plain' });
 ok(/普通会话，不参与交接/.test(tu), '普通会话的续跑文案应说明不参与交接', tu.slice(0, 90));
 const tg = fillResumePrompt(tcfg, { n: 3, handover: hpG.path, role: 'global' });
-ok(tg.indexOf('第 3/3 次压缩') !== -1, '续跑文案应填上次数', tg.slice(0, 40));
+ok(tg.indexOf('第 3 次压缩') !== -1, '续跑文案应填上次数', tg.slice(0, 40));
 ok(tcfg.directPeer === 'on', '会话之间直接对话应默认允许', String(tcfg.directPeer));
 ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办时收尾停止', tg.slice(0, 120));
 
-// 压缩额度用尽优先于水位判定：3/3 之后再压不是「水位没到」，而是该换任。
-// 实测：某项目会话压满 3 次、水位 25.4% 时，ho_checkpoint 只报「水位未到线」，误导它去找 force=true。
+// 判据按 token 分档：整理线与建议线只提示，强制线兜底；宏观重置只作追加理由。
 {
-  const { decide } = await import(pathToFileURL(path.join(dist, 'lib', 'phase.mjs')).href);
-  const d1 = decide({ ratio: 0.25, compactionsUsed: 3, cfg: tcfg, lockState: 'clean' });
-  ok(d1.action === 'new_session', '压满 3/3 时水位低也应建议换任', JSON.stringify(d1));
-  const d2 = decide({ ratio: 0.9, compactionsUsed: 3, cfg: tcfg, lockState: 'clean' });
-  ok(d2.action === 'new_session', '压满 3/3 时到硬顶也应换任', JSON.stringify(d2));
-  const d3 = decide({ ratio: 0.4, compactionsUsed: 2, cfg: tcfg, lockState: 'clean' });
-  ok(d3.action === 'checkpoint', '未压满时过交接线仍应压缩', JSON.stringify(d3));
+  const { decidePhase: decide } = await import(pathToFileURL(path.join(dist, 'lib', 'triggers.mjs')).href);
+  const d1 = decide({ used: 142000, win: 200000, cfg: tcfg, lockState: 'clean' });
+  ok(d1.action === 'force' && /强制线/.test(d1.reason), '强制线强制压缩', JSON.stringify(d1));
+  const d2 = decide({ used: 100000, win: 200000, cfg: tcfg, lockState: 'clean' });
+  ok(d2.action === 'notify' && /建议线/.test(d2.reason), '建议线只提示', JSON.stringify(d2));
+  const d3 = decide({ used: 40000, win: 200000, cfg: tcfg, lockState: 'clean', macro: { hit: true, reasons: ['里程碑'] } });
+  ok(d3.action === 'continue' && /追加提示理由/.test(d3.reason), '宏观重置只作追加理由', JSON.stringify(d3));
+  const d4 = decide({ used: 40000, win: 200000, cfg: tcfg, lockState: 'clean' });
+  ok(d4.action === 'continue', '未命中判据时不压缩', JSON.stringify(d4));
 }
 
 // 归档命名按 Handover_Rules §4.2：<原文件名>_<YYYYMMDD_HHMMSS>.md，不加链标识；杂项归档在任务目录内。
@@ -576,7 +579,7 @@ ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办�
   if (handTool) {
     const archExec = { name: 'ho_handover', arguments: { action: 'archive' }, agent: { session: { header: { id: 'session-arch', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), title: 'Demo1' } } } };
     const r = await handTool.execute({ action: 'archive' }, archExec);
-    const m = /已归档 (.+?\.md)/.exec(r.text || '');
+    const m = /已归档\s*`?([^`\n]+?\.md)`?/.exec(r.text || '');
     ok(!!m, '归档应报出目标路径', String(r.text).slice(0, 140));
     if (m) {
       const p = m[1];
@@ -604,9 +607,9 @@ ok(calls.restrict.length === 0, '按步路径不用 restrict 收窄工具', Stri
 const projGatePack = gateFor('ho_sessions');
 const projGateHand = gateFor('ho_handover');
 const projExec = { agent: projAgent };
-ok(typeof projGatePack === 'function' && projGatePack(projExec) === false, '项目角色不可见 ho_sessions（每步条件）');
+ok(typeof projGatePack === 'function' && projGatePack(projExec) === true, '项目角色可见 ho_sessions（仅 succeed，越权在工具内拒绝）');
 ok(typeof projGateHand === 'function' && projGateHand(projExec) === true, '项目角色可见 ho_handover（每步条件）');
-ok(gateFor('ho_changelog')(projExec) === false, '项目角色不可见 ho_changelog');
+ok(gateFor('ho_workspace')(projExec) === false && gateFor('ho_docmap')(projExec) === true, '项目角色不可见 ho_workspace，可见 ho_docmap');
 ok(calls.sections.length >= 1 && calls.sections.some((s) => s.name === 'dsh-handover:manual'), '应注册同名提示段遮蔽兜底段', JSON.stringify(calls.sections.map((s) => s.name)));
 const projSec = calls.sections.find((s) => s.name === 'dsh-handover:manual');
 const projText = String(projSec && projSec.text || '');
@@ -638,9 +641,10 @@ ok(secNorm.indexOf('_Temp/Demo/') !== -1 && secNorm.indexOf('_Archives/Demo/') !
 // 回归锁：早期版本用 agent.inject({source:{kind:'plugin'}}) 投一次性引导，v4 格式准入拒绝该 source，
 // 抛在写盘编码阶段 → 坏事件留在缓冲 → 该会话之后每次开轮都 agent.failed。这条断言防止再写回历史。
 ok(calls.injected.length === 0, '不得向会话历史写插件消息（历史一律由提示段承载）', JSON.stringify(calls.injected.map((m) => m && m.source)));
+const secBefore = calls.sections.length;
 for (const cb of listeners) cb({ agent: projAgent, source: 'resume' });
 ok(calls.injected.length === 0, '重复装配也不得写历史', String(calls.injected.length));
-ok(calls.lifted >= 1, '重复装配前应先撤销旧限制', String(calls.lifted));
+ok(calls.sections.length === secBefore, '正文未变时不重复注册提示段', '注册段数 ' + secBefore + ' → ' + calls.sections.length);
 
 const gCalls = { restrict: 0, sections: [], injected: 0 };
 const globAgent = {
@@ -689,8 +693,8 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
 // 分层护栏——常驻段只留判定，工作流细节必须留在手册里
 {
   const g0 = globText;
-  ok(g0.indexOf('ho_backup') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
-  ok(g0.indexOf('ho_charter(doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
+  ok(g0.indexOf('backup-') === -1 && g0.indexOf('move-probe') === -1, '常驻段不得回灌工作流细节（应放手册）');
+  ok(g0.indexOf('ho_docmap(action="rules-read", doc="runtime", section=…') !== -1, '常驻段应给出按节取用的指针');
   ok(g0.indexOf('_Control_Center/standards/') !== -1, '全局段应给出通用规范的查找范围', g0.slice(-240));
   ok(g0.indexOf('把某某写成规范') !== -1 && g0.indexOf('写入通用规范库') !== -1 && g0.indexOf('本会话所在的工作区') !== -1, '全局段应写明规范的写入范围', g0.slice(-400));
   const rm = fs.readFileSync(path.join(dist, 'templates', 'Runtime_Manual.md'), 'utf8');
@@ -703,9 +707,9 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   // 换任启动提示词不得再写「然后接着干」——没任务时它会抠字眼给自己找活
   const opsSrc = fs.readFileSync(path.join(dist, 'lib', 'session-ops.mjs'), 'utf8');
   ok(opsSrc.indexOf('接着干') === -1, '启动提示词与交接提示不得再出现「接着干」');
-  ok(opsSrc.indexOf('任务达成') === -1 && opsSrc.indexOf('三种时机') !== -1, '启动提示词应改为三种时机且不再含任务达成');
-  const ckSrc = fs.readFileSync(path.join(dist, 'tools', 'ho_checkpoint.mjs'), 'utf8');
-  ok(ckSrc.indexOf('resume') !== -1, 'ho_checkpoint 应支持 resume 选择压缩后去向');
+  ok(opsSrc.indexOf('任务达成') === -1 && opsSrc.indexOf('3 种时机') !== -1, '启动提示词应改为 3 种时机且不再含任务达成');
+  const ckSrc = fs.readFileSync(path.join(dist, 'tools', 'compact.mjs'), 'utf8');
+  ok(ckSrc.indexOf('assistantCompact') !== -1, '助手压缩入口应走统一前置校验');
   const idxSrc = fs.readFileSync(path.join(dist, 'index.mjs'), 'utf8');
   ok(idxSrc.indexOf('directPeer') !== -1, '会话守卫应支持直接对话开关');
   // 语体扫描——界面与文档一律标准书面语（口语词、感叹号、图形结论、全角斜杠、时间缺时区）。
@@ -745,7 +749,7 @@ writeRole({}, 'session-unr', { role: 'project', project: 'Demo', source: 'user' 
 for (const cb of ((reg.listeners && reg.listeners['agent/status']) || [])) cb({ agent: unrAgent, status: 'running' });
 ok(unrCalls.sections.some((s) => s.name === 'dsh-handover:manual' && /项目/.test(String(s.text))), '开轮前核对应按新角色补装提示段', JSON.stringify(unrCalls.sections.map((s) => s.name)));
 
-// 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 14 个，改角色后开轮前换成 3 个。
+// 旧内核（没有 tools.resolve）才走 restrict：创建时按普通收窄 7 个，改角色后开轮前换成 3 个。
 {
   const legacyCalls = { restrict: 0, lastDeny: null, disposed: 0 };
   const legacyListeners = {};
@@ -771,10 +775,10 @@ ok(unrCalls.sections.some((s) => s.name === 'dsh-handover:manual' && /项目/.te
     ctx: { tools: legacyTools, systemPrompt: legacyCtx.systemPrompt },
   };
   for (const cb of (legacyListeners['agent/created'] || [])) cb({ agent: legacyAgent, source: 'fresh' });
-  ok(legacyCalls.restrict === 1 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 14, '旧内核：创建时按普通收窄 14 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  ok(legacyCalls.restrict === 1 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 6, '旧内核：创建时按普通收窄 6 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
   writeRole({}, 'session-legacy', { role: 'project', project: 'Demo', source: 'user' });
   for (const cb of (legacyListeners['agent/status'] || [])) cb({ agent: legacyAgent, status: 'running' });
-  ok(legacyCalls.restrict === 2 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 3, '旧内核：开轮前换成项目角色的 3 个', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
+  ok(legacyCalls.restrict === 2 && legacyCalls.lastDeny && legacyCalls.lastDeny.length === 1, '旧内核：开轮前换成项目角色的 1 个禁用项', JSON.stringify(legacyCalls.lastDeny && legacyCalls.lastDeny.length));
   ok(legacyCalls.disposed === 1, '旧内核：换角色应撤销旧限制', String(legacyCalls.disposed));
 }
 // ---------- 角色路由 ----------
@@ -799,11 +803,11 @@ const oBad = await orderCall({ action: 'order', order: 'wave', session_id: 'sess
 ok(/只能是 handover 或 compact/.test(oBad), 'order 取值应受限', oBad);
 // 交接／压缩指令必须先问用户
 const oNoConfirm = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole' });
-ok(/需要当前用户确认/.test(oNoConfirm), 'order 未确认应拒绝', oNoConfirm);
+ok(/须经当前用户确认/.test(oNoConfirm), 'order 未确认应拒绝', oNoConfirm);
 const oUnr = await orderCall({ action: 'order', order: 'handover', session_id: 'session-norole', confirm: true });
 ok(/没有交接路径/.test(oUnr), '未设角色的会话不能下交接指令（避免退回全局交接）', oUnr);
 const oCold = await orderCall({ action: 'order', order: 'compact', session_id: 'session-r1', confirm: true });
-ok(/不在内存/.test(oCold), '休眠会话不能排压缩（compactNow 需要活体 agent）', oCold);
+ok(/压缩不由全局代排/.test(oCold), '压缩不由全局代排（判定权归目标会话的助手）', oCold);
 const pNoSid = await orderCall({ action: 'place' });
 ok(/place 需要 session_id/.test(pNoSid), 'place 缺 session_id 应报错', pNoSid);
 const pNoWs = await orderCall({ action: 'place', session_id: 'session-r1' });
@@ -881,7 +885,7 @@ const FIXTURE = {
       { sid: 'session-l', title: 'Demo2', role: 'project', roleLabel: '项目', source: 'cwd', project: 'Demo2', task: '', wsKey: 'w1', wsTitle: '全局', wsPath: 'C:/ws', pct: 50, state: 'idle', active: false, onduty: false, seen: '2026-10-22 20:00 +0800' },
     ].concat(plainRows),
     notify: [{ sid: 'session-y', key: 'Demo1', name: 'Demo1' }], hot: 2, unknown: 0, cutoff: '2026-11-07 09:25 +0800', silentHours: 12,
-    verdict: '2 个会话已过 35% 线，应先收齐交接再换会话',
+    verdict: '2 个会话已过建议线，应先收齐交接再换会话',
   },
   consent: [{ sessionId: 'session-y', leftMs: 120000, kind: 'compact', onduty: true }],
   notes: [],
@@ -976,13 +980,12 @@ const grantBtns = [];
   if (typeof n.type === 'function') { walk(n.type(n.props || {})); return; }
   if (n.type === 'button') {
     const label = textOf(n).join('');
-    if (label === '授权压缩' || label === '授权换任') grantBtns.push(label);
+    if (label === '授权重置') grantBtns.push(label);
   }
   (n.kids || []).forEach(walk);
 })(tree);
-ok(grantBtns.filter((x) => x === '授权压缩').length === 3, '授权压缩：两张在任会话按钮＋输入行按钮', JSON.stringify(grantBtns));
-ok(grantBtns.filter((x) => x === '授权换任').length === 3, '授权换任：两张在任会话按钮＋输入行按钮', JSON.stringify(grantBtns));
-ok(text.indexOf('有授权') !== -1, '有有效授权时应显示「有授权」');
+ok(grantBtns.filter((x) => x === '授权重置').length === 3, '授权重置：两张在任会话按钮＋输入行按钮', JSON.stringify(grantBtns));
+ok(text.indexOf('已有有效授权') !== -1, '有有效授权时应显示「已有有效授权」');
 ok(text.indexOf('当前无有效授权') === -1, '不再显示无授权占位');
 
 // 角色下拉含普通，不再回退到空值。
@@ -1250,7 +1253,7 @@ ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会�
       selfCwd: () => miscWs,
       handoverFor: () => ({ path: miscHandover, reason: '' }),
       resolveWs: () => WS,
-      selfPct: () => 40,
+      selfPressure: () => ({ used: 520000, win: 1000000 }),
       registry: () => ({ list: () => [] }),
       controller: () => ctx.sessionController,
       writeRole: () => { },

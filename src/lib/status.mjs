@@ -1,7 +1,7 @@
 /**
- * 设置页用的状态快照（只读）：插件自身状态 ＋ 闸门 ＋ 交接体检 ＋ 会话水位 ＋ 最近一次守卫判定。
- * 全部读本地文件，不唤醒任何会话、不花任何会话的 token。
- * 任何一段出错都只让该段带 error 字段，不让整页 500。
+ * 设置页用的状态快照（只读）：插件自身状态、闸门、交接体检、会话水位与最近一次守卫判定。
+ * 全部读本地文件，不唤醒任何会话，也不消耗任何会话的 token。
+ * 任一段出错只让该段带 error 字段，整页仍照常返回。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import { pathKey } from './pathkey.mjs';
 import { syncCheck } from './gates.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
 import { scanSessions } from './sessions.mjs';
+import { bandsFor } from './pressure.mjs';
 import { routeWorkspace, hasCenter } from './workspace.mjs';
 import { stampTz } from './brief.mjs';
 import { buildGuide, SETUP_STEPS } from './guide.mjs';
@@ -18,7 +19,6 @@ import { listConsent } from './consent.mjs';
 import { listProfiles } from './profile.mjs';
 import { loadOffice, readRegistryProjects, KIND_LABEL } from './office.mjs';
 import { checkRegistries } from './system.mjs';
-import { legacyInfo } from './legacy.mjs';
 
 function guard(fn, fallback) {
   try { return fn(); } catch (e) { return { ...fallback, error: String(e && e.message ? e.message : e) }; }
@@ -56,8 +56,17 @@ function loadWorkspaceIndex() {
   return out;
 }
 
-/** 仍然存在的会话目录：`~/.dsh/sessions` 下以 session- 开头的目录名（含已归档里恢复不了的会话就自然不在）。 */
+/**
+ * 仍然存在的会话目录：`~/.dsh/sessions` 下以 session- 开头的目录名。
+ * 已归档且无法恢复的会话不在其中。
+ */
+// 440 个目录递归一次不便宜，设置页连续刷新时复用 10 秒内的结果。
+const LIVE_TTL_MS = 10000;
+let liveCache = { at: 0, set: null };
+
 function liveSessionDirs() {
+  const now = Date.now();
+  if (liveCache.set && now - liveCache.at < LIVE_TTL_MS) return liveCache.set;
   const set = new Set();
   try {
     const walk = (dir, depth) => {
@@ -69,6 +78,7 @@ function liveSessionDirs() {
     };
     walk(path.join(os.homedir(), '.dsh', 'sessions'), 0);
   } catch { /* 读不到就返回空集 */ }
+  liveCache = { at: now, set };
   return set;
 }
 
@@ -109,7 +119,7 @@ function lintProjects(ws) {
   return out;
 }
 
-/** 杂项目录：规范位置 `_Misc/tasks/<任务>/`，兼容旧布局 `_Misc/<任务>/`；两处都没有就返回空串。 */
+/** 杂项目录：规范位置 `_Misc/tasks/<任务>/`，兼容旧布局 `_Misc/<任务>/`。2 处都没有就返回空串。 */
 function miscDir(ws, task) {
   const name = String(task || '').trim();
   if (!name) return '';
@@ -122,8 +132,8 @@ function miscDir(ws, task) {
 
 /**
  * 杂项交接体检：按 Office.json 里已登记的杂项条目找任务目录。
- * 登记名与目录名不一致（例如登记「示例任务」、目录名不同）时报「未找到」，
- * 不猜近似目录：猜错会把别人的交接算到这条任务头上。
+ * 登记名与目录名不一致（例如登记「示例任务」、目录名不同）时报「未找到」。
+ * 不猜近似目录：猜错会把别人的交接记到这条任务名下。
  */
 function lintMisc(ws, office) {
   const out = [];
@@ -136,7 +146,7 @@ function lintMisc(ws, office) {
     const dir = miscDir(ws, name);
     const r = dir
       ? lintProject(path.join(dir, 'Handover.md'))
-      : { verdict: '未找到', reasons: ['按登记名找不到任务目录：_Misc/tasks/' + name + ' 或 _Misc/' + name] };
+      : { verdict: '未找到', reasons: ['按登记名找不到任务目录：`_Misc/tasks/' + name + '` 或 `_Misc/' + name + '`'] };
     out.push({ name, verdict: r.verdict, reasons: Array.isArray(r.reasons) ? r.reasons.slice(0, 5) : [] });
   }
   return out;
@@ -146,7 +156,6 @@ export function buildStatus(env, extra) {
   const info = extra || {};
   const ws = routeWorkspace(env);
   const found = hasCenter(ws);
-  const warn = Math.round((env.cfg.remindRatio || 0.35) * 100);
   const duty = loadDuty(ws);
   const onDuty = (sid) => (duty.map.size ? duty.map.has(String(sid || '')) : true);
   const dutyOf = (sid) => duty.map.get(String(sid || '')) || null;
@@ -161,12 +170,6 @@ export function buildStatus(env, extra) {
       scheduler: info.scheduler || '未知',
     },
     workspace: { root: ws, found },
-    ratios: guard(() => ({
-      remind: Math.round((env.cfg.remindRatio !== undefined ? env.cfg.remindRatio : 0.35) * 100),
-      remind2: Math.round((env.cfg.remind2Ratio !== undefined ? env.cfg.remind2Ratio : 0.5) * 100),
-      handover: Math.round((env.cfg.handoverRatio !== undefined ? env.cfg.handoverRatio : 0.35) * 100),
-      hard: Math.round((env.cfg.hardRatio !== undefined ? env.cfg.hardRatio : 0.85) * 100),
-    }), { remind: 35, remind2: 50, handover: 35, hard: 85 }),
     guardLast: guard(() => env.guardLast(), null),
     extraPrompt: guard(() => (typeof env.extraPrompt === 'function' ? env.extraPrompt() : ''), ''),
     extraPromptEnabled: guard(() => (typeof env.extraPromptEnabled === 'function' ? env.extraPromptEnabled() : false), false),
@@ -190,8 +193,8 @@ export function buildStatus(env, extra) {
   };
 
   if (!found) {
-    out.notes.push('未找到 _Control_Center：本实例尚未接入工作区。可在插件 config 中填写 workspaceRoot。');
-    out.notes.push('插件本身已加载：工具与设置页不依赖工作区，仅闸门、交接与会话三部分需要工作区。');
+    out.notes.push('现象：未找到 `_Control_Center`。原因：本实例尚未接入工作区。处置：在插件 config 中填写 `workspaceRoot`。');
+    out.notes.push('插件本身已加载：工具与设置页不依赖工作区，只有闸门、交接与会话需要工作区。');
     out.setup = { steps: SETUP_STEPS };
     return out;
   }
@@ -229,27 +232,21 @@ export function buildStatus(env, extra) {
     return { rows: r.rows.map((x) => ({ label: x.label, rel: x.rel, exists: x.exists, entries: x.entries, bad: x.bad.length })), missing: r.missing };
   }, { rows: [], missing: 0 });
 
-  try {
-    const legacy = legacyInfo(ws);
-    if (legacy.exists) {
-      out.notes.push('检测到旧文档定位（_Control_Center/records/docmap/）：执行 ho_workspace(action="migrate") 并入体系注册。');
-    }
-  } catch { /* 旧目录检查失败不影响整页 */ }
-
   out.sessions = guard(() => {
     const wide = scanSessions({
-      dir: env.cacheDir(), meId: null, meCwd: null, warn,
+      dir: env.cacheDir(), meId: null, meCwd: null, cfg: env.cfg,
       silentHours: env.cfg.sessionScanHours, projectsOnly: false,
     });
     const store = readRoles(env.cfg);
-    const roleOf = (sid, cwd, firstPrompt, title) => {
-      const meta = sessionMeta(sid);
-      return resolveRole({ cfg: env.cfg, roles: store, sessionId: sid, cwd, firstPrompt, subagent: meta.subagent, title });
-    };
+    // sessionMeta 每行只取一次，角色判定与展示共用。全局会话集合由 registry.mjs 按 workspace.json 的
+    // stamp 记忆，循环内每行都复用同一份结果，不再逐行重读 13KB 注册表。
+    const roleOf = (sid, meta, title) => resolveRole({
+      cfg: env.cfg, roles: store, sessionId: sid, cwd: meta.cwd, firstPrompt: meta.firstPrompt, subagent: meta.subagent, title,
+    });
     // 工作区与归档：设置页按工作区分组罗列，已归档与目录已不存在的会话不再出现。
     const wsIndex = loadWorkspaceIndex();
     const live = liveSessionDirs();
-    // 会话 id 在缓存里有带与不带 session- 前缀两种写法，统一成带前缀再比。
+    // 会话 id 在缓存里有带与不带 session- 前缀 2 种写法，统一成带前缀再比。
     const sidKey = (sid) => (/^session-/.test(String(sid)) ? String(sid) : 'session-' + String(sid));
     const archived = (sid) => wsIndex.archived.has(sidKey(sid));
     const stillThere = (sid) => live.size === 0 || live.has(sidKey(sid));
@@ -267,7 +264,7 @@ export function buildStatus(env, extra) {
     const wsOf = (sid) => wsIndex.bySession.get(sidKey(sid)) || null;
     const mapRow = (r) => {
       const meta = sessionMeta(r.sid);
-      const info = roleOf(r.sid, meta.cwd, meta.firstPrompt, r.project);
+      const info = roleOf(r.sid, meta, r.project);
       const d = dutyOf(r.sid);
       const w = wsOf(r.sid);
       // 目录已不存在的老会话（旧树里删掉的项目库等）不再罗列。
@@ -291,6 +288,8 @@ export function buildStatus(env, extra) {
         dutyKey: d ? d.key : '',
         dutyName: d ? d.name : '',
         pct: r.pct,
+        used: r.used,
+        win: r.win,
         state: r.state,
         active: r.mtime >= wide.cutoffMs,
         onduty: !!d,
@@ -299,7 +298,7 @@ export function buildStatus(env, extra) {
       };
     };
     const all = wide.rows
-      .filter((r) => r.kind === '平级' && !archived(r.sid) && stillThere(r.sid))
+      .filter((r) => r.kind === '平级' && (!archived(r.sid) || !!dutyOf(r.sid)) && stillThere(r.sid))
       .map(mapRow);
     // 不按 cwd 是否存在过滤：DSH 的工作区与会话列表只认会话本身与归档表。
     // cwd 已删除的旧会话仍可能被打开或恢复，误删会把 DSH 中存在的会话藏掉。
@@ -311,7 +310,7 @@ export function buildStatus(env, extra) {
       const hit = rows.find((r) => r.sid === sid);
       if (hit && hit.mtime >= wide.cutoffMs) notify.push({ sid: hit.sid, key: hit.dutyKey, name: hit.dutyName });
     }
-    const hot = rows.filter((r) => r.pct !== null && r.pct >= warn).length;
+    const hot = rows.filter((r) => r.used !== null && r.win && r.used >= bandsFor(env.cfg, r.win).soft).length;
     return {
       rows,
       all,
@@ -323,8 +322,8 @@ export function buildStatus(env, extra) {
       cutoff: stampTz(wide.cutoffMs),
       silentHours: wide.silentHours,
       verdict: hot
-        ? hot + ' 个在任会话已过 ' + warn + '% 线，应先收齐交接，再更换会话'
-        : '没有在任会话超过 ' + warn + '% 线。',
+        ? hot + ' 个在任会话已过整理线。处置：先收齐交接，再更换会话。'
+        : '没有在任会话超过整理线。',
     };
   }, { rows: [], notify: [], hot: 0, unknown: 0 });
 

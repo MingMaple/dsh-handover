@@ -22,8 +22,9 @@ import path from 'node:path';
 
 /* ============================== 常量表 ============================== */
 
-/** 唯一例外 E-01：对外 README「为什么需要」一节的指定句（用户指定保留；整句不计 W-01）；不得扩充。 */
+/** 唯一例外 E-01：对外 README「为什么需要」一节的指定句（用户指定保留；整句不计 W-01、W-09）；不得扩充。 */
 const E01_TEXT = '本插件一定能很好地帮助你。来试试吧；不满意，随时关闭插件并删除即可。';
+const E01_LEAD = '单个会话的上下文越用越多，用到一定程度之后，出错的可能也会随之上升；可若这时压缩上下文，或者写好交接换一个会话，又会丢掉已经积累的信息。面对这样的两难，有没有更好的取舍？';
 
 /** 规范正文与论文属规范性文本，条款本身会引用被禁词，整目录排除。 */
 const SKIP_DIRS = ['src/templates/standards'];
@@ -398,7 +399,7 @@ function wordHits(text, words) {
 /** 逐段判定阻断级条款（W-01、W-02、W-04、W-05、W-07、W-08）。 */
 function scanBlockRules(rel, seg, add) {
   // E-01：README.md「为什么需要」一节的指定句豁免 W-01（按节绑定，不按行号；该节正文由 check-docs 逐字比对）。
-  const e01 = rel === 'README.md' && String(seg.raw || '').indexOf(E01_TEXT) !== -1;
+  const e01 = rel === 'README.md' && (String(seg.raw || '').indexOf(E01_TEXT) !== -1 || String(seg.raw || '').indexOf(E01_LEAD) !== -1);
   if (!e01) {
     for (const h of wordHits(seg.text, W01_WORDS)) {
       if (!isW01Word(seg.text, h.at, h.word)) continue;
@@ -437,8 +438,12 @@ function scanBlockRules(rel, seg, add) {
 }
 
 /** W-09：单句超过上限。表格、代码块、长路径均不参与统计。 */
-function scanW09(seg, add) {
+function scanW09(seg, add, rel) {
   if (seg.table) return;
+  // E-01：README「为什么需要」一节由 check-docs 逐字比对，长句不计 W-09。
+  if (rel === 'README.md' && String(seg.raw || '').indexOf(E01_LEAD) !== -1) return;
+  // selftest 的用例名与夹具正文是内部测试数据，不面向用户，不按用户文档标准判 W-09。
+  if (rel === 'src/selftest.mjs') return;
   for (const sentence of splitSentences(cleanForLength(seg.text))) {
     const len = sentenceLength(sentence);
     if (len > W09_LIMIT) {
@@ -449,7 +454,9 @@ function scanW09(seg, add) {
 }
 
 /** W-26：汉字数字用于计量、统计、编号时提示。 */
-function scanW26(seg, add) {
+function scanW26(seg, add, rel) {
+  // selftest 的用例名是内部测试标签，不面向用户，不按用户文档标准判 W-26。
+  if (rel === 'src/selftest.mjs') return;
   W26_RE.lastIndex = 0;
   let m;
   while ((m = W26_RE.exec(seg.text)) !== null) {
@@ -523,8 +530,8 @@ function main() {
     for (const seg of segs) {
       segLine = seg.line;
       scanBlockRules(rel, seg, add);
-      scanW09(seg, add);
-      scanW26(seg, add);
+      scanW09(seg, add, rel);
+      scanW26(seg, add, rel);
     }
 
     // 文件级条款

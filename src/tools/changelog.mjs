@@ -1,4 +1,4 @@
-/** ho_changelog —— 按表格格式追加一行到 Global_Changelog.md。 */
+/** 台账实现 —— 按表格格式追加一行到 Global_Changelog.md。经 ho_docmap 的 changelog-append 动作暴露。 */
 import fs from 'node:fs';
 import { nameOf } from '../lib/names.mjs';
 import path from 'node:path';
@@ -11,19 +11,28 @@ function stamp() {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
+/**
+ * 构造 `changelog` 工具定义。
+ *
+ * 台账缺失时按内置骨架新建，避免记账因缺文件中断。
+ *
+ * @param {object} env 插件环境，提供 `resolveWs` 与 `selfId`。
+ * @returns {object} 工具定义，供宿主注册。
+ * 副作用：向 `Global_Changelog.md` 追加一行。
+ */
 export function pmChangelogTool(env) {
   return {
     name: nameOf('changelog'),
     description:
-      '按固定表格追加一行台账。',
+      '向 `Global_Changelog.md` 台账按固定表格追加一行记录。台账不存在时，先按内置骨架建立。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['summary'],
       properties: {
-        summary: { type: 'string', description: '本行内容（中文）' },
-        executor: { type: 'string', description: '执行者（缺省为本会话 id）' },
-        date: { type: 'string', description: '日期 YYYY-MM-DD（缺省为当天）' },
+        summary: { type: 'string', description: '本行内容，写明变更内容与原因。例：`新增合并入口，减少工具数`。' },
+        executor: { type: 'string', description: '执行者。缺省为本会话 id。例：`全局1`。' },
+        date: { type: 'string', description: '日期，格式 `YYYY-MM-DD`。缺省为当天。例：`2026-11-18`。' },
       },
     },
     output: textOutput(),
@@ -48,12 +57,12 @@ export function pmChangelogTool(env) {
       const date = args.date || stamp();
       const who = args.executor || env.selfId(exec) || '?';
       const summary = typeof args.summary === 'string' ? args.summary.trim() : '';
-      if (!summary) throw new Error('summary 不能为空（写明变更内容与原因）');
+      if (!summary) throw new Error('现象：`summary` 为空。原因：台账须记录变更内容与原因。处置：传入非空的 `summary` 后重试。');
       const safe = summary.split('|').join(String.fromCharCode(92) + '|');
       const row = '| ' + date + ' | ' + safe + ' | ' + who + ' |';
       lines.splice(sepIdx + 1, 0, row);
       fs.writeFileSync(file, lines.join(NL), 'utf8');
-      return { text: '已追加到 ' + file + NL + row.slice(0, 240) };
+      return { text: '已追加到 `' + file + '`' + NL + row.slice(0, 240) };
     },
   };
 }

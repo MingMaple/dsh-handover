@@ -1,44 +1,18 @@
 /**
- * 口径单一来源：水位阈值、压缩次数与提示段 token 参考值。
+ * 口径单一来源：token 分档、宿主摘要阈值与提示段 token 参考值。
  * 运行期文本一律由本模块渲染；改数值只改 config.mjs 的默认值或本文件的参考表。
  * 文档与测试引用同一组常量，避免同一事实多处各写一遍。
  */
-import { DEFAULTS } from './config.mjs';
 
-/** 比例转百分比文本：0.35 → "35%"。 */
-function pctOf(ratio) {
-  const n = Math.round(Number(ratio) * 1000) / 10;
-  return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '%';
-}
-
-/** 水位与压缩口径：全部由配置推导。 */
-export function watermark(cfg) {
-  const c = cfg || DEFAULTS;
-  const pick = (k) => (c[k] !== undefined ? c[k] : DEFAULTS[k]);
-  const remind = pctOf(pick('remindRatio'));
-  const remind2 = pctOf(pick('remind2Ratio'));
-  const handover = pctOf(pick('handoverRatio'));
-  const hard = pctOf(pick('hardRatio'));
-  const max = pick('maxCompactions');
-  return {
-    remind, remind2, handover, hard, max,
-    remindValue: Math.round(pick('remindRatio') * 100),
-    remind2Value: Math.round(pick('remind2Ratio') * 100),
-    reuseValue: Math.round(pick('handoverRatio') * 100),
-  };
-}
-
-/** 一句式交接规则（全局与项目提示段共用）。 */
-export function handoverRuleText(cfg) {
-  const w = watermark(cfg);
-  return w.handover + ' 后可压缩，' + w.hard + ' 为硬上限；至多压缩 '
-    + w.max + ' 次，第 ' + (w.max + 1) + ' 次换任。';
-}
+/** 分档口径共用文本（窗口纯比例、实得窗与退回预算）。 */
+const BANDS_TEXT = '分档按窗口纯比例：整理线 35%、建议线 50%、强制线 65%。上述均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。前两档只提示，';
 
 /** 设置页使用说明里的紧写形式。 */
 export function compactSummaryText(cfg) {
-  const w = watermark(cfg);
-  return w.remind + ' 与 ' + w.remind2 + ' 各提醒一次，' + w.handover + ' 后可压缩，' + w.hard + ' 硬上限；同一会话最多压缩 ' + w.max + ' 次';
+  const c = cfg || {};
+  const max = Number(c.maxCompactionsPerSession) || 4;
+  return BANDS_TEXT + '强制线兜底；助手入口在 '
+    + max + ' 次后关闭，强制线兜底至硬上限';
 }
 
 /** 提示段与工具描述的加权 token 估算：CJK 与全角标点每字符 1 token，其余每 4 字符 1 token。 */
@@ -70,9 +44,9 @@ function isWide(cp) {
  * 提示词效果优先于字数，实测值超出参考值时如实展示即可。
  */
 export const TOKEN_BUDGET = {
-  globalTokens: 900,
-  globalWorstTokens: 1000,
-  projectTokens: 800,
-  projectWorstTokens: 900,
+  globalTokens: 1000,
+  globalWorstTokens: 1100,
+  projectTokens: 900,
+  projectWorstTokens: 1000,
   toolDescTokens: 70,
 };

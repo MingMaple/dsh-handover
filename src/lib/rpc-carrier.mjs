@@ -1,8 +1,9 @@
 /**
- * DSH 认证的 /api 载体（客户端设置页取数/下指令的**主通道**）。
+ * DSH 认证的 /api 载体（客户端设置页取数、下指令的主通道）。
  *
- * 为什么不用裸 fetch：本机 GUI 服务器对非浏览器策略的请求直接 403「Browser access is disabled」，
- * 而 DSH 的 /api 载体自带浏览器鉴权与 Host/Origin 信任，dsh-im 的设置页正是走这条。
+ * 为什么不用裸 fetch：本机图形界面服务器对非浏览器来源的请求直接返回 403。
+ * 具体报「Browser access is disabled」，只有带浏览器鉴权的载体能过。
+ * DSH 的 /api 载体自带浏览器鉴权与 Host、Origin 信任，dsh-im 的设置页也走这条通道。
  * 契约（与 DSH 内置管理 RPC 一致）：
  *   入：POST /api/dsh-handover  body={type:'client-request', rpcId, method:'dsh-handover', payload:{method, payload}}
  *   出：{type:'server-response', rpcId, result:{ok:true,value} | {ok:false,error:{code,message,details}}}
@@ -50,7 +51,7 @@ export function registerRpcCarrier(ctx, api, log) {
       }
       try {
         if (typeof cc.effect === 'function') cc.effect(() => dispose, 'dsh-handover: /api 载体');
-      } catch { /* ignore */ }
+      } catch { /* 注销钩子挂不上只会泄漏一次注册，不影响本次投递 */ }
     };
   } catch (e) {
     say('载体装配失败：' + String(e && e.message ? e.message : e));
