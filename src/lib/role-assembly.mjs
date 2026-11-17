@@ -5,8 +5,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { readJsonDir, pick } from './text.mjs';
-import { projCacheDir } from './sessions.mjs';
+import { pick } from './text.mjs';
+import { projCacheFileOf } from './sessions.mjs';
 import {
   ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
   readRoles, writeRole as writeRoleStore, assertProjectName, assertTaskName,
@@ -34,6 +34,26 @@ export function createRoleAssembly(runtime) {
   const roleCache = new Map();            // sessionId → { at, info }（每步过滤用，短 TTL）
   const roleState = { last: null };
 
+  /**
+   * 插件卸载时回收挂在会话作用域上的资源。
+   * 提示段与旧内核限制由 agent.ctx 持有，不会随插件 fiber 自动释放；
+   * 不回收会让已卸载的插件继续占据系统提示词。
+   */
+  function disposeAll() {
+    for (const d of sectionDispose.values()) { try { d(); } catch { /* 段已失效 */ } }
+    for (const d of legacyRestrict.values()) { try { d(); } catch { /* 限制已失效 */ } }
+    sectionDispose.clear();
+    legacyRestrict.clear();
+    appliedText.clear();
+    systemSig.clear();
+    consentSig.clear();
+    appliedRole.clear();
+    roleCache.clear();
+  }
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => disposeAll, 'dsh-handover: 角色提示段回收');
+  }
+
   // ---------------- 会话标题：运行时 header.title 往往为空，改读投影缓存
   function titleOf(sessionId) {
     try {
@@ -41,14 +61,11 @@ export function createRoleAssembly(runtime) {
       const t = a && a.session && a.session.header ? String(a.session.header.title || '') : '';
       if (t) return t;
     } catch { /* ignore */ }
+    // 只按会话 id 直读单个投影文件；全目录扫描在会话多时每次要几毫秒。
     try {
-      const target = String(sessionId || '');
-      for (const f of readJsonDir(projCacheDir())) {
-        const stem = f.name.replace('.json', '');
-        if (stem !== target && stem !== (target.indexOf('session-') === 0 ? target : 'session-' + target)) continue;
-        const row = pick(f.data, 'record', 'rows', 'title', 'val');
-        if (typeof row === 'string') return row;
-      }
+      const one = projCacheFileOf(String(sessionId || ''));
+      const row = one ? pick(one.data, 'record', 'rows', 'title', 'val') : null;
+      if (typeof row === 'string') return row;
     } catch { /* ignore */ }
     return '';
   }

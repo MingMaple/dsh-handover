@@ -161,7 +161,7 @@ export function createLifecycle(runtime) {
         // 预热间隔必须大于快照自身的缓存有效期，否则每次心跳都恰好过期、等于全量现算。
         const t0 = setTimeout(warm, 1500);
         if (t0 && typeof t0.unref === 'function') t0.unref();
-        const iv = setInterval(warm, 60000);
+        const iv = setInterval(warm, 300000);
         if (iv && typeof iv.unref === 'function') iv.unref();
         if (typeof ctx.effect === 'function') ctx.effect(() => () => { clearTimeout(t0); clearInterval(iv); }, 'dsh-handover: 状态预热');
       } catch { /* ignore */ }

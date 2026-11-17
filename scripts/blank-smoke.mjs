@@ -1270,6 +1270,52 @@ ok(/工作区/.test(newErr) && /已注册的工作区/.test(newErr), '新建会�
   }
 }
 
+// ---------- 卸载回归：插件停用后不得留下工具、守卫、提示段、监听与会话段 ----------
+{
+  const unloadSid = 'session-unload';
+  writeRole({}, unloadSid, { role: 'global' });
+  const agentSections = [];
+  const agentDisposers = [];
+  const liveAgent = {
+    id: unloadSid,
+    session: { header: { id: unloadSid, cwd: path.join(BLANK, 'ws-unload'), title: '卸载测试' } },
+    ctx: {
+      systemPrompt: { section: (s) => { agentSections.push(s.name); return () => agentDisposers.push(s.name); } },
+      tools: { restrict: () => () => { } },
+    },
+  };
+  const live = { tools: new Set(), guards: 0, sections: 0, listeners: 0 };
+  const disposers = [];
+  const unloadCtx = {
+    tools: {
+      register: (t) => { live.tools.add(t.name); const d = () => live.tools.delete(t.name); disposers.push(d); return d; },
+      restrict() { }, resolve: () => ({}),
+      guard: () => { live.guards += 1; const d = () => { live.guards -= 1; }; disposers.push(d); return d; },
+    },
+    systemPrompt: { section: () => { live.sections += 1; const d = () => { live.sections -= 1; }; disposers.push(d); return d; } },
+    sessionController: { list: async () => [], create: async () => ({ sessionId: 'x' }), rename: async () => { }, prompt: async () => ({ accepted: true }) },
+    agents: { get: () => null, list: () => [liveAgent] },
+    commands: { register: () => () => { } },
+    logger: { warn: () => { }, error: () => { }, info: () => { } },
+    effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return d; },
+    on: () => { live.listeners += 1; const d = () => { live.listeners -= 1; }; disposers.push(d); return d; },
+    get: () => null,
+    inject: (names, cb) => {
+      if (names.indexOf('webServer') !== -1) cb({ webServer: { register: () => () => { } }, effect: (fn) => fn() });
+      if (names.indexOf('connection') !== -1) cb({ connection: { fetch: { register: () => () => { } } }, effect: (fn) => fn() });
+      if (names.indexOf('commands') !== -1) cb({ commands: { register: () => () => { } } });
+    },
+  };
+  apply(unloadCtx, {});
+  ok(live.tools.size === 6 && live.guards >= 1 && live.listeners >= 1, '卸载前应完成工具、守卫与监听装配', JSON.stringify(live));
+  ok(agentSections.length === 1, '卸载前应给全局会话装配提示段', JSON.stringify(agentSections));
+  // 按宿主顺序释放：后注册先撤销。
+  for (let i = disposers.length - 1; i >= 0; i -= 1) { try { disposers[i](); } catch { /* 单项失败不影响其余 */ } }
+  ok(live.tools.size === 0 && live.guards === 0 && live.sections === 0 && live.listeners === 0,
+    '卸载后不得残留工具、守卫、提示段或监听', JSON.stringify(live));
+  ok(agentDisposers.length === agentSections.length, '卸载后会话作用域的提示段应被撤销', JSON.stringify({ made: agentSections.length, undone: agentDisposers.length }));
+}
+
 fs.rmSync(BLANK, { recursive: true, force: true });
 console.log('');
 if (fails.length) {

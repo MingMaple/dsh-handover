@@ -109,13 +109,30 @@ export function readJsonDir(dir) {
  * 按候选文件名逐个直读 <dir>/<stem>.json，命中即返回 { name, data }，全部失败返回 null。
  * 只取单个会话的数据时不要调用 readJsonDir：该函数会全量解析 400 多个文件。
  */
+/** 单文件读取缓存：按路径 + mtime + size 复用解析结果，避免每步重复解析投影缓存。 */
+const lazyFileCache = new Map();
+const LAZY_FILE_MAX = 128;
+
 export function readJsonFileLazy(dir, stems) {
   const list = Array.isArray(stems) ? stems : [stems];
   for (const stem of list) {
     const s = String(stem === undefined || stem === null ? '' : stem);
     if (!s) continue;
     const p = path.join(String(dir), s + '.json');
-    try { return { name: s + '.json', data: JSON.parse(fs.readFileSync(p, 'utf8')) }; } catch { /* 试下一个候选 */ }
+    let st = null;
+    try { st = fs.statSync(p); } catch { continue; }
+    const hit = lazyFileCache.get(p);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+      lazyFileCache.delete(p);
+      lazyFileCache.set(p, hit);
+      return { name: s + '.json', data: hit.data, mtimeMs: hit.mtimeMs, size: hit.size };
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      lazyFileCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, data });
+      while (lazyFileCache.size > LAZY_FILE_MAX) lazyFileCache.delete(lazyFileCache.keys().next().value);
+      return { name: s + '.json', data, mtimeMs: st.mtimeMs, size: st.size };
+    } catch { /* 试下一个候选 */ }
   }
   return null;
 }
@@ -162,11 +179,27 @@ export function fmtMB(n) {
 }
 
 /** 缺目录时先创建；写入同目录临时文件后 rename，rename 失败则回退为复制。 */
+/** 已确认存在的目录：原子写每个回合都会调用，重复 mkdir 是多余的系统调用。 */
+const ensuredDirs = new Set();
+
+function ensureDir(dir) {
+  if (ensuredDirs.has(dir)) return;
+  fs.mkdirSync(dir, { recursive: true });
+  ensuredDirs.add(dir);
+}
+
 export function writeFileAtomic(file, text) {
   const dir = path.dirname(String(file));
-  fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   const tmp = path.join(dir, '.tmp-' + process.pid + '-' + Math.random().toString(36).slice(2, 10));
-  fs.writeFileSync(tmp, text, 'utf8');
+  try {
+    fs.writeFileSync(tmp, text, 'utf8');
+  } catch {
+    // 目录被外部清理时重建一次。
+    ensuredDirs.delete(dir);
+    ensureDir(dir);
+    fs.writeFileSync(tmp, text, 'utf8');
+  }
   try {
     fs.renameSync(tmp, file);
   } catch {

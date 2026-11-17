@@ -276,7 +276,6 @@ export function createInlineEngine(runtime) {
       if (used === null || win === null) {
         out.push(contextMessage(pressureLineText(pressureOf({ used: null, win: null, cfg })), 'water'));
         noteTriggerSkip(sid, 'no-pressure', null);
-        saveState(sid, st);
         return out;
       }
       st.usageHistory = (Array.isArray(st.usageHistory) ? st.usageHistory : [])
@@ -298,7 +297,9 @@ export function createInlineEngine(runtime) {
       return out;
     }
     const profile = pressureOf({ used, win, cfg, history: st.usageHistory });
-    const cs = compactionStateOf(sid, null) || {};
+    // 水位低于整理线时，判据必为 idle，无需读压缩锁与计数；
+    // 压缩状态要增量解码日志，每步约 0.2 ms，低水位步骤跳过。
+    const cs = profile.level === 'low' ? { lock: 'clean' } : (compactionStateOf(sid, null) || {});
     // 两级计数：助手入口与提示在达到 maxCompactionsPerSession 后关闭；强制线兜底到 hardCap。
     const maxCompactions = Number(cfg.maxCompactionsPerSession) || 4;
     const hardCap = Number(cfg.maxCompactionsHardCap) || 6;
@@ -346,7 +347,6 @@ export function createInlineEngine(runtime) {
     }
     if (action.action !== 'force') {
       noteTriggerSkip(sid, 'not-triggered', ratio);
-      saveState(sid, st);
       return out;
     }
     if (usedCompactions >= hardCap) {

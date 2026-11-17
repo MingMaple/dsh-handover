@@ -22,16 +22,27 @@ function consentPath() {
   return path.join(home, '.dsh', 'storages', 'dsh-handover.consent.json');
 }
 
+let allCache = null;
+
 function readAll() {
+  const file = consentPath();
+  let st = null;
+  try { st = fs.statSync(file); } catch { return {}; }
+  if (allCache && allCache.path === file && allCache.mtimeMs === st.mtimeMs && allCache.size === st.size) {
+    return allCache.value;
+  }
   try {
-    const t = fs.readFileSync(consentPath(), 'utf8').replace(/^\uFEFF/, '');
+    const t = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
     const v = JSON.parse(t);
-    return v && typeof v === 'object' ? v : {};
+    const value = v && typeof v === 'object' ? v : {};
+    allCache = { path: file, mtimeMs: st.mtimeMs, size: st.size, value };
+    return value;
   } catch { return {}; }
 }
 
 function writeAll(v) {
   writeFileAtomic(consentPath(), JSON.stringify(v, null, 2));
+  allCache = null;
 }
 
 function stampNow() {
