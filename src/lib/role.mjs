@@ -20,7 +20,7 @@ export const ROLE_LABEL = { global: '全局', project: '项目', misc: '杂项',
  */
 const ROLE_TOOLS = {
   global: ALL_TOOL_NAMES.slice(),
-  // 1.1.1 起项目与杂项看不到 ho_workspace；ho_sessions 仅开放 succeed，其余动作在工具内部拒绝。
+  // 1.0.2 起项目与杂项看不到 ho_workspace；ho_sessions 仅开放 succeed，其余动作在工具内部拒绝。
   project: [nameOf('status'), nameOf('handover'), nameOf('docmap'), nameOf('sessions'), PEER_NAME],
   misc: [nameOf('status'), nameOf('handover'), nameOf('docmap'), nameOf('sessions'), PEER_NAME],
   plain: [],

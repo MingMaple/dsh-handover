@@ -8,7 +8,7 @@
  *   tokens：按会话 id 统计轮数、步数、每步 token
  *   gate：通用约束条闸门、交接体检与体系注册路径检查
  *   recall：按关键词或 seq 回读压缩前原文
- * 全部只读；早期各视图与闸门入口已按 1.1.1 归并到此。
+ * 全部只读；早期各视图与闸门入口已按 1.0.2 归并到此。
  */
 import fs from 'node:fs';
 import path from 'node:path';

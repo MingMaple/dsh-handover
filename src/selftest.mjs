@@ -1106,7 +1106,7 @@ const envSucceed = Object.assign({}, env, {
 
 const exec = null;
 
-/* ---------------- 1.1.1 动作级用例 ---------------- */
+/* ---------------- 1.0.2 动作级用例 ---------------- */
 
 const envGlobal = Object.assign({}, env, {
   roleOf: () => ({ role: 'global', project: '', task: '', source: 'selftest' }),
