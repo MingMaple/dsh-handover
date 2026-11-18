@@ -10,7 +10,6 @@ import path from 'node:path';
 import { isDir } from './lib/text.mjs';
 import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, readSelfPressure } from './lib/sessions.mjs';
-import { createScheduler } from './lib/schedule.mjs';
 import { serviceOf } from './lib/engine.mjs';
 import { compactionStateOf, stalePressureNote } from './lib/events.mjs';
 import { handoverMtimeMs, fileSha256 } from './lib/handover-io.mjs';
@@ -47,7 +46,7 @@ function pkgInfo() {
   return { name: '@mingmaple/dsh-handover', version: '?' };
 }
 
-function walkUpToWorkspace(start) {
+export function walkUpToWorkspace(start, onMiss) {
   let cur = start;
   for (let i = 0; i < 8 && cur; i++) {
     if (isDir(path.join(cur, '_Control_Center'))) return cur;
@@ -56,43 +55,59 @@ function walkUpToWorkspace(start) {
     cur = up;
   }
   // cwd 的父目录已删除（或 cwd 为盘符根）时，向上无法找到工作区。
-  // 若原样返回 start，写操作会在该失效路径上重建一套 _Control_Center。
-  // 该目录没有对应工作区，后续流程无法识别。
-  // 此时以登记表记录的工作区为准；登记表也查不到时才返回 start。
+  // 此时以登记表记录的工作区为准；登记表也查不到时返回空串（没有工作区根）。
+  // 不得原样返回 start：那会把进程 cwd 当成工作区，
+  // 交接、归档与目录创建都会落到 DSH 进程目录（D-112）。
   try {
     const fromReg = routeWorkspace({ cfg: {} });
     if (fromReg && fromReg !== start && isDir(path.join(fromReg, '_Control_Center'))) return fromReg;
-  } catch { /* 登记表无法读取时保持旧行为 */ }
-  return start;
+  } catch { /* 登记表无法读取时按没有工作区根处理 */ }
+  if (typeof onMiss === 'function') { try { onMiss(start); } catch { /* 上报失败不影响解析结果 */ } }
+  return '';
 }
 
 function msgOf(e) {
   return String(e && e.message ? e.message : e);
 }
 
-/**
- * 压缩调度器依赖的 2 个函数：入参为**会话 id**，须按 id 解析角色与交接路径。
- * 单独导出，便于冒烟测试直接验证。
- */
-export function schedDepsFor(env) {
-  return {
-    roleOf: (sid) => env.infoOfSid(sid),
-    handoverFor: (sid) => env.handoverForSid(sid),
+export function createInitErrors(limit) {
+  const max = Number(limit) > 0 ? Number(limit) : 50;
+  const list = [];
+  const rawPush = list.push.bind(list);
+  // 诊断只保留去重后的 max 条：同一失败每步重试会反复 push，不能让数组无界增长（D-109）。
+  list.push = (...msgs) => {
+    let len = list.length;
+    for (const raw of msgs) {
+      const m = String(raw);
+      if (list.includes(m)) continue;
+      if (list.length >= max) list.shift();
+      len = rawPush(m);
+    }
+    return len;
   };
+  return list;
 }
 
 export function apply(ctx, config) {
   const cfg = resolveConfig(config);
-  const initErrors = [];
+  const initErrors = createInitErrors(50);
   const registered = new Set();           // 已注册的工具名（旧内核的限制式裁剪使用）
+  let workspaceMissLogged = false;
+  /** 工作区解析失败只报一次：日志与 initErrors 各记一条，避免每步重复累积（D-112）。 */
+  const noteWorkspaceMiss = (start) => {
+    if (workspaceMissLogged) return;
+    workspaceMissLogged = true;
+    const m = '工作区解析：' + String(start || '') + ' 向上 8 级与注册表均无 _Control_Center，按「没有工作区根」处理';
+    env.log(m);
+    initErrors.push(m);
+  };
+  const resolveWorkRoot = (start) => walkUpToWorkspace(start, noteWorkspaceMiss);
   // 自 0.2.2 起，工具按「步」解析（tools.resolve）：可用工具集合每步重算，角色过滤写入注册条件。
   // 更早的内核忽略注册选项，只能退回 agent 作用域的 restrict。2 条路径按能力择一，不并行。
   const perStep = (() => { try { return !!(ctx.tools && typeof ctx.tools.resolve === 'function'); } catch { return false; } })();
   let roleOps = null;                     // 角色装配句柄（见 lib/role-assembly.mjs）
   let toolOps = null;                     // 工具注册句柄（见 lib/tool-registry.mjs）
   let lifecycleOps = null;                // 生命周期接线句柄（见 lib/lifecycle.mjs）
-  let scheduler = null;
-  let schedulerError = "";
 
   const env = {
     cfg,
@@ -101,7 +116,7 @@ export function apply(ctx, config) {
     resolveWs(exec) {
       if (cfg.workspaceRoot) return cfg.workspaceRoot;
       const cwd = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.cwd : null;
-      return walkUpToWorkspace(cwd || process.cwd());
+      return resolveWorkRoot(cwd || process.cwd());
     },
     selfId(exec) {
       const h = exec && exec.agent && exec.agent.session ? exec.agent.session.header : null;
@@ -121,7 +136,7 @@ export function apply(ctx, config) {
     /** 迁移感知：根目录是否已迁移到其他位置（原路径成为 junction）。供提示段与 ho_status（view="diag"）使用。 */
     moveInfo() {
       try {
-        const src = cfg.workspaceRoot || walkUpToWorkspace(process.cwd());
+        const src = cfg.workspaceRoot || resolveWorkRoot(process.cwd());
         const st = moveStatus({ src });
         return st && st.phase && st.phase !== 'none' ? st : null;
       } catch { return null; }
@@ -129,6 +144,7 @@ export function apply(ctx, config) {
     guardLast() { return toolOps ? toolOps.guardLast() : null; },
     injectList: () => inject.slice(),
     initErrors: () => initErrors.slice(),
+    guardAvailable: () => { try { return !!(ctx.tools && typeof ctx.tools.guard === 'function'); } catch { return false; } },
     probeServices() {
       const out = {};
       for (const name of ['tools', 'systemPrompt', 'sessionController', 'agents', 'compaction', 'tokenMeter', 'llm', 'sessions', 'commands', 'workspaceRegistry']) {
@@ -175,7 +191,7 @@ export function apply(ctx, config) {
 
   // ---------------- 角色装配（实现见 lib/role-assembly.mjs）
   // 提示段、角色缓存与旧内核限制的状态由模块持有；此处只保留 env 上的对外入口。
-  roleOps = createRoleAssembly({ ctx, cfg, env, perStep, registered, initErrors, walkUpToWorkspace });
+  roleOps = createRoleAssembly({ ctx, cfg, env, perStep, registered, initErrors, walkUpToWorkspace: resolveWorkRoot });
   const {
     agentOf, isChildSession, infoFor, scopedMetaOf, workspaceForSid, roleCache, titleOf,
   } = roleOps;
@@ -211,15 +227,6 @@ export function apply(ctx, config) {
   env.refreshPromptFor = roleOps.refreshPromptFor;
 
 
-  // ---------------- 调度器（续跑文案须按角色取交接路径）
-  // 注意：调度器收到的是会话 id 字符串，不是 exec；此处使用按 id 解析的版本，直接读取角色表与磁盘。
-  const schedDeps = { ctx, cfg, logger: (ctx.logger || null), roleOf: null, handoverFor: null };
-  try {
-    scheduler = createScheduler(schedDeps);
-    if (typeof ctx.effect === "function") ctx.effect(() => () => { try { scheduler.dispose(); } catch { /* ignore */ } });
-  } catch (e) { schedulerError = msgOf(e); }
-  Object.assign(schedDeps, schedDepsFor(env));
-
   // ---------------- 压缩主链：轮首注入压力行、到线注入提示、强制线强制压缩 ----------------
   // 整理线与建议线只注入提示，绝不调用压缩 API；只有强制线由插件兜底压缩。
   // 全部注入都在本会话的步骤边界生成，作为末尾消息追加；不改 system 头，不逐步注入。
@@ -250,7 +257,7 @@ export function apply(ctx, config) {
   // noteInline 由 inline-engine 提供，二者互相引用：anchorOps 先以转发函数占位，
   // engine 建立后再由 runtime.noteInline 回填，调用发生在建好之后。
   const runtime = {
-    ctx, cfg, env, inline, scheduler, roleCache,
+    ctx, cfg, env, inline, roleCache,
     readState, saveState, infoFor, scopedMetaOf, isChildSession,
     noteInline: null, anchorOps: null,
   };
@@ -319,7 +326,6 @@ export function apply(ctx, config) {
       try { lint = info.role === 'global' ? lintGlobal(hp.path) : lintProject(hp.path); } catch (e) { lint = { verdict: '读不到', reasons: [msgOf(e)] }; }
     }
     const cs = compactionStateOf(sid, exec) || {};
-    const schedPending = !!(scheduler && scheduler.pending && typeof scheduler.pending.has === 'function' && scheduler.pending.has(sid));
     return judgeRotateGate({
       flow,
       archiveSha256: flow.archivePath ? fileSha256(flow.archivePath) : '',
@@ -327,7 +333,7 @@ export function apply(ctx, config) {
       handoverMtimeMs: hp.path ? handoverMtimeMs(hp.path) : null,
       lint,
       lock: cs.lock || 'clean',
-      compactionPending: inline.inflight.has(sid) || schedPending,
+      compactionPending: inline.inflight.has(sid),
       openToolCalls: engine.openToolCalls(exec && exec.agent ? exec.agent.session : null),
     });
   };
@@ -347,7 +353,6 @@ export function apply(ctx, config) {
   // ---------------- 用户全局前置提示词与生命周期接线（实现见 lib/lifecycle.mjs）
   lifecycleOps = createLifecycle({
     ctx, cfg, env, roleOps, pkgInfo, initErrors,
-    schedulerInfo: () => ({ ready: scheduler !== null, error: schedulerError }),
     toolCount: () => (toolOps ? toolOps.tools.length + toolOps.peerTools.length : 0),
   });
   env.extraPrompt = lifecycleOps.extraPrompt;
@@ -359,8 +364,6 @@ export function apply(ctx, config) {
   toolOps = createToolRegistry({
     ctx, cfg, env, perStep, registered, initErrors,
     isChildSession, infoFor, scopedMetaOf, roleCache, titleOf,
-    schedulerReady: () => scheduler !== null,
-    schedulerError: () => schedulerError,
   });
 
   // ---------------- 生命周期、设置页、命令与启动补注册（实现见 lib/lifecycle.mjs）

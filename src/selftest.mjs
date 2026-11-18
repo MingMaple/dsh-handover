@@ -10,10 +10,11 @@ import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, readPressure } from './lib/sessions.mjs';
 import { readJsonDir, readJsonFileLazy, isDir, isFile } from './lib/text.mjs';
 import { migrateIdentity } from './lib/identity.mjs';
-import { capText, HANDOVER_MAX_LINES } from './lib/limit.mjs';
+import { capText, HANDOVER_MAX_LINES, STATUS_MAX_LINES } from './lib/limit.mjs';
 import { judgeMacroReset, judgeHardCap, decidePhase, judgeTrigger, judgeTier } from './lib/triggers.mjs';
-import { usableWindow, bandsFor, judgeLevel, growthOf, pressureOf, roiOf, lowRoiStreakOf } from './lib/pressure.mjs';
-import { selectCompactionRange, compactInTurn, INLINE_UNAVAILABLE } from './lib/engine.mjs';
+import { usableWindow, bandsFor, judgeLevel, growthOf, pressureOf, roiOf, lowRoiStreakOf, settlePendingAfter } from './lib/pressure.mjs';
+import { selectCompactionRange, selectFullRange, compactInTurn, INLINE_UNAVAILABLE } from './lib/engine.mjs';
+import { createInlineEngine } from './lib/inline-engine.mjs';
 import { compactionStateOf } from './lib/events.mjs';
 import { deriveSegments, segmentStats, segmentForSeq, gainRatio } from './lib/segments.mjs';
 import { extractSnapshot, renderSnapshot, maybeSemanticSnapshot, bypassCount, resetBypassCount, writeSnapshot, listSnapshots } from './lib/checkpoint.mjs';
@@ -21,13 +22,12 @@ import { pressureLineText, tierPromptText, hardPromptText, successionPromptText,
 import { judgeAssistantCompact } from './lib/compact-gate.mjs';
 import { extractConstraints, probeConstraints } from './lib/constraints.mjs';
 import { mergeAnchor, readAnchor } from './lib/anchor.mjs';
-import { renderCapsule, CAPSULE_MAX_CHARS } from './lib/capsule.mjs';
+import { renderCapsule, extractKeywordSentences, CAPSULE_MAX_CHARS, CAPSULE_RENDER_MAX_CHARS } from './lib/capsule.mjs';
 import { storeDirFor, writeSessionState, readSessionState, storeInfo } from './lib/store.mjs';
 import { adoptLegacyStore } from './lib/compat.mjs';
 import { search, regexIssue, aroundEvents } from './lib/recall.mjs';
 import { carryItemsOf, fileSha256 } from './lib/handover-io.mjs';
 import { judgeRotateGate } from './lib/succession.mjs';
-import { shouldSendBackfill, markBackfill, resetBackfill, buildBackfillText, composeResumeMessage } from './lib/resume.mjs';
 import { toolsetFor } from './lib/role.mjs';
 import { ALL_TOOL_NAMES } from './lib/names.mjs';
 import { pmStatusTool } from './tools/ho_status.mjs';
@@ -39,6 +39,13 @@ import { pmPeerTool } from './tools/peer.mjs';
 import { newSessionIn } from './lib/session-create.mjs';
 import { abortableDelay, ABORTED_TEXT } from './lib/abort.mjs';
 import { createSkipLogger } from './lib/skip-log.mjs';
+import { nextName, registerHolder } from './lib/office.mjs';
+import { resolveShortSid } from './lib/api.mjs';
+import { decodeLogResult } from './lib/zstd-log.mjs';
+import { syncCheck } from './lib/gates.mjs';
+import { checkRegistries, syncGlobalRefs } from './lib/system.mjs';
+import { validateProfile } from './lib/profile.mjs';
+import { createInitErrors } from './index.mjs';
 
 const argv = process.argv.slice(2);
 function argOf(flag, dflt) {
@@ -104,7 +111,7 @@ eq('hard 强制', T({ used: 121550 }).action, 'force');
 eq('空闲会话不判定', T({ used: 190000, inTurn: false }).action, 'idle');
 eq('空闲会话强制线亦不判定', T({ used: 190000, inTurn: false }).action, 'idle');
 eq('锁未闭合不判定', T({ used: 121550, lockState: 'open' }).action, 'idle');
-eq('锁孤儿不判定', T({ used: 70000, lockState: 'orphaned' }).action, 'idle');
+eq('锁未闭合时低水位也不判定', T({ used: 70000, lockState: 'open' }).action, 'idle');
 eq('冷却中不判定', T({ used: 70000, cooldownLeftMs: 1000 }).action, 'idle');
 eq('冷却结束可判定', T({ used: 70000, cooldownLeftMs: 0 }).action, 'notifySoft');
 eq('水位未知不判定', T({ used: null }).action, 'idle');
@@ -119,10 +126,6 @@ eq('分档 × 闸门：hard 冷却', T({ used: 121550, cooldownLeftMs: 5000 }).a
 /* ---------------- 压力遥测：分档、档位、增速、注入行 ---------------- */
 
 const pCfg = {
-  budgetMode: 'ratio',
-  budgetSoft: 80000,
-  budgetAdvise: 120000,
-  budgetHard: 180000,
   reservedOutput: 13000,
   softRatio: 0.35,
   adviseRatio: 0.50,
@@ -132,29 +135,27 @@ const pCfg = {
 eq('200K 窗可用窗口', usableWindow(200000, pCfg), 187000);
 eq('可用窗口不为负', usableWindow(10000, pCfg), 0);
 const b200 = bandsFor(pCfg, 200000);
-eq('200K 窗 ratio 三档', [b200.soft, b200.advise, b200.hard], [65450, 93500, 121550]);
+eq('200K 窗三档按窗口 35/50/65%', [b200.soft, b200.advise, b200.hard], [70000, 100000, 130000]);
 eq('200K 窗宿主线', b200.host, 160000);
+check('预留输出不参与分档', bandsFor(Object.assign({}, pCfg, { reservedOutput: 50000 }), 200000).hard === 130000);
 const b1m = bandsFor(pCfg, 1000000);
-eq('1M 窗 ratio 三档', [b1m.soft, b1m.advise, b1m.hard], [345450, 493500, 641550]);
-check('1M 窗强制线不低于窗口 60%', b1m.hard >= 1000000 * 0.6, '实得 ' + b1m.hard);
+eq('1M 窗三档按窗口 35/50/65%', [b1m.soft, b1m.advise, b1m.hard], [350000, 500000, 650000]);
 const b1m2 = bandsFor(pCfg, 1048576);
-eq('1048576 窗 ratio 三档', [b1m2.soft, b1m2.advise, b1m2.hard], [362452, 517788, 673124]);
+eq('1048576 窗三档按窗口 35/50/65%', [b1m2.soft, b1m2.advise, b1m2.hard], [367002, 524288, 681574]);
 const b128 = bandsFor(pCfg, 131072);
-eq('131072 窗 ratio 三档', [b128.soft, b128.advise, b128.hard], [41325, 59036, 76747]);
-const bNull = bandsFor(pCfg, null);
-eq('窗口读不到退回绝对预算', [bNull.soft, bNull.advise, bNull.hard], [80000, 120000, 180000]);
-const bAbs = bandsFor(Object.assign({}, pCfg, { budgetMode: 'absolute' }), 200000);
-eq('absolute 模式三档', [bAbs.soft, bAbs.advise, bAbs.hard], [80000, 120000, 180000]);
+eq('131072 窗三档按窗口 35/50/65%', [b128.soft, b128.advise, b128.hard], [45875, 65536, 85197]);
+eq('窗口读不到不判定', bandsFor(pCfg, null), null);
+eq('窗口非正不判定', bandsFor(pCfg, 0), null);
 const bMono = bandsFor(Object.assign({}, pCfg, { softRatio: 0.8, adviseRatio: 0.1, hardRatioCap: 0.5 }), 200000);
 check('分档单调不减', bMono.soft <= bMono.advise && bMono.advise <= bMono.hard, JSON.stringify(bMono));
 
 const L = (used) => judgeLevel({ used, win: 200000, cfg: pCfg });
-eq('soft-1 为 low', L(65449).level, 'low');
-eq('soft 为 soft', L(65450).level, 'soft');
-eq('advise-1 为 soft', L(93499).level, 'soft');
-eq('advise 为 advise', L(93500).level, 'advise');
-eq('hard-1 为 advise', L(121549).level, 'advise');
-eq('hard 为 hard', L(121550).level, 'hard');
+eq('soft-1 为 low', L(69999).level, 'low');
+eq('soft 为 soft', L(70000).level, 'soft');
+eq('advise-1 为 soft', L(99999).level, 'soft');
+eq('advise 为 advise', L(100000).level, 'advise');
+eq('hard-1 为 advise', L(129999).level, 'advise');
+eq('hard 为 hard', L(130000).level, 'hard');
 const badLv = judgeLevel({ used: Number.NaN, win: 200000, cfg: pCfg });
 eq('水位非法返回 unknown', [badLv.level, badLv.ratio, badLv.headroom], ['unknown', null, null]);
 eq('窗口非法返回 unknown', judgeLevel({ used: 100, win: 0, cfg: pCfg }).level, 'unknown');
@@ -170,10 +171,10 @@ const prof = pressureOf({
   history: [{ at: 1, used: 70000 }, { at: 2, used: 81000 }, { at: 3, used: 92000 }, { at: 4, used: 103000 }],
 });
 eq('画像档位', prof.level, 'soft');
-eq('画像剩余轮数', prof.remainingTurns, Math.floor((121550 - 92000) / 11000));
+eq('画像剩余轮数', prof.remainingTurns, Math.floor((130000 - 92000) / 11000));
 const pLine = pressureLineText(prof);
 check('注入行含 used/win', pLine.indexOf('92K/200K') !== -1, pLine);
-check('注入行含三档线', pLine.indexOf('65K') !== -1 && pLine.indexOf('122K') !== -1, pLine);
+check('注入行含三档线', pLine.indexOf('70K') !== -1 && pLine.indexOf('130K') !== -1, pLine);
 check('注入行不超过 80 字', pLine.length <= 80, String(pLine.length));
 const pUnknown = pressureLineText(pressureOf({ used: null, win: null, cfg: pCfg }));
 check('未知水位数写未核', pUnknown.indexOf('未核') !== -1 && pUnknown.indexOf('NaN') === -1 && pUnknown.indexOf('0K') === -1, pUnknown);
@@ -184,10 +185,46 @@ eq('连续两次低收益计为 2', lowRoiStreakOf([0.20, 0.25], 0.30), 2);
 eq('中间一次达标后只计最近一次', lowRoiStreakOf([0.20, 0.40, 0.20], 0.30), 1);
 eq('最近一次达标归零', lowRoiStreakOf([0.20, 0.25, 0.40], 0.30), 0);
 
+// D-171：压缩后读数校准。待校准只消费一次，真实水位来自宿主投影，读不到就不填数。
+{
+  const st = {
+    tokensBefore: 318789,
+    tokensAfter: null,
+    roi: null,
+    pendingAfter: { before: 318789, shadowed: 208891, at: 1, range: '1990-2311' },
+  };
+  const first = settlePendingAfter(st, 36428, 0.30);
+  eq('校准写入宿主投影水位', st.tokensAfter, 36428);
+  eq('校准按真实水位重算收益', Math.round(st.roi * 1000) / 1000, 0.886);
+  eq('校准只追加一条收益记录', st.roiHistory.length, 1);
+  eq('校准消费掉待校准记录', st.pendingAfter, undefined);
+  eq('首次校准标记已测量', first.measured, true);
+  const again = settlePendingAfter(st, 1000, 0.30);
+  eq('重复校准直接忽略', again.consumed, false);
+  eq('重复校准不改写读数', st.tokensAfter, 36428);
+  eq('重复校准不追加收益记录', st.roiHistory.length, 1);
+}
+{
+  const st = { tokensAfter: null, pendingAfter: { before: 100000 } };
+  const r = settlePendingAfter(st, null, 0.30);
+  eq('读不到水位时标记未测量', r.measured, false);
+  eq('读不到水位时不填读数', st.tokensAfter, null);
+  eq('读不到水位时不累计收益', st.roiHistory, undefined);
+  eq('读不到水位也消费记录', st.pendingAfter, undefined);
+}
+{
+  const st = { roiHistory: [0.5], lowRoiStreak: 0, pendingAfter: { before: 100000 } };
+  const r = settlePendingAfter(st, 96000, 0.30);
+  eq('低收益时累计连续次数', r.streak, 1);
+  eq('低收益记录进入收益历史', st.roiHistory.length, 2);
+}
+
 const indexSrc = fs.readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');
 // 压缩主链的实现已抽到 lib/inline-engine.mjs：断言核对实现文件本身。
 // 同时拼接 index.mjs 的装配段（引擎创建、步骤边界监听、助手入口赋值），接线同样在锁定范围内。
 const inlineSrc = fs.readFileSync(new URL('./lib/inline-engine.mjs', import.meta.url), 'utf8');
+// 压缩后读数校准的实现落在 lib/pressure.mjs：低收益连击的判据也随之搬到该文件。
+const pressureSrc = fs.readFileSync(new URL('./lib/pressure.mjs', import.meta.url), 'utf8');
 const wiringAt = indexSrc.indexOf('压缩主链：轮首注入压力行');
 const wiringEnd = indexSrc.indexOf('用户全局前置提示词');
 const autoBlock = inlineSrc + (wiringAt >= 0 && wiringEnd > wiringAt ? indexSrc.slice(wiringAt, wiringEnd) : '');
@@ -223,7 +260,8 @@ check('轮内步骤才判定与强制压缩', stepJudgeBlock.indexOf('judgeTrigg
 check('注入不改 system 头', autoBlock.indexOf('systemPrompt.section') === -1 && autoBlock.indexOf("append('system/message'") === -1);
 check('压缩前先写锚点', autoBlock.indexOf('writeAnchorFor(sid, agent.session') !== -1
   && autoBlock.indexOf('writeAnchorFor(sid, agent.session') < autoBlock.indexOf('compactInTurn('));
-check('连续低收益追加换任建议', autoBlock.indexOf('lowRoiStreakOf') !== -1 && autoBlock.indexOf("kind: 'succession-advice'") !== -1);
+check('连续低收益追加换任建议', (autoBlock + pressureSrc).indexOf('lowRoiStreakOf') !== -1
+  && autoBlock.indexOf("kind: 'succession-advice'") !== -1);
 check('换任留痕记录 rotate', indexSrc.indexOf("kind === 'rotate'") !== -1 && indexSrc.indexOf('flow.rotatedAt') !== -1);
 check('换任硬闸改用 rotate 判据', indexSrc.indexOf('judgeRotateGate(') !== -1 && indexSrc.indexOf('四步顺序') === -1);
 
@@ -260,7 +298,50 @@ const rBig = selectCompactionRange(bigRange.session, bigRange.measurement, PLAN)
 eq('200K 窗 used 100K 保留约 45K', rBig.keptTokens, 45000);
 eq('切点落在用户消息边界', bigRange.session.eventAt(rBig.end + 1).type, 'user/message');
 eq('压缩范围跳过系统头', rBig.start, 2);
+// 54000 为节点遮蔽量；胶囊展示的 55000 是压缩前减压缩后（含系统头 1000），两者不冲突。
 eq('遮蔽量按实际节点计', rBig.shadowTokens, 54000);
+
+// 全量压缩：1 个系统头 + 99 个节点，末节点为当前步的助手消息。
+const fullTypes = ['system/message'];
+for (let i = 1; i < 99; i += 1) fullTypes.push(i % 5 === 0 ? 'user/message' : 'turn/end');
+fullTypes.push('assistant/message');
+const fullSession = fakeSession(fullTypes);
+const fullM = priced(fullSession, fullTypes.map(() => 1000));
+const rFull = selectFullRange(fullSession, fullM);
+eq('全量范围起点为系统头之后第一个节点', rFull.start, 2);
+eq('全量范围终点为当前步之前一个节点', rFull.end, 99);
+eq('全量范围保留当前步', rFull.keptTokens, 1000);
+eq('全量范围遮蔽除系统头与当前步外全部', rFull.shadowTokens, 98000);
+
+const tinyFull = fakeSession(['system/message', 'user/message', 'assistant/message']);
+eq('表面过短时全量范围返回 null', selectFullRange(tinyFull, priced(tinyFull, [1000, 1000, 1000])), null);
+
+const tailNotAssistant = fakeSession(['system/message', 'user/message', 'tool/result']);
+eq('末节点不是助手消息时全量范围返回 null', selectFullRange(tailNotAssistant, priced(tailNotAssistant, [1000, 1000, 1000])), null);
+
+const noToolCall = {
+  surface: { nodes: [1, 2, 3] },
+  eventAt: (seq) => (seq === 1 ? { seq, type: 'system/message' }
+    : seq === 2 ? { seq, type: 'user/message' }
+      : { seq, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '回复' }] } } }),
+};
+eq('末节点无 tool-call 时全量范围返回 null',
+  selectFullRange(noToolCall, { totalTokens: 3000, nodes: [1, 2, 3].map((seq) => ({ seq, tokens: 1000 })) }), null);
+
+const rFallback = selectCompactionRange(bigRange.session, bigRange.measurement, Object.assign({}, PLAN, { full: true }));
+eq('全量不成立时回退尾部策略', rFallback && rFallback.start + '-' + rFallback.end, '2-55');
+
+const fullCalls = [];
+const fullAgent = {
+  session: fullSession,
+  ctx: {
+    tokenMeter: { measure: () => fullM },
+    compaction: { compactRegion: async (start, end) => { fullCalls.push({ start, end }); return { shadowedTokenCount: 98000 }; } },
+  },
+};
+const fullOut = await compactInTurn({}, fullAgent, {}, undefined, { full: true, shadowTarget: 0.55, keepMinMessages: 20, minKeepTokens: 8000 });
+eq('轮内全量压缩区间', fullCalls[0].start + '-' + fullCalls[0].end, '2-99');
+eq('轮内全量压缩返回成功', fullOut.status, 'ok');
 
 const pairTypes = ['system/message', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'assistant/message', 'tool/result', 'user/message', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end', 'turn/end'];
 const S3 = fakeSession(pairTypes);
@@ -287,6 +368,8 @@ eq('轮内压缩范围正确', calls[0].start + '-' + calls[0].end, '2-55');
 eq('轮内压缩不调用 compactNow', compactNowCalls, 0);
 eq('轮内压缩返回成功', out.status, 'ok');
 eq('压缩前 token 取测量总量', out.tokensBefore, 100000);
+// D-171：压缩返回瞬间不测量，压缩后读数恒为空，由主链在下一个步骤边界校准。
+eq('压缩后读数不在引擎内测量', out.tokensAfter, null);
 const smallAgent = { session: S1, ctx: { tokenMeter: { measure: () => M1 }, compaction: agent.ctx.compaction } };
 eq('无可压缩范围时跳过', (await compactInTurn({}, smallAgent, {}, undefined, PLAN)).status, 'no-range');
 
@@ -299,11 +382,83 @@ try {
 } catch (e) { missingCode = e.code; }
 eq('缺 compactRegion 时带证据停止', missingCode, INLINE_UNAVAILABLE);
 
+/* ---------------- 压缩主链：快照失败不阻断压缩 ---------------- */
+
+{
+  // 快照缺少会话 id 时 writeSnapshot 必抛；强制压缩仍须照常执行并返回结果。
+  let snapFailCompacts = 0;
+  const snapFailAgent = {
+    session: bigRange.session,
+    ctx: {
+      tokenMeter: { measure: () => bigRange.measurement },
+      compaction: { compactRegion: async () => { snapFailCompacts += 1; return { shadowedTokenCount: 100 }; } },
+    },
+  };
+  const snapFailEngine = createInlineEngine({
+    ctx: {},
+    cfg: resolveConfig({ workspaceRoot: os.tmpdir() }),
+    env: { log: () => {}, controller: () => null },
+    inline: { inflight: new Set(), lastAt: new Map(), disabled: false },
+    scheduler: null,
+    roleCache: new Map(),
+    readState: () => ({ compactions: 0 }),
+    saveState: () => {},
+    infoFor: () => ({ role: 'project', project: 'Demo' }),
+    scopedMetaOf: () => ({}),
+    isChildSession: () => false,
+    anchorOps: {
+      autoSnapshotFor: () => ({ sid: '' }),
+      writeAnchorFor: () => ({ sections: [], path: '' }),
+      surfaceTextsOf: () => [],
+    },
+  });
+  const snapFailResult = await snapFailEngine.forceCompact(snapFailAgent, 'session-snapfail', undefined);
+  eq('快照写失败仍执行强制压缩', snapFailCompacts, 1);
+  eq('快照写失败仍按成功回告', snapFailResult && snapFailResult.status, 'ok');
+}
+
+/* ---------------- 压缩后读数：记账只写待校准 ---------------- */
+
+{
+  // 压缩返回时读数不可信：不得写入压缩后读数、不得累计收益；胶囊与回执写「待下一轮校准」。
+  let store = { compactions: 0, pendingMessages: [], roiHistory: [] };
+  const pendingEngine = createInlineEngine({
+    ctx: {},
+    cfg: resolveConfig({ workspaceRoot: os.tmpdir() }),
+    env: { log: () => {}, controller: () => null },
+    inline: { inflight: new Set(), lastAt: new Map(), disabled: false },
+    scheduler: null,
+    roleCache: new Map(),
+    readState: () => store,
+    saveState: (sid, next) => { store = next; },
+    infoFor: () => ({ role: 'project', project: 'Demo' }),
+    scopedMetaOf: () => ({}),
+    isChildSession: () => false,
+    anchorOps: {
+      autoSnapshotFor: () => null,
+      writeAnchorFor: () => ({ sections: [], path: '' }),
+      surfaceTextsOf: () => [],
+    },
+  });
+  const pendingResult = pendingEngine.afterCompact('session-d171', 'assistant', {
+    status: 'ok',
+    tokensBefore: 318789,
+    tokensAfter: null,
+    result: { shadowedTokenCount: 208891 },
+    range: { start: 1990, end: 2311 },
+  }, { source: 'assistant', capsuleBody: '目标：补齐部署脚本' });
+  check('压缩返回不写失真读数', store.tokensAfter === null && store.roi === null, JSON.stringify(store));
+  check('压缩返回不累计收益历史', store.roiHistory.length === 0, JSON.stringify(store.roiHistory));
+  check('压缩返回记录待校准', store.pendingAfter && store.pendingAfter.before === 318789
+    && store.pendingAfter.shadowed === 208891 && store.pendingAfter.range === '1990-2311', JSON.stringify(store.pendingAfter));
+  const capsuleNow = pendingResult.st.pendingMessages[0].text;
+  check('胶囊回执写待下一轮校准', capsuleNow.indexOf('压缩后 待下一轮校准') !== -1, capsuleNow);
+  check('胶囊回执不填缩减比例', capsuleNow.indexOf('缩减 未核') !== -1, capsuleNow);
+}
+
 const engineSrc = fs.readFileSync(new URL('./lib/engine.mjs', import.meta.url), 'utf8');
 check('轮内实现调用 compactRegion', engineSrc.indexOf('compactRegion(') !== -1);
 check('轮内实现不调用 compactNow', engineSrc.indexOf('compactNow(') === -1);
-const schedSrc = fs.readFileSync(new URL('./lib/schedule.mjs', import.meta.url), 'utf8');
-check('显式重置仍保留回填', schedSrc.indexOf('composeResumeMessage') !== -1 && schedSrc.indexOf('sendPrompt(') !== -1);
 
 /* ---------------- 配置与口径 ---------------- */
 
@@ -319,9 +474,10 @@ eq('默认保留消息数 20', dflt.keepMinMessages, 20);
 eq('默认保留 token 下限 8000', dflt.minKeepTokens, 8000);
 eq('默认收益下限 0.30', dflt.roiFloor, 0.30);
 eq('默认锚点上限 1500', dflt.anchorMaxTokens, 1500);
-eq('默认胶囊上限 1600', dflt.capsuleMaxChars, 1600);
+eq('默认胶囊上限 4600', dflt.capsuleMaxChars, 4600);
+eq('默认助手线全量压缩', dflt.fullCompact, true);
 eq('默认约束上限 8', dflt.constraintMax, 8);
-eq('默认允许边界压缩', dflt.boundaryCompact, true);
+eq('边界压缩配置已移除', dflt.boundaryCompact, undefined);
 eq('宿主兜底线保持 0.8', dflt.hostSummaryRatio, 0.8);
 eq('宿主线随窗口配置', bandsFor({ hostSummaryRatio: 0.7 }, 100000).host, 70000);
 
@@ -336,9 +492,9 @@ eq('水位未知', D({ used: null }).action, 'unknown');
 
 /* ---------------- 注入文本 ---------------- */
 
-eq('整理线提示文案', tierPromptText('soft', prof), '上下文 92K/200K（46%）。3 档 65K/94K/122K。已过整理线，可择机压缩。先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。可压：边界已到；缓压：推导未落盘或有错在追。');
+eq('整理线提示文案', tierPromptText('soft', prof), '上下文 92K/200K（46%）。3 档 70K/100K/130K。已过整理线，可择机压缩。先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。可压：边界已到；缓压：推导未落盘或有错在追。');
 check('建议线提示写尽快', /尽快/.test(tierPromptText('advise', prof)), tierPromptText('advise', prof));
-eq('强制线文案含实际用量', hardPromptText(prof), '上下文 92K/200K（46%），已到强制线 122K。插件立即执行压缩。');
+eq('强制线文案含实际用量', hardPromptText(prof), '上下文 92K/200K（46%），已到强制线 130K。插件立即执行压缩。');
 check('rubric 不超过 220 字', rubricText().length <= 220, String(rubricText().length));
 check('rubric 含 fire 四条', /子任务闭环/.test(rubricText()) && /即将切换阶段/.test(rubricText())
   && /噪声不少于 30%/.test(rubricText()) && /余量低于预计下一阶段增量/.test(rubricText()));
@@ -353,7 +509,7 @@ check('硬上限文案不再压缩', /不再压缩/.test(successionCeilingText(6
 
 const G = (o) => judgeAssistantCompact(Object.assign({
   sid: 'session-g', role: 'project', anchorPath: 'E:/x/anchor.md', anchorWritable: true,
-  lockState: 'clean', inflight: false, schedulerPending: false,
+  lockState: 'clean', inflight: false,
   pendingCompaction: false, pendingToolCalls: 1, compactionCount: 0, maxCompactions: 4,
 }, o || {}));
 eq('全部条件齐备可压缩', G().ok, true);
@@ -372,8 +528,7 @@ check('锚点不可写给处置', /锚点不可写/.test(G({ anchorWritable: fal
   && /重试/.test(G({ anchorWritable: false }).reason), G({ anchorWritable: false }).reason);
 eq('锁未闭合拒绝', G({ lockState: 'open' }).ok, false);
 eq('进行中压缩拒绝', G({ inflight: true }).ok, false);
-eq('排队压缩拒绝', G({ schedulerPending: true }).ok, false);
-eq('未闭合工具调用拒绝', G({ pendingToolCalls: 2 }).ok, false);
+eq('助手闸门不校验未闭合工具调用', G({ pendingToolCalls: 2 }).ok, true);
 eq('普通会话拒绝', G({ role: 'plain' }).ok, false);
 check('闸门不再含旧两项', G().checks.every((c) => c.name !== '提示注入' && c.name !== '交接更新时间'), JSON.stringify(G().checks));
 check('闸门含锚点与计数', G().checks.some((c) => c.name === '锚点可写') && G().checks.some((c) => c.name === '压缩计数'));
@@ -425,12 +580,25 @@ const capsule = renderCapsule({
   max: 4,
   missing: ['必须跑完自测'],
 });
-check('胶囊不超过 1600 字', capsule.length <= 1600, String(capsule.length));
-for (const head of ['[压缩完成·机制兜底]', '目标：', '约束（逐条原文）：', '已确认事实与指针：', '未完成：', '下一步：']) {
+check('胶囊不超过 4600 字', capsule.length <= 4600, String(capsule.length));
+for (const head of ['[压缩完成·机制兜底]', '目标：', '约束（逐条原文）：', '近期关键字摘录：']) {
   check('机制胶囊含段 ' + head, capsule.indexOf(head) !== -1);
 }
 check('胶囊含前后 token 与次序', /压缩前 100K，压缩后 45K/.test(capsule) && /第 2\/4 次/.test(capsule), capsule);
-check('胶囊含完整锚点路径', capsule.indexOf('E:/sessions/s1/dsh-handover/anchor.md') !== -1);
+// D-171：压缩后读数未知时不填数，写明待下一轮校准。
+const pendingCapsule = renderCapsule({
+  anchor: capsuleAnchor,
+  anchorPath: 'E:/a.md',
+  before: 318789,
+  after: null,
+  shadow: 208891,
+  count: 1,
+  max: 4,
+});
+check('压缩后未知写待下一轮校准', pendingCapsule.indexOf('压缩后 待下一轮校准') !== -1, pendingCapsule);
+check('压缩后未知不填缩减比例', pendingCapsule.indexOf('缩减 未核') !== -1, pendingCapsule);
+check('机制胶囊不含锚点路径', capsule.indexOf('E:/sessions/s1/dsh-handover/anchor.md') === -1);
+check('无摘录写（无）', capsule.indexOf('近期关键字摘录：（无）') !== -1, capsule);
 check('缺失约束加原文标注', /必须跑完自测（以本行原文为准）/.test(capsule), capsule);
 check('未缺失约束不加标注', !/不要修改配置文件（以本行原文为准）/.test(capsule));
 check('默认渲染机制兜底', renderCapsule({ anchor: capsuleAnchor, anchorPath: 'E:/a.md' }).indexOf('[压缩完成·机制兜底]') === 0);
@@ -453,24 +621,35 @@ check('助手胶囊含召回提示', assistantCapsule.indexOf('ho_status(view="r
 check('助手胶囊不含机制约束段', assistantCapsule.indexOf('约束（逐条原文）：') === -1, assistantCapsule);
 check('助手胶囊不做探针标记', assistantCapsule.indexOf('（以本行原文为准）') === -1);
 check('标签可覆盖来源', renderCapsule({ label: '[压缩完成·助手胶囊]', body: '目标：测试' }).indexOf('[压缩完成·助手胶囊]') === 0);
+const longExcerpt = '错误'.repeat(1200);
 const longCapsule = renderCapsule({
-  anchor: {
-    goal: '目标',
-    constraints: ['不要修改配置文件'],
-    facts: ['事实'.repeat(300), '事实'.repeat(300)],
-    pointers: ['指针'.repeat(300), '指针'.repeat(300)],
-    pending: ['未完成'.repeat(300), '未完成'.repeat(300)],
-  },
+  anchor: { goal: '目标', constraints: ['不要修改配置文件'] },
+  excerpts: [longExcerpt, longExcerpt],
   anchorPath: 'E:/sessions/s1/dsh-handover/anchor.md',
   before: 100000,
   after: 45000,
   count: 1,
   max: 4,
 });
-const longFact = '事实'.repeat(300);
-check('超长胶囊不裁剪', longCapsule.split(longFact).length - 1 === 2 && longCapsule.length > 1600, String(longCapsule.length));
-check('胶囊保留约束与路径', longCapsule.indexOf('不要修改配置文件') !== -1
-  && longCapsule.indexOf('E:/sessions/s1/dsh-handover/anchor.md') !== -1);
+check('超长胶囊不裁剪', longCapsule.split(longExcerpt).length - 1 === 2 && longCapsule.length > CAPSULE_RENDER_MAX_CHARS, String(longCapsule.length));
+check('胶囊保留约束', longCapsule.indexOf('不要修改配置文件') !== -1);
+
+const kwEvents = [];
+function kw(seq, turn, text, source) {
+  kwEvents.push({ seq, type: 'user/message', data: { turn, content: [{ type: 'text', text }], source: source || { kind: 'user' } } });
+}
+kw(1, 1, '第一轮：普通叙述');
+kw(2, 2, '待办：补回滚分支');
+kw(3, 3, '普通叙述第二轮');
+kw(4, 4, '路径 D:/ws/deploy/run.ps1');
+kw(5, 5, '未完成：同步文档');
+kw(6, 6, '错误：权限不足');
+kw(7, 7, '异常：解压失败');
+kw(8, 8, '下一步：复跑自检');
+eq('关键词句按最近 6 轮抽取', extractKeywordSentences(kwEvents, { turns: 6 }),
+  ['路径 D:/ws/deploy/run.ps1', '未完成：同步文档', '错误：权限不足', '异常：解压失败', '下一步：复跑自检']);
+eq('抽不到关键词返回空', extractKeywordSentences([{ type: 'user/message', data: { turn: 1, content: [{ type: 'text', text: '普通叙述' }] } }]), []);
+eq('插件注入消息跳过', extractKeywordSentences([{ type: 'user/message', data: { turn: 1, content: [{ type: 'text', text: '下一步：注入' }], source: { kind: 'dsh-handover' } } }]), []);
 
 /* ---------------- 合成事件 ---------------- */
 
@@ -679,19 +858,6 @@ fs.writeFileSync(lazyFile, '{"v":"bb"}', 'utf8');
 fs.utimesSync(lazyFile, lazyTick, lazyTick);
 eq('同长度同 mtime 改写读到新值', readJsonFileLazy(lazyDir, ['s']).data.v, 'bb');
 
-resetBackfill('session-selftest');
-eq('首次回填应投递', shouldSendBackfill('session-selftest', 1000, 300000).send, true);
-markBackfill('session-selftest', 1000, 'snap.md');
-const merged = shouldSendBackfill('session-selftest', 2000, 300000);
-eq('五分钟内合并', merged.send, false);
-eq('合并计数生效', merged.merged, true);
-eq('超过窗口再投递', shouldSendBackfill('session-selftest', 1000 + 300001, 300000).send, true);
-const bf = buildBackfillText({ n: 2, snapshotPath: 'a.md', handoverPath: 'h.md', segmentCount: 3, lastLabel: '部署' });
-check('回填含快照路径', bf.indexOf('a.md') !== -1);
-check('回填含交接路径', bf.indexOf('h.md') !== -1);
-check('回填含检索提示', bf.indexOf('ho_status(view="recall"') !== -1);
-eq('回填与续跑合并为一条', composeResumeMessage('A', 'B'), 'A' + String.fromCharCode(10, 10) + 'B');
-
 /* ---------------- 会话内存储：位置、暂存、兼容与保留上限 ---------------- */
 
 const sidStore = 'session-store-selftest';
@@ -798,7 +964,6 @@ check('事实全部保留', a4.sections.facts.length === 1, JSON.stringify(a4.se
 check('未完成全部保留', a4.sections.pending.length === 1);
 check('锚点超预算已标记', a4.overBudget === true);
 
-resetBackfill('session-selftest');
 process.env.USERPROFILE = homeBak.u || '';
 process.env.HOME = homeBak.h || '';
 fs.rmSync(tmpHome, { recursive: true, force: true });
@@ -861,6 +1026,36 @@ const p2Lib = path.join(idWs, 'Projects', 'P2', 'P2库');
 check('来回转换：库内容只套一层', isFile(path.join(p2Lib, 'RULES.md')) && !isDir(path.join(p2Lib, 'P2库')));
 check('来回转换：档案回元数据目录', isFile(path.join(idMeta, 'P2', 'Handover.md')));
 fs.rmSync(idWs, { recursive: true, force: true });
+
+/* ---------------- 身份互转：前置检查失败不动文件 ---------------- */
+
+{
+  // 名册里已有目标类别键时，互转必须在移动前失败：源目录、目标目录、登记表与快照都不动。
+  const cfWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-id-conflict-'));
+  const cfSrc = path.join(cfWs, '_Misc', 'tasks', 'TC');
+  fs.mkdirSync(path.join(cfWs, '_Control_Center', 'records'), { recursive: true });
+  fs.mkdirSync(cfSrc, { recursive: true });
+  fs.writeFileSync(path.join(cfSrc, 'Handover.md'), '# 交接\n', 'utf8');
+  const cfOffice = path.join(cfWs, '_Control_Center', 'records', 'Office.json');
+  const cfOfficeText = JSON.stringify({
+    version: 1,
+    lineages: {
+      TC: { kind: 'misc', task: 'TC', current: null, history: [] },
+      P9: { kind: 'project', project: 'P9', current: null, history: [] },
+    },
+  }, null, 2);
+  fs.writeFileSync(cfOffice, cfOfficeText, 'utf8');
+  let cfMsg = '';
+  try {
+    migrateIdentity({ ws: cfWs, prev: { role: 'misc', task: 'TC' }, next: { role: 'project', project: 'P9' }, mode: 'auto' });
+  } catch (e) { cfMsg = String(e && e.message ? e.message : e); }
+  check('目标名册键已存在时互转报错', /名册里已有/.test(cfMsg), cfMsg);
+  check('互转失败源目录仍在', isDir(cfSrc) && isFile(path.join(cfSrc, 'Handover.md')));
+  check('互转失败不建目标目录', !isDir(path.join(cfWs, 'Projects', 'P9')));
+  check('互转失败不改登记表', fs.readFileSync(cfOffice, 'utf8') === cfOfficeText);
+  check('互转失败不留快照', !isDir(path.join(cfWs, '_Archives')));
+  fs.rmSync(cfWs, { recursive: true, force: true });
+}
 
 /* ---------------- 工具只读冒烟 ---------------- */
 
@@ -963,11 +1158,12 @@ await throwsWith('task-init 缺 task', () => pmSessionsTool(envGlobal).execute({
 
 /* ---------------- compact 胶囊必填与来源 ---------------- */
 
-eq('胶囊上限 1400', CAPSULE_MAX_CHARS, 1400);
+eq('胶囊正文上限 4000', CAPSULE_MAX_CHARS, 4000);
+eq('胶囊渲染参考上限 4600', CAPSULE_RENDER_MAX_CHARS, 4600);
 {
   const calls = { n: 0, last: null, source: 'assistant' };
   const compactEnv = {
-    cfg: { capsuleMaxChars: 1600, anchorMaxTokens: 1500 },
+    cfg: { capsuleMaxChars: 4600, anchorMaxTokens: 1500 },
     assistantCompact: async (execArg, opts) => {
       calls.n += 1;
       calls.last = opts;
@@ -996,16 +1192,69 @@ eq('胶囊上限 1400', CAPSULE_MAX_CHARS, 1400);
   const blank = await compactTool.execute({ action: 'compact', capsule: '   ' }, exec);
   check('compact 空 capsule 拒绝且未压缩', calls.n === 0 && /安全断点/.test(blank.text), blank.text);
   const over = await compactTool.execute({ action: 'compact', capsule: '字'.repeat(CAPSULE_MAX_CHARS + 1) }, exec);
-  check('compact 超 1400 字拒绝且未压缩', calls.n === 0
+  check('compact 超 4000 字拒绝且未压缩', calls.n === 0
     && over.text.indexOf('胶囊正文 ' + (CAPSULE_MAX_CHARS + 1) + ' 字') !== -1
-    && over.text.indexOf('超过上限 1400') !== -1 && /精简/.test(over.text), over.text);
+    && over.text.indexOf('超过正文上限 4000 字（硬拒绝，不截断）') !== -1 && /精简/.test(over.text), over.text);
+  const edge = await compactTool.execute({ action: 'compact', capsule: '字'.repeat(CAPSULE_MAX_CHARS) }, exec);
+  check('compact 正文 4000 字放行', calls.n === 1 && calls.last && calls.last.capsule.length === CAPSULE_MAX_CHARS, String(calls.n));
   const okResult = await compactTool.execute({ action: 'compact', capsule: '目标：补齐部署脚本' }, exec);
-  check('compact 透传 capsule', calls.n === 1 && calls.last && calls.last.capsule === '目标：补齐部署脚本',
+  check('compact 透传 capsule', calls.n === 2 && calls.last && calls.last.capsule === '目标：补齐部署脚本',
     JSON.stringify(calls.last));
   check('compact 回告助手自述来源', /胶囊来源：助手自述（9 字）/.test(okResult.text), okResult.text);
   calls.source = 'mechanism';
   const mechResult = await compactTool.execute({ action: 'compact', capsule: '目标：机制' }, exec);
   check('compact 回告机制兜底来源', /胶囊来源：机制兜底/.test(mechResult.text), mechResult.text);
+}
+{
+  // 压缩后读数未知：回执写「待下一轮校准」，不填数字，并提示不要拿回执当水位。
+  const compactEnv = {
+    cfg: { capsuleMaxChars: 4600, anchorMaxTokens: 1500 },
+    assistantCompact: async (execArg, opts) => ({
+      ok: true,
+      status: 'ok',
+      tokensBefore: 318789,
+      tokensAfter: null,
+      roi: null,
+      anchorPath: 'E:/a.md',
+      anchorTokens: 10,
+      anchorOverBudget: false,
+      capsuleChars: 80,
+      capsuleBodyChars: opts.capsule.length,
+      capsuleSource: 'assistant',
+      remaining: 3,
+      mode: opts.mode,
+    }),
+  };
+  const r = await pmHandoverTool(compactEnv).execute({ action: 'compact', capsule: '目标：待校准' }, exec);
+  check('回执压缩后未知写待下一轮校准', /压缩前 318789 token，压缩后 待下一轮校准/.test(r.text)
+    && r.text.indexOf('缩减 未核') !== -1, r.text);
+  check('回执提示不要拿回执当水位', r.text.indexOf('不要拿本次回执当水位') !== -1, r.text);
+}
+{
+  // 渲染后 4601 字只报告：正文未超正文上限，渲染长度超参考线时不拒绝、不裁剪。
+  const compactEnv = {
+    cfg: { capsuleMaxChars: 4600, anchorMaxTokens: 1500 },
+    assistantCompact: async (execArg, opts) => ({
+      ok: true,
+      status: 'ok',
+      tokensBefore: 100000,
+      tokensAfter: 45000,
+      roi: 0.55,
+      anchorPath: 'E:/a.md',
+      anchorTokens: 10,
+      anchorOverBudget: false,
+      capsuleChars: CAPSULE_RENDER_MAX_CHARS + 1,
+      capsuleBodyChars: opts.capsule.length,
+      capsuleSource: 'assistant',
+      capsuleOverBudget: true,
+      remaining: 3,
+      mode: opts.mode,
+    }),
+  };
+  const r = await pmHandoverTool(compactEnv).execute({ action: 'compact', capsule: '目标：边界' }, exec);
+  check('compact 渲染超 4600 字只报告',
+    r.text.indexOf('4601 字') !== -1 && r.text.indexOf('超过渲染后参考上限 4600') !== -1
+    && /仅报告，正文未裁/.test(r.text), r.text);
 }
 
 /* ---------------- 换任 rotate：留痕、归档与承接项 ---------------- */
@@ -1190,7 +1439,7 @@ check('留痕 5 分钟后重新写', noteSkip('sid-a', 'no-role', 0.2) === true 
 
 /* ---------------- 留痕与可中止等待：静态核对 ---------------- */
 
-for (const reason of ['no-sid', 'subagent', 'no-role', 'plain', 'scheduler-pending', 'inline-inflight', 'no-pressure', 'not-triggered']) {
+for (const reason of ['no-sid', 'subagent', 'no-role', 'plain', 'inline-inflight', 'no-pressure', 'not-triggered', 'open-tool-calls']) {
   check('自触发留痕 reason=' + reason, autoBlock.indexOf("noteTriggerSkip(sid, '" + reason + "'") !== -1);
 }
 check('硬上限留痕一次', autoBlock.indexOf("noteTriggerSkip(sid, 'compaction-limit'") !== -1);
@@ -1201,8 +1450,6 @@ check('插件入口接统一留痕器', autoBlock.indexOf('createSkipLogger') !=
 
 const peerSrc = fs.readFileSync(new URL('./tools/peer.mjs', import.meta.url), 'utf8');
 check('peer 阻塞等待可中止', peerSrc.indexOf('abortableDelay') !== -1 && peerSrc.indexOf('signalOf(exec)') !== -1 && peerSrc.indexOf('ABORTED_TEXT') !== -1);
-const schedSrcAbort = fs.readFileSync(new URL('./lib/schedule.mjs', import.meta.url), 'utf8');
-check('空闲等待可中止', schedSrcAbort.indexOf('waitIdle(agent, cfg.waitIdleMs || 180000, job.signal)') !== -1 && schedSrcAbort.indexOf("return 'aborted'") !== -1);
 const compactToolSrc = fs.readFileSync(new URL('./tools/compact.mjs', import.meta.url), 'utf8');
 check('助手压缩入口走统一闸门', compactToolSrc.indexOf('env.assistantCompact') !== -1);
 const gateSrc = fs.readFileSync(new URL('./lib/compact-gate.mjs', import.meta.url), 'utf8');
@@ -1211,6 +1458,160 @@ check('助手压缩闸门含锚点、计数与工具闭合', gateSrc.indexOf('�
   && gateSrc.indexOf('未闭合工具调用') !== -1);
 const moverSrc = fs.readFileSync(new URL('./lib/mover.mjs', import.meta.url), 'utf8');
 check('批处理启动器先切 UTF-8 代码页', moverSrc.indexOf("'chcp 65001 >nul'") !== -1);
+
+/* ---------------- 修复覆盖：结构断言与最小行为断言 ---------------- */
+
+const statusSrc = fs.readFileSync(new URL('./tools/ho_status.mjs', import.meta.url), 'utf8');
+const roleSrc = fs.readFileSync(new URL('./lib/role-assembly.mjs', import.meta.url), 'utf8');
+const checkpointSrc = fs.readFileSync(new URL('./lib/checkpoint.mjs', import.meta.url), 'utf8');
+const successionSrc = fs.readFileSync(new URL('./lib/succession.mjs', import.meta.url), 'utf8');
+
+// D-115 / D-116 / D-125：已删除的配置、参数与状态。
+eq('D-115 快照最小间隔配置已移除', dflt.snapshotMinGapMs, undefined);
+check('D-116 boundary 参数已移除', pmHandoverTool(envGlobal).parameters.properties.boundary === undefined);
+check('D-125 skipTierOnce 已移除', statusSrc.indexOf('skipTierOnce') === -1);
+
+// D-104 / D-133：在任命名按历史最大号 +1，类别尾号不计入代数。
+eq('D-104 无在任时全局命名为 全局1', nextName({ lineages: {} }, '全局'), '全局1');
+eq('D-104 已有全局时最大号 +1',
+  nextName({ lineages: { 全局: { current: { name: '全局3' }, history: [{ name: '全局2' }] } } }, '全局'), '全局4');
+eq('D-133 类别尾号不计入代数',
+  nextName({ lineages: { Demo2: { current: { name: 'Demo2' }, history: [] } } }, 'Demo2'), 'Demo3');
+
+// D-109：初始化错误去重且有上限。
+const ie = createInitErrors(50);
+ie.push('同一条');
+ie.push('同一条');
+eq('D-109 初始化错误去重', ie.length, 1);
+for (let i = 0; i < 60; i += 1) ie.push('错误 ' + i);
+eq('D-109 初始化错误上限 50', ie.length, 50);
+
+// D-126：跳过日志触顶后按插入序淘汰未过期键。
+{
+  const note = createSkipLogger({ ttlMs: 1000, maxKeys: 2, now: () => 0, write: () => {} });
+  note('a', 'x', 0.1);
+  note('b', 'x', 0.1);
+  note('c', 'x', 0.1);
+  eq('D-126 仍在窗口内的键仍被去重', note('c', 'x', 0.1), false);
+  eq('D-126 未过期键按插入序淘汰', note('a', 'x', 0.1), true);
+}
+
+// D-111：严格模式下短号解析不到返回空串。
+eq('D-111 严格短号解析不到返回空串', resolveShortSid({ cacheDir: () => '' }, 'abc123', { strict: true }), '');
+eq('D-111 非严格模式保留原样', resolveShortSid({ cacheDir: () => '' }, 'abc123'), 'abc123');
+
+// D-124：摘要静默期可配置。
+eq('D-124 摘要静默期默认 2 分钟', dflt.summaryQuietMs, 120000);
+eq('D-124 摘要静默期可覆盖', resolveConfig({ summaryQuietMs: 1000 }).summaryQuietMs, 1000);
+
+// D-162：日志解码返回带状态结果。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-decode-'));
+  const plain = path.join(dir, 'log.txt');
+  fs.writeFileSync(plain, '{"type":"user/message","seq":1}' + String.fromCharCode(10), 'utf8');
+  eq('D-162 明文日志解码状态为 ok', decodeLogResult(plain).status, 'ok');
+  eq('D-162 读不到时状态为 unreadable', decodeLogResult(path.join(dir, 'nope.txt')).status, 'unreadable');
+}
+
+// D-165：规则文件读不到时同步检查不抛错。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-sync-'));
+  fs.mkdirSync(path.join(dir, '_Control_Center'), { recursive: true });
+  let okSync = true;
+  try { syncCheck(dir); } catch { okSync = false; }
+  check('D-165 规则缺失时同步检查不抛错', okSync);
+}
+
+// D-154：全局总注册只更新任务行，人工备注原样保留。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-refs-'));
+  const file = path.join(dir, '_Control_Center', 'records', 'systems.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const text = ['# 体系注册（全局）', '', '人工备注：保留本行', '', '| 任务 | 类别 | 体系文件 |', '|---|---|---|', '| 手工 | 说明 | 备注保留 |', ''].join(String.fromCharCode(10));
+  fs.writeFileSync(file, text, 'utf8');
+  const r = syncGlobalRefs(dir);
+  check('D-154 注册同步保留人工备注', r.body.indexOf('人工备注') !== -1 && r.body.indexOf('备注保留') !== -1, r.body);
+}
+
+// D-143：体检枚举全部任务目录，缺 System.md 也计入。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-regcheck-'));
+  fs.mkdirSync(path.join(dir, '_Control_Center', 'tasks', 'NoReg'), { recursive: true });
+  const r = checkRegistries(dir);
+  check('D-143 未创建 System.md 的任务也计入',
+    r.rows.some((row) => row.exists === false) && r.unset === 1, JSON.stringify(r));
+}
+
+// D-153：校验错误真正写入 errors。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-prof-'));
+  const file = path.join(dir, '_Project_Meta', 'Demo', 'project.profile.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{ 坏 JSON', 'utf8');
+  const v = validateProfile(dir, { role: 'project', project: 'Demo' });
+  check('D-153 解析失败写入 errors', v.errors.length === 1 && /解析失败/.test(v.errors[0]), JSON.stringify(v.errors));
+}
+
+// D-160 / D-161 / D-168：状态输出上限与类型化会话 id 校验。
+eq('D-160 状态输出上限 300 行', STATUS_MAX_LINES, 300);
+check('D-160 gate 与 recall 共用上限', /STATUS_MAX_LINES/.test(statusSrc));
+check('D-161 tokens 视图校验跨会话', /跨会话体检仅对全局会话开放/.test(statusSrc));
+check('D-168 会话 id 比较前补前缀', /normSid/.test(statusSrc) && /indexOf\('session-'\) === 0/.test(statusSrc));
+
+// D-166 / D-148 / D-107 / D-149：短号口径、客户端 note、授权回退与字节双判。
+check('D-166 短号取末 8 位',
+  /slice\(-8\)/.test(fs.readFileSync(new URL('./lib/brief.mjs', import.meta.url), 'utf8')));
+check('D-148 客户端读 r.note',
+  /r\.note/.test(fs.readFileSync(new URL('./client.js', import.meta.url), 'utf8')));
+check('D-107 HTTP 回退含 consent 动作',
+  /consent\.grant/.test(fs.readFileSync(new URL('./lib/webroute.mjs', import.meta.url), 'utf8')));
+{
+  const src = fs.readFileSync(new URL('./lib/extra-prompt.mjs', import.meta.url), 'utf8');
+  check('D-149 字符与字节双判', /Buffer\.byteLength/.test(src) && /56 \* 1024/.test(src));
+}
+
+// D-103 / D-108 / D-110 / D-129：装配的结构不变式。
+check('D-103 角色写入与提示段共用工作区解析',
+  /唯一的工作区解析入口/.test(roleSrc) && /workspaceForSid/.test(roleSrc));
+check('D-108 roleGating=off 文案写「除子会话外」', /除子会话外/.test(roleSrc));
+check('D-129 全局名不采信标题', /全局名不采信会话标题/.test(roleSrc));
+check('D-110 无 tools.guard 时留痕并降级',
+  /无 tools\.guard/.test(fs.readFileSync(new URL('./lib/tool-registry.mjs', import.meta.url), 'utf8')));
+check('D-105 装配只认角色注册文件', /registeredOnly: true/.test(roleSrc));
+{
+  let wsRejected = false;
+  try { registerHolder('', { kind: 'project', project: 'X', name: 'a', sessionId: 's' }); } catch { wsRejected = true; }
+  check('D-112 无工作区根拒绝登记', wsRejected);
+}
+
+// D-122 / D-136 / D-137 / D-138 / D-140 / D-146：文件名、硬闸与写盘口径。
+check('D-122 微快照文件名带毫秒',
+  /micro_\\d\{8\}_\\d\{6\}/.test(checkpointSrc) && /_\\d\{3\}/.test(checkpointSrc));
+check('D-136 硬闸注释按 9 项', /共 9 项/.test(successionSrc));
+check('D-137 换任登记原子写', /writeFileAtomic/.test(successionSrc));
+{
+  const src = fs.readFileSync(new URL('./tools/ho_workspace.mjs', import.meta.url), 'utf8');
+  check('D-132 派发失败不再报成功',
+    src.indexOf('if (!r.ok)') !== -1 && src.indexOf('已派出后台切换助手') > src.indexOf('if (!r.ok)'));
+}
+{
+  const src = fs.readFileSync(new URL('./lib/compact-gate.mjs', import.meta.url), 'utf8');
+  check('D-138 失败文案指向换任入口',
+    src.indexOf('授权压缩') === -1 && /ho_handover\(action="rotate"/.test(src));
+}
+check('D-140 写前快照分支已删',
+  /不再另做写前快照/.test(fs.readFileSync(new URL('./lib/handover-io.mjs', import.meta.url), 'utf8')));
+{
+  const src = fs.readFileSync(new URL('./lib/sevenzip.mjs', import.meta.url), 'utf8');
+  check('D-146 探测使用配置路径', /if \(configured\) cands\.push\(configured\)/.test(src) && /probed\.has\(key\)/.test(src));
+}
+
+// D-141 / D-155 / D-156 / D-157：动作名、统一解码、协作 TTL 与不可达终结。
+check('D-141 docmap 动作名为 registry-* 与 plan-*',
+  /registry-write/.test(fs.readFileSync(new URL('./tools/ho_docmap.mjs', import.meta.url), 'utf8')));
+check('D-155 协作不自带解码器', /decodeLog/.test(peerSrc) && peerSrc.indexOf('inflateRawSync') === -1);
+check('D-156 协作注册 12 小时 TTL', /COLLAB_TTL_MS = 12 \* 60 \* 60 \* 1000/.test(peerSrc));
+check('D-157 不可达成员立即终结', /不可达（已解除其协作限制）/.test(peerSrc));
 
 const cases = [
   { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "brief" }, flag: "status" },

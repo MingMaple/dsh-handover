@@ -1,6 +1,6 @@
 # 配置参考（动态压缩与回读）
 
-本文给出 dsh-handover 1.2 的宿主配置建议、插件配置项、提示段纪律与验证命令。数值为建议值，实际以本机安装版本为准。
+本文给出 dsh-handover 1.1.1 的宿主配置建议、插件配置项、提示段纪律与验证命令。数值为建议值，实际以本机安装版本为准。
 
 ## 1 分层机制
 
@@ -10,7 +10,7 @@
 | 整理线与建议线 | 本插件注入提示，助手执行 | 水位到 soft 或 advise | 提示先写胶囊再压缩；助手调用 `ho_handover(action="compact", capsule=…)` |
 | 强制线 | 本插件 | 水位到 hard 且计数未达硬上限 | 轮内同步调用 `compactRegion`；这是插件侧唯一的强制压缩路径 |
 | 会话锚点 | 助手传入，插件落盘 | 每次 compact | `<会话目录>/dsh-handover/anchor.md`，默认参考上限 1500 token，超限只报告 |
-| 压缩后胶囊 | 本插件 | 压缩完成 | 一条约 1600 字的消息（约束逐条原文不裁，超限只报告） |
+| 压缩后胶囊 | 本插件 | 压缩完成 | 助手胶囊原样注入；机制胶囊只放锚点与最近 6 轮关键词摘录；渲染后 4600 字仅报告 |
 | 微观快照 | 本插件 | 工具失败、文件写入、计划或待办变更 | 6 项快照，存会话目录内 `<sid>\dsh-handover\` |
 | 换任 | 在任助手 | 助手计数达 4 次或任务收尾；用户授权 | `ho_handover(action="rotate")` 一步重写交接；`ho_sessions(action="succeed")` 换任 |
 
@@ -70,54 +70,45 @@ DeepSeek Harness（DSH）的压缩引擎按 agent preset 挂载。本插件按 t
         maxCompactionsPerSession: 4    # 助手压缩次数上限
         maxCompactionsHardCap: 6       # 强制线兜底上限
         hostSummaryRatio: 0.80         # 宿主兜底线，只读观测
-        retainTokens: 20000            # 保留尾部 token 的参考值
-        budgetMode: ratio              # ratio（默认）按窗口纯比例；absolute 才用下面三值
-        budgetSoft: 80000              # 窗口读不到或 budgetMode=absolute 时使用
-        budgetAdvise: 120000           # 窗口读不到或 budgetMode=absolute 时使用
-        budgetHard: 180000             # 窗口读不到或 budgetMode=absolute 时使用
-        reservedOutput: 13000          # 可用窗口 = 窗口 − 预留输出
-        softRatio: 0.35                # 可用窗口比例（不再与绝对预算取小）
-        adviseRatio: 0.50              # 可用窗口比例（不再与绝对预算取小）
-        hardRatioCap: 0.65             # 可用窗口比例（不再与绝对预算取小）
+        reservedOutput: 13000          # 仅用于余量展示，不参与分档
+        softRatio: 0.35                # 当前窗口 × 35%
+        adviseRatio: 0.50              # 当前窗口 × 50%
+        hardRatioCap: 0.65             # 当前窗口 × 65%
         shadowTarget: 0.55             # auto 模式的遮蔽比
-        keepMinMessages: 20            # 保留尾部至少覆盖的最近消息数
-        minKeepTokens: 8000            # 保留尾部 token 下限
+        keepMinMessages: 20            # 强制线保留尾部至少覆盖的最近消息数
+        minKeepTokens: 8000            # 强制线保留尾部 token 下限
+        fullCompact: true              # 助手线全量压缩；false 退回保留尾部策略
         roiFloor: 0.30                 # 压缩收益下限
         anchorMaxTokens: 1500          # 锚点总长参考上限（超限只报告，不裁剪）
-        capsuleMaxChars: 1600          # 压缩后胶囊参考字数上限（超限只报告，不裁剪）
+        capsuleMaxChars: 4600          # 压缩后渲染参考上限（仅报告，不裁剪）
         constraintMax: 8               # 会话约束条数上限
-        backfillMergeMs: 300000        # 显式重置的回填合并窗口
         bypassModel: false             # 旁路语义摘要，默认关闭
-        autoResume: true
         sessionScanHours: 12
 ```
 
 | 键 | 作用 | 何时改 |
 |---|---|---|
-| `budgetMode` | 分档取数方式：`ratio`（默认）按可用窗口纯比例；`absolute` 只用绝对预算 | 需要固定预算时 |
-| `budgetSoft` / `budgetAdvise` / `budgetHard` | 绝对整理线、建议线、强制线；窗口读不到或 `budgetMode=absolute` 时使用 | 需要固定预算时 |
-| `reservedOutput` | 计算可用窗口时扣除的预留输出 | 输出上限变化时 |
-| `softRatio` / `adviseRatio` / `hardRatioCap` | 3 档可用窗口比例；默认分档即按此比例，不与绝对预算取小 | 需要按窗口比例收紧时 |
+| `reservedOutput` | 余量展示用，不参与分档 | 展示口径变化时 |
+| `softRatio` / `adviseRatio` / `hardRatioCap` | 3 档＝当前窗口 × 35%/50%/65%；不扣预留输出，窗口读不到时不判定 | 需要按窗口比例收紧时 |
 | `maxCompactionsPerSession` | 助手入口与到线提示的次数上限 | 需要更早或更晚换任时 |
 | `maxCompactionsHardCap` | 强制线兜底的总次数上限 | 需要放宽强制兜底时 |
-| `shadowTarget` | `auto` 模式的目标遮蔽比 | 需要一次遮蔽更多历史时 |
-| `keepMinMessages` / `minKeepTokens` | 压缩后保留尾部的消息条数与 token 下限 | 需要保留更多近期上下文时调大 |
+| `shadowTarget` | `auto` 模式的目标遮蔽比；仅回退尾部策略时生效 | 需要一次遮蔽更多历史时 |
+| `keepMinMessages` / `minKeepTokens` | 强制线保留尾部的消息条数与 token 下限 | 需要保留更多近期上下文时调大 |
+| `fullCompact` | 助手线全量压缩；置 `false` 退回保留尾部策略 | 需要回滚或保留近期原文时 |
 | `roiFloor` | 缩减比下限；低于此值标记 low-roi | 收益判断偏严或偏松时 |
 | `anchorMaxTokens` | 锚点总长参考上限；超限只报告，不裁剪 | 需要更完整的锚点时调大 |
-| `capsuleMaxChars` | 压缩后胶囊参考字数上限；超限只报告，不裁剪 | 需要更长的续跑材料时调大 |
+| `capsuleMaxChars` | 压缩后渲染参考上限；超限只报告，不裁剪 | 需要更长的胶囊正文时调大 |
 | `constraintMax` | 会话约束保留条数上限 | 约束较多的任务可调大 |
-| `retainTokens` | 保留尾部的参考值；已由 `keepMinMessages` 与 `minKeepTokens` 承担主要判定 | 一般不改 |
 | `hostSummaryRatio` | 宿主兜底线展示；不写宿主配置 | 宿主阈值变动时同步 |
-| `backfillMergeMs` | 显式重置的回填合并窗口 | 连续重置频繁时可加长 |
 | `bypassModel` | 是否启用旁路语义摘要 | 仅在确认模型可用与费用后开启 |
 
 ## 4 判据
 
-- 分档按 token：整理线 soft、建议线 advise、强制线 hard。分档按窗口纯比例：整理线 35%、建议线 50%、强制线 65%。三者均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。
+- 分档按 token：整理线 soft、建议线 advise、强制线 hard。3 档＝当前窗口 × 35%/50%/65%，不扣预留输出、不设绝对 token。200K 窗即 70K/100K/130K，1M 窗即 350K/500K/650K。窗口读不到时不判定，不注入档位提示。
 - 提示去重：同一会话同一档位只注入一次；压缩成功后重置。
-- 助手执行入口：`ho_handover(action="compact", capsule=…)`。`capsule` 必填，trim 后 1–1400 字；缺失或为空即拒绝且不压缩，超过 1400 字即拒绝且不截断。前置校验为角色存在、未达助手计数上限、锚点可写、压缩锁 clean、无排队压缩。未闭合工具调用不超过 1 个。
+- 助手执行入口：`ho_handover(action="compact", capsule=…)`。`capsule` 正文必填，trim 后上限 4000 字，超过即拒绝且不截断；渲染后 4600 字为参考上限，仅报告。前置校验为角色存在、未达助手计数上限、锚点可写、压缩锁 clean、无进行中的压缩。未闭合工具调用只在强制线校验：超过 1 个即跳过本轮并留痕。
 - 压缩 rubric 给 2 组条件。可压条件为：子任务闭环、阶段切换、工具结果已消费完、余量低于下一阶段增量，满足任一即可压。工具结果已消费完指噪声不低于 30%，或单条不小于 8K。缓压条件为：多步推导未落盘、有错在追、上条结果未消费、距上次压缩不足 3 轮。
-- 范围与收益：auto 遮蔽比 0.55、aggressive 0.70、minimal 0.40。保留尾部至少 20 条消息与 8000 token。缩减比低于 0.30 标记 low-roi。连续 2 次低收益或累计遮蔽达到 2 倍窗口时建议换任。
+- 范围与收益：助手线取全量范围，压到当前步之前；`fullCompact=false` 时退回尾部策略。强制线保留尾部至少 20 条消息与 8000 token，auto 遮蔽比 0.55、aggressive 0.70、minimal 0.40。缩减比低于 0.30 标记 low-roi。连续 2 次低收益或累计遮蔽达到 2 倍窗口时建议换任。
 - 计数：助手触发与强制压缩都计。助手入口与提示在 `maxCompactionsPerSession`（默认 4）后关闭，强制线兜底至 `maxCompactionsHardCap`（默认 6），此后只办理更替会话。
 - 宏观重置的 4 条只作追加提示理由。前三条为：累计遮蔽不少于 2 倍窗口；压缩增量比低于 0.5；同错或同文件重复不少于 2 次。第四条为里程碑或用户要求。
 - 约束回注：锚点中的约束按原文保留；机制兜底压缩后，探针检索不到的条目由机制胶囊逐条回注。助手胶囊不追加约束段，约束与历史由助手正文、DSH 摘要与按需召回互补。
@@ -128,17 +119,17 @@ DeepSeek Harness（DSH）的压缩引擎按 agent preset 挂载。本插件按 t
 
 ### 5.1 压缩与交接（5 条）
 
-1. 到 soft 或 advise 时，插件只注入提示。建议线先写胶囊再压缩：把任务收到安全断点，再按胶囊标准写。胶囊含 6 项：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。写好后调用 `ho_handover(action="compact", capsule=…)`。强制线由插件机制兜底压缩。
+1. 到 soft 或 advise 时，插件只注入提示。建议线先写胶囊再压缩：把任务收到安全断点，再按胶囊标准写。助手胶囊按 6 项写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。写好后调用 `ho_handover(action="compact", capsule=…)`。强制线由插件机制兜底压缩。
 2. 到 hard 时插件机制兜底压缩，助手不重复调用压缩；宿主 80% 阈值只读观测，插件不改宿主阈值。
 3. 换任一步到位：`ho_handover(action="rotate", text=…)` 完成归档、写入与体检；承接项由工具返回，需自行并入新正文。随后由当前用户授权，再调用 `ho_sessions(action="succeed")`。
-4. 压缩后按胶囊继续，不读旧交接全文。助手胶囊与 DSH 摘要互补。机制兜底胶囊含约束逐条原文与锚点路径。
+4. 压缩后按胶囊继续，不读旧交接全文。助手胶囊与 DSH 摘要互补。机制兜底胶囊只放目标、约束逐条原文与状态，另附最近 6 轮关键词摘录。
 5. 只读判据与索引，不写会话事件；插件不制造第二事实源。
 
 ### 5.2 行为纪律（4 条）
 
 1. 交接只写在途与指针，篇幅以结构控制为主，不规定字节与页数。单份全文不超过 500 行；超限先删过期内容，不删在途信息。不粘贴大段代码、日志与命令输出。
-2. 事件级微快照由插件自动落盘（小交接），不必手工；整篇重写交接用 `action="rotate"`，不手工编辑交接文件。
-3. 压缩后按胶囊续跑，不复述摘要、不重做已完成事项；需要历史原文时用 `ho_status(view="recall")`。
+2. 整篇重写交接用 `action="rotate"`，不手工编辑交接文件；微快照只在压缩前写入，助手线与强制线各一次。
+3. 压缩后按胶囊继续，不复述摘要、不重做已完成事项；需要历史原文时用 `ho_status(view="recall")`。
 4. 按 rubric 与当前用户要求决定何时压缩；工具返回被截断时按尾部提示缩小范围续读。
 
 ## 6 回读用法
@@ -188,7 +179,7 @@ DSH 的 agent preset（标准、PTC 模式等）决定该会话的系统提示�
 | 提示 | `systemPrompt.section({ name: 'dsh-handover:manual', order })` 追加本插件命名段落 | 只追加自己的段落，不改官方提示词正文 |
 | 会话事件与压缩 | 只读 `session/event`；在 `agent/pre-step` 读本会话水位，轮首追加水位行，到线追加提示，强制线在轮内调用 `compactRegion`；助手入口同样在轮内调用 | 与预设无关 |
 
-因此换预设不会改变插件的判据、快照、交接与回填流程。插件不自带预设，也不写用户的预设文件。官方工具如何呈现（原生调用，或 PTC 折进 `run_code`）由官方决定。插件不感知，也不需要感知。宿主压缩阈值属预设配置，插件只读取水位作参照，不代为修改（配置建议见 §2）。
+因此换预设不会改变插件的判据、快照与交接流程。插件不自带预设，也不写用户的预设文件。官方工具如何呈现（原生调用，或 PTC 折进 `run_code`）由官方决定。插件不感知，也不需要感知。宿主压缩阈值属预设配置，插件只读取水位作参照，不代为修改（配置建议见 §2）。
 
 ## 9 中止语义
 
@@ -218,6 +209,6 @@ DSH 的 agent preset（标准、PTC 模式等）决定该会话的系统提示�
 角色为 `project`、`misc` 时先校验 `project`、`task`。
 缺名直接拒绝建会话，避免建完才在登记时失败。
 
-自触发的每个早退分支都在运行日志留一条 `自触发跳过 sid=<sid> reason=<原因> ratio=<百分比>`：`no-sid`、`subagent`、`no-role`、`plain`、`inline-disabled`、`scheduler-pending`、`inline-inflight`、`no-pressure`、`not-triggered`。同一 `sid` 与原因 5 分钟内只写一条。
+自触发的每个早退分支都在运行日志留一条 `自触发跳过 sid=<sid> reason=<原因> ratio=<百分比>`：`no-sid`、`subagent`、`no-role`、`plain`、`inline-inflight`、`no-pressure`、`not-triggered`、`open-tool-calls`、`compaction-limit`。同一 `sid` 与原因 5 分钟内只写一条。
 
-会话级产物（微快照、回填记录、提示状态、段索引缓存）统一存会话目录内 `<sid>\dsh-handover\`，与会话日志同目录。会话目录被删除时随之消失；插件未加载、未运行也成立。会话目录未就绪时暂存到 `~/.dsh/storages/dsh-handover.staging/<sid>/`，会话目录出现后迁入。微快照保留最近 8 份。插件绝不写宿主的 `session.vN.jsonl[.zstd]`。
+会话级产物（微快照、提示状态、段索引缓存）统一存会话目录内 `<sid>\dsh-handover\`，与会话日志同目录。会话目录被删除时随之消失；插件未加载、未运行也成立。会话目录未就绪时暂存到 `~/.dsh/storages/dsh-handover.staging/<sid>/`，会话目录出现后迁入。微快照保留最近 8 份。插件绝不写宿主的 `session.vN.jsonl[.zstd]`。

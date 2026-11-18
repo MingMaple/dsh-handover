@@ -11,23 +11,17 @@
         maxCompactionsPerSession: 4
         maxCompactionsHardCap: 6
         hostSummaryRatio: 0.80
-        retainTokens: 20000
         shadowTarget: 0.55
         keepMinMessages: 20
         minKeepTokens: 8000
+        fullCompact: true
         roiFloor: 0.30
         anchorMaxTokens: 1500
-        capsuleMaxChars: 1600
+        capsuleMaxChars: 4600
         constraintMax: 8
-        budgetMode: 'ratio'
-        budgetSoft: 80000
-        budgetAdvise: 120000
-        budgetHard: 180000
         reservedOutput: 13000
         softRatio: 0.35
         adviseRatio: 0.50
         hardRatioCap: 0.65
-        backfillMergeMs: 300000
         bypassModel: false
-        autoResume: true
         sessionScanHours: 12

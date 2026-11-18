@@ -390,7 +390,7 @@ window.__ModuleLoader__.load({
           .then((r) => {
             if (r && r.ok) {
               if (r.unchanged) setExtraMsg(r.note || "内容未变，已跳过写入。");
-              else setExtraMsg((r.chars ? "已保存，共 " + r.chars + " 字符。" : "已清空，不再注册提示段。") + (r.cacheNote ? " " + r.cacheNote : ""));
+              else setExtraMsg((r.chars ? "已保存，共 " + r.chars + " 字符。" : "已清空，不再注册提示段。") + (r.note ? " " + r.note : ""));
             }
             else { setExtraBad(true); setExtraMsg((r && r.error) || "保存失败：未返回原因，请稍后重试。"); }
           })
@@ -647,7 +647,7 @@ window.__ModuleLoader__.load({
       });
       const authKids = [];
       authKids.push(h("div", { className: "dshh-muted" }, "需要授权的只有「换任」（上下文重置）。点击「授权重置」后，该会话在 5 分钟内可完成换任一次。步骤：先调用 `ho_handover(action=\"rotate\")` 重写交接，再调用 `ho_sessions(action=\"succeed\")` 建立接任会话。授权用后失效。也可在会话中发送 `/allow-reset`。"));
-      authKids.push(h("div", { className: "dshh-muted" }, "压缩一律不需要授权；事件级微快照同样不需要。"));
+      authKids.push(h("div", { className: "dshh-muted" }, "压缩一律不需要授权；压缩前的微快照同样不需要。"));
       if (dutyRows.length) {
         authKids.push(grantTable("succeed"));
       } else {
@@ -960,7 +960,6 @@ window.__ModuleLoader__.load({
       sections.push(card("插件", kv([
         ["名称", h("span", { className: "dshh-code" }, p.name + "@" + p.version)],
         ["工具数", String(p.tools)],
-        ["压缩调度器", p.scheduler],
         ["注入项", (p.inject || []).join("、")],
         ["初始化", (p.initErrors && p.initErrors.length) ? h("span", { className: "dshh-bad" }, p.initErrors.join("；")) : verdict("正常", true)],
         ["工作区", ws.found ? h("span", { className: "dshh-code" }, ws.root) : verdict("未接入（未找到 `_Control_Center`）", false)],

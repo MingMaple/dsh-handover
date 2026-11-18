@@ -28,8 +28,8 @@ function backupDirFor(ws) {
 }
 
 /** 整库快照：有 7-Zip 出 .7z，否则出内置 .tar.gz。返回 { dir, made }。 */
-function snapshotDirs(ws, dirs) {
-  const dir = backupDirFor(ws);
+function snapshotDirs(ws, dirs, dirOpt) {
+  const dir = dirOpt || backupDirFor(ws);
   const made = [];
   const bin = sevenZipBin();
   let usedDir = false;
@@ -222,6 +222,39 @@ function moveOfficeLineage(ws, prev, next) {
 // ---------------------------------------------------------------- 主流程
 
 /**
+ * 互转前置检查：名册冲突、备份落点与目标目录占用全部在移动前判完。
+ * 任一项成立即抛错，此时尚未快照、尚未移动，源目录与角色表保持原状。
+ * @param {object} o { ws, prev, next, mode, oldName, newName, backupDir }
+ */
+function preflightMigrate(o) {
+  const prev = o.prev || {};
+  const next = o.next || {};
+  if (prev.role !== 'global-task') {
+    const store = loadOffice(o.ws);
+    const oldKey = lineageKeyOf(prev.kind || prev.role, prev.project, prev.task);
+    const newKey = lineageKeyOf(next.kind || next.role, next.project, next.task);
+    if (oldKey && newKey && oldKey !== newKey && store.lineages[newKey]) {
+      throw new Error('名册里已有「' + newKey + '」：先在设置页清理或在职会话处理，再转换身份');
+    }
+  }
+  if (o.mode === 'direct') {
+    for (const name of ['旧体系_' + o.oldName, '旧元数据_' + o.oldName]) {
+      const dest = path.join(o.backupDir, name);
+      if (fs.existsSync(dest)) throw new Error('备份位置已存在：' + dest);
+    }
+    return;
+  }
+  const destLib = next.role === 'misc'
+    ? path.join(o.ws, '_Misc', 'tasks', o.newName)
+    : path.join(o.ws, 'Projects', o.newName, o.newName + '库');
+  if (isDir(destLib) && listDir(destLib).length) throw new Error('目标目录已存在且非空：' + destLib);
+  if (next.role === 'project') {
+    const destMeta = path.join(o.ws, '_Project_Meta', o.newName);
+    if (isDir(destMeta) && listDir(destMeta).length) throw new Error('目标目录已存在且非空：' + destMeta);
+  }
+}
+
+/**
  * 执行身份互转。
  * @param {object} input { ws, prev, next, mode: 'auto'|'direct' }
  * @returns {{ mode, snapshot, moved, summary }}
@@ -250,16 +283,19 @@ export function migrateIdentity(input) {
       : path.join(ws, '_Control_Center', 'tasks', oldName);
   const srcMeta = prevKind === 'project' ? path.join(ws, '_Project_Meta', oldName) : '';
   const snapName = prevKind === 'project' ? 'Projects_' + oldName : prevKind === 'misc' ? '_Misc_' + oldName : '全局任务_' + oldName;
+  // 备份落点先定下来：前置检查与后续移动必须指向同一目录，跨秒也不同名。
+  const backupDir = backupDirFor(ws);
+  preflightMigrate({ ws, prev, next, mode, oldName, newName, backupDir });
   const snap = snapshotDirs(ws, [
     { abs: srcLib, name: snapName },
     { abs: srcMeta, name: '_Project_Meta_' + oldName },
-  ]);
+  ], backupDir);
 
   if (mode === 'direct') {
     // 直接建：旧体系整体移入备份目录，新位置只建空目录，由会话按模板建立。
     const movedTo = [];
-    if (isDir(srcLib)) { movedTo.push(moveDirInto(srcLib, path.join(snap.dir || backupDirFor(ws), '旧体系_' + oldName))); }
-    if (isDir(srcMeta)) { movedTo.push(moveDirInto(srcMeta, path.join(snap.dir || backupDirFor(ws), '旧元数据_' + oldName))); }
+    if (isDir(srcLib)) { movedTo.push(moveDirInto(srcLib, path.join(snap.dir || backupDir, '旧体系_' + oldName))); }
+    if (isDir(srcMeta)) { movedTo.push(moveDirInto(srcMeta, path.join(snap.dir || backupDir, '旧元数据_' + oldName))); }
     if (prevKind === 'project') removeRegistryProject(ws, oldName);
     const target = nextKind === 'project'
       ? path.join(ws, 'Projects', newName, newName + '库')
@@ -288,7 +324,6 @@ export function migrateIdentity(input) {
     destLib = path.join(ws, 'Projects', newName, newName + '库');
     destMeta = path.join(ws, '_Project_Meta', newName);
   }
-  if (isDir(destLib) && listDir(destLib).length) throw new Error('目标目录已存在且非空：' + destLib);
   fs.mkdirSync(destLib, { recursive: true });
   fs.mkdirSync(destMeta, { recursive: true });
 

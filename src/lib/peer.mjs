@@ -9,7 +9,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import zlib from 'node:zlib';
 
 /**
  * 收到的消息必须能自报来源。
@@ -192,42 +191,6 @@ export async function sessionRows(controller, includeSubagents, signal) {
 }
 
 // ---------------------------------------------------------------- 会话日志（peer 的 peek 动作）
-
-/** 解 zstd **多帧**日志并按行解析成事件数组；本 Node 构建没有 zstd 时返回 null。 */
-export function decodeSessionLog(file) {
-  if (typeof zlib.zstdDecompressSync !== 'function') return null;
-  const buf = fs.readFileSync(file);
-  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-  const starts = [];
-  let idx = 0;
-  for (;;) {
-    const at = buf.indexOf(magic, idx);
-    if (at < 0) break;
-    starts.push(at);
-    idx = at + 4;
-  }
-  const parts = [];
-  for (let i = 0; i < starts.length; i++) {
-    const end = i + 1 < starts.length ? starts[i + 1] : buf.length;
-    try {
-      parts.push(zlib.zstdDecompressSync(buf.subarray(starts[i], end)).toString('utf8'));
-    } catch (error) {
-      void error;   // 尾部半写帧解不开时跳过，下次读取会拿到完整帧
-    }
-  }
-  return parts
-    .join('')
-    .split(String.fromCharCode(10))
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch (error) {
-        return null;
-      }
-    })
-    .filter((x) => x !== null);
-}
 
 /** 会话日志根目录（<DSH_HOME>/sessions）；找不到返回 null。 */
 export function sessionsRoot() {

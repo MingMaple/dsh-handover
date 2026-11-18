@@ -18,7 +18,7 @@ import { stampTz } from './brief.mjs';
 import { activeConsentsFor } from './consent.mjs';
 import { systemBlock, registrySignature } from './system.mjs';
 import { migrateIdentity, removeRegistryProject } from './identity.mjs';
-import { loadOffice, lineageKeyOf, syncHolderKind, removeHolder, registerHolder } from './office.mjs';
+import { loadOffice, lineageKeyOf, syncHolderKind, removeHolder, registerHolder, nextName } from './office.mjs';
 
 /** 创建角色装配。runtime 提供 ctx、cfg、env、perStep、registered、initErrors、walkUpToWorkspace。 */
 export function createRoleAssembly(runtime) {
@@ -112,12 +112,14 @@ export function createRoleAssembly(runtime) {
       cwd: o.cwd || meta.cwd,
       firstPrompt: meta.firstPrompt,
       subagent: meta.subagent,
+      // 装配只认角色注册文件：标题、cwd 与首条提示不再参与（D-105）。
+      registeredOnly: true,
     });
   }
 
   /** 当前生效的裁剪机制，供 ho_status（view="diag"）报出。 */
   function roleMode() {
-    if (cfg.roleGating === 'off') return '关闭（roleGating=off，所有会话可见全部工具）';
+    if (cfg.roleGating === 'off') return '关闭（roleGating=off，除子会话外的所有会话可见全部工具）';
     return perStep
       ? '按步过滤（工具表每步重算，换角色下一轮即生效）'
       : '旧式收窄（内核不支持按步解析，改用 agent 作用域 restrict）';
@@ -131,31 +133,46 @@ export function createRoleAssembly(runtime) {
     return Object.assign({ ws, role: info.role, project: info.project, task: info.task }, t);
   }
 
-  /** 仅按会话 id 推断工作区根：优先活体 cwd，其次会话元数据，最后取配置。 */
+  /**
+   * 唯一的工作区解析入口：配置根 → 会话 cwd 向上 → 登记表路由（D-103）。
+   * 角色写入、在任登记与提示段都走这一条，避免同一会话落到 2 个工作区。
+   */
+  function workspaceFor(cwd) {
+    if (cfg.workspaceRoot) return String(cfg.workspaceRoot);
+    const fromCwd = cwd ? walkUpToWorkspace(cwd) : '';
+    return fromCwd || routeWorkspace(env) || '';
+  }
+
+  /** 仅按会话 id 推断工作区根：优先活体 cwd，其次会话元数据。 */
   function workspaceForSid(sid) {
     if (cfg.workspaceRoot) return String(cfg.workspaceRoot);
     const a = agentOf(sid);
     const cwd = a && a.session && a.session.header ? String(a.session.header.cwd || '') : (sessionMeta(sid).cwd || '');
-    return walkUpToWorkspace(cwd || process.cwd());
+    return workspaceFor(cwd);
   }
 
   // ---------------- 按角色装配：工具可见性由每步条件即时计算，此处只维护提示段（旧内核另加 restrict）
   function workspaceForAgent(agent) {
     if (cfg.workspaceRoot) return cfg.workspaceRoot;
     const cwd = agent && agent.session && agent.session.header ? String(agent.session.header.cwd || '') : '';
-    return walkUpToWorkspace(cwd || process.cwd());
+    return workspaceFor(cwd);
   }
 
-  /** 注册/替换本会话的角色提示段；普通会话不注册。 */
-  function applySection(agent, sid, info) {
+  /** 注册/替换本会话的角色提示段；普通会话不注册。wsOpt 由 applyRole 传入，保证与本会话的工作区同源。 */
+  function applySection(agent, sid, info, wsOpt) {
     let text = '';
     let ws = '';
     try {
-      ws = workspaceForAgent(agent);
+      ws = wsOpt || workspaceForAgent(agent);
       // 体系注册与授权状态均按会话实时计算：写入磁盘后重装一次即生效，不另设注入点。
       const system = systemBlock(ws, info);
       const consents = activeConsentsFor(sid);
-      text = manualFor(info, { ws, cfg, move: typeof env.moveInfo === 'function' ? env.moveInfo() : null, system, consents });
+      text = manualFor(info, {
+        ws, cfg,
+        move: typeof env.moveInfo === 'function' ? env.moveInfo() : null,
+        system, consents,
+        guard: typeof env.guardAvailable === 'function' ? env.guardAvailable() : true,
+      });
       consentSig.set(sid, consents.map((r) => r.kind + ':' + r.until).join('|'));
       systemSig.set(sid, registrySignature(ws, info));
     } catch (e) {
@@ -170,8 +187,8 @@ export function createRoleAssembly(runtime) {
     const old = sectionDispose.get(sid);
     if (typeof old === 'function') { try { old(); } catch { /* 旧段已失效 */ } }
     sectionDispose.delete(sid);
-    appliedText.set(sid, text);
     const sc = agent && agent.ctx ? agent.ctx : null;
+    let placed = true;
     if (text && sc && sc.systemPrompt && typeof sc.systemPrompt.section === 'function') {
       try {
         sectionDispose.set(sid, sc.systemPrompt.section({ name: 'dsh-handover:manual', order: 100, text, interpolate: false }));
@@ -179,9 +196,14 @@ export function createRoleAssembly(runtime) {
         // 插件重载后，旧实例注册在 agent 作用域上的同名提示段仍然存在。
         // 宿主按 agent 持有该段，插件卸载不移除；该段既无法移除，也不能重复注册。
         // 因此视为已就位并沿用旧文本；修改文本须重启 DSH 或重建会话。
-        if (!/already registered/.test(msgOf(e))) initErrors.push('角色提示段：' + msgOf(e));
+        if (/already registered/.test(msgOf(e))) placed = true;
+        else { placed = false; initErrors.push('角色提示段：' + msgOf(e)); }
       }
     }
+    // 只有确认就位才记正文：注册失败时保留空值，下一次装配会真正重试；
+    // 先记后注册会让该会话整个生命周期都缺角色提示段（D-102）。
+    if (placed) appliedText.set(sid, text);
+    else appliedText.delete(sid);
   }
 
   /** 旧内核（没有按步解析）才用的限制式裁剪。 */
@@ -199,15 +221,17 @@ export function createRoleAssembly(runtime) {
   }
 
   /** 使一个活体会话的提示段与本会话当前角色对齐。info 可传入已解析的角色，省去一次判定。 */
-  function applyRoleTo(agent, infoOpt) {
+  function applyRoleTo(agent, infoOpt, wsOpt) {
     const h = agent && agent.session ? agent.session.header : null;
     const sid = String((h && h.id) || (agent && agent.id) || '');
     if (!sid) return;
+    // 子会话一律不装配：即使标题含「全局」或角色表里有条目，也不注册提示段（D-105）。
+    if (isChildSession(agent)) return;
     let info = infoOpt || null;
     if (!info) {
       try { info = infoFor(sid, scopedMetaOf(h, sid)); } catch { return; }
     }
-    applySection(agent, sid, info);
+    applySection(agent, sid, info, wsOpt);
     if (!perStep) applyLegacyRestrict(agent, sid, info);
     appliedRole.set(sid, info.role);
     roleState.last = { sid, role: info.role, at: stampTz(Date.now()) };
@@ -234,7 +258,11 @@ export function createRoleAssembly(runtime) {
     // 名称要落成目录：不合法时立即拒绝，不待写角色表或拼接路径时才失败。
     if (role === 'project') { try { assertProjectName(project); } catch (e) { return { ok: false, error: msgOf(e) }; } }
     if (role === 'misc') { try { assertTaskName(task); } catch (e) { return { ok: false, error: msgOf(e) }; } }
-    const ws = routeWorkspace(env);
+    const ws = workspaceForSid(sid);
+    // 无工作区根即拒绝写入，避免在进程目录建出孤立体系（D-112）。
+    if (!ws) {
+      return { ok: false, error: '解析不到工作区根：未写入角色表、未建立目录，也未登记在任。请确认当前目录位于 _Control_Center 所在的工作区，或在设置页接入工作区。' };
+    }
     // 仅在无全局会话时允许将会话设为全局；已有在任全局会话时，只允许同一会话重复确认。
     if (role === 'global') {
       try {
@@ -288,16 +316,25 @@ export function createRoleAssembly(runtime) {
       } else if (role === 'project' || role === 'misc' || role === 'global') {
         const okKind = syncHolderKind(ws, { kind: role, project, task, sessionId: sid });
         if (!okKind) {
-          registerHolder(ws, { kind: role, project, task, name: titleOf(sid) || (role === 'project' ? project : task), sessionId: sid });
+          // 全局名不采信会话标题：按登记表历史最大号自动命名（无在任为「全局1」，已有则最大号 +1）（D-104）。
+          const name = role === 'global'
+            ? nextName(loadOffice(ws), '全局')
+            : (titleOf(sid) || (role === 'project' ? project : task));
+          registerHolder(ws, { kind: role, project, task, name, sessionId: sid });
         }
       }
-    } catch (e) { void e; }
+    } catch (e) {
+      // 登记失败必须可见：静默吞掉会让全局在任表为空，从而绕过单全局约束（D-104）。
+      const m = '角色登记：' + msgOf(e);
+      env.log(m);
+      initErrors.push(m);
+    }
     roleCache.delete(sid);
     const info = { role, project, task, source: 'store', sessionId: sid };
     let live = false;
     try {
       const a = agentOf(sid);
-      if (a) { live = true; applyRoleTo(a, info); }
+      if (a) { live = true; applyRoleTo(a, info, ws); }
     } catch { /* 活体会话装配失败不影响写盘 */ }
     let delivered = false;
     let error = '';

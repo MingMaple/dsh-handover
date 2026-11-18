@@ -4,15 +4,26 @@
  * 文档与测试引用同一组常量，避免同一事实多处各写一遍。
  */
 
-/** 分档口径共用文本（窗口纯比例、实得窗与退回预算）。 */
-const BANDS_TEXT = '分档按窗口纯比例：整理线 35%、建议线 50%、强制线 65%。上述均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。前两档只提示，';
+/** 分档口径共用文本：比例随配置渲染，不写死百分比、绝对 token 与预留值（D-106）。 */
+export function bandsText(cfg) {
+  const c = cfg || {};
+  const pct = (v, dflt) => {
+    const n = Number(v);
+    return Math.round((Number.isFinite(n) ? n : dflt) * 100);
+  };
+  return '分档按当前窗口纯比例：整理线 ' + pct(c.softRatio, 0.35)
+    + '%、建议线 ' + pct(c.adviseRatio, 0.5)
+    + '%、强制线 ' + pct(c.hardRatioCap, 0.65)
+    + '%，不设绝对上限，预留输出只用于余量展示、不参与分档。窗口读不到时不判定。';
+}
 
 /** 设置页使用说明里的紧写形式。 */
 export function compactSummaryText(cfg) {
   const c = cfg || {};
   const max = Number(c.maxCompactionsPerSession) || 4;
-  return BANDS_TEXT + '强制线兜底；助手入口在 '
-    + max + ' 次后关闭，强制线兜底至硬上限';
+  const cap = Number(c.maxCompactionsHardCap) || 6;
+  return bandsText(c) + '前两档只提示，强制线兜底；助手入口在 '
+    + max + ' 次后关闭，强制线兜底至 ' + cap + ' 次';
 }
 
 /** 提示段与工具描述的加权 token 估算：CJK 与全角标点每字符 1 token，其余每 4 字符 1 token。 */

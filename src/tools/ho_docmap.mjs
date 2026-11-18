@@ -26,7 +26,7 @@ import { pmChangelogTool } from './changelog.mjs';
 import { pmCharterTool } from './charter.mjs';
 
 export const ACTIONS = ['read', 'write', 'check', 'plan'];
-const ENTRY_ACTIONS = [
+export const ENTRY_ACTIONS = [
   'registry-read', 'registry-write', 'registry-check',
   'plan-read', 'plan-write', 'plan-archive',
   'profile-read', 'profile-register', 'profile-validate', 'profile-presets',
@@ -128,7 +128,7 @@ function baseDocmapTool(env) {
           const g = readGlobalRegistry(ws);
           const out = ['体系注册（全局）  ' + GLOBAL_REGISTRY_REL, g.rows.length ? '任务 ' + g.rows.length + ' 个' : '暂无任务注册'];
           for (const r of g.rows) out.push('  ' + r.kind + '「' + r.task + '」  ' + r.path);
-          return { text: capped(out.join(NL), '任务较多：按任务名用 `ho_docmap(action="read", task="…")` 读取单个任务。') };
+          return { text: capped(out.join(NL), '任务较多：按任务名用 `ho_docmap(action="registry-read", task="…")` 读取单个任务。') };
         }
         const reg = readRegistry(ws, info);
         const rel = registryRelPath(info);
@@ -143,12 +143,18 @@ function baseDocmapTool(env) {
       if (action === 'check') {
         const res = lin.kind === 'global' ? checkRegistries(ws) : checkRegistries(ws, info);
         const out = ['体系注册体检  ' + (lin.kind === 'global' ? '全部任务' : label)];
-        if (!res.rows.length) out.push('  尚无任何任务注册（空注册不注入正文，属正常）');
+        if (!res.rows.length) out.push('  尚无任何任务目录（空注册不注入正文，属正常）');
         for (const r of res.rows) {
-          out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists ? r.entries + ' 条' : '未设置') + '  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
+          out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists
+            ? r.entries + ' 条  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在')
+            : '未设置（缺 System.md）'));
           for (const b of r.bad.slice(0, 5)) out.push('        失效：' + b.path + ' —— ' + b.problem);
         }
-        out.push(res.missing ? '判定：' + res.missing + ' 条路径失效。处置：由该类别在任会话用 `ho_docmap(action="write")` 更新。' : '判定：路径全部存在。');
+        out.push(res.missing
+          ? '判定：' + res.missing + ' 条路径失效。处置：由该类别在任会话用 `ho_docmap(action="registry-write")` 更新。'
+          : res.unset
+            ? '判定：' + res.unset + ' 个任务未设置体系注册。处置：由该类别在任会话用 `ho_docmap(action="registry-write")` 建立。'
+            : '判定：路径全部存在。');
         return { text: out.join(NL) };
       }
 
@@ -241,7 +247,7 @@ function baseDocmapTool(env) {
       const plan = cur.data.plan || '';
       if (plan) {
         const problem = validateEntries(ws, [{ path: plan }]);
-        if (problem.length) throw new Error('现象：注册中的计划路径已失效：`' + plan + '`。原因：该计划文件已被移动或删除。处置：先修正计划，即 `ho_docmap(action="plan")`，或删除该行。');
+        if (problem.length) throw new Error('现象：注册中的计划路径已失效：`' + plan + '`。原因：该计划文件已被移动或删除。处置：先修正计划，即 `ho_docmap(action="plan-write")`，或删除该行。');
       }
       const r = writeRegistry(ws, writeInfo, { structure, files, plan });
       if (lin.kind === 'global') syncGlobalRefs(ws);

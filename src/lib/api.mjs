@@ -55,10 +55,14 @@ export function statusSnapshot(env, info, why) {
   return json;
 }
 
-/** 允许在设置页与聊天命令里填短号：session-xxxx… 前 8 位即可，这里补全成完整 id。 */
-export function resolveShortSid(env, input) {
+/**
+ * 允许在设置页与聊天命令里填短号：session-xxxx… 前 8 位即可，这里补全成完整 id。
+ * strict 为 true 时短号解析不到返回空串（由调用方报错），不把输入原样当成完整 id（D-111）。
+ */
+export function resolveShortSid(env, input, opts) {
   const s = String(input || '').trim();
   if (!s) return '';
+  const strict = !!(opts && opts.strict === true);
   if (s.indexOf('session-') === 0) return s;
   try {
     const dir = typeof env.cacheDir === 'function' ? env.cacheDir() : '';
@@ -70,8 +74,8 @@ export function resolveShortSid(env, input) {
         if (stem.slice(8, 8 + s.length) === s) return stem;
       }
     }
-  } catch { /* 找不到就按原样 */ }
-  return s;
+  } catch { /* 找不到就按原样（非严格模式） */ }
+  return strict ? '' : s;
 }
 
 /** 在已注册的工作区里建一个「全局」会话：先按工作区 id，抓不到再用 cwd。 */
@@ -113,14 +117,14 @@ export function createApi(env, info) {
       if (method === 'setup') {
         const r = createGlobalWorkspace(p.parent, { name: p.name });
         invalidateStatus(env);
-        return r && r.ok ? ok(r) : { ok: false, error: { code: 'setup-failed', message: String((r && r.error) || '建立失败'), details: {} }, http: 400 };
+        return r && r.ok ? ok(r) : { ok: false, error: { code: 'setup-failed', message: String((r && r.error) || '建立失败'), details: { missingTemplates: (r && r.missingTemplates) || [] } }, http: 400 };
       }
 
       if (method === 'deploy') {
         // 一键部署：建文件体系 → 注册「全局」工作区 → 建「全局」会话，上述动作在一次请求内顺序完成。
         const scaffold = createGlobalWorkspace(p.parent, { name: p.name });
         if (!scaffold || scaffold.ok !== true) {
-          return { ok: false, error: { code: 'setup-failed', message: String((scaffold && scaffold.error) || '建立失败'), details: {} }, http: 400 };
+          return { ok: false, error: { code: 'setup-failed', message: String((scaffold && scaffold.error) || '建立失败'), details: { missingTemplates: (scaffold && scaffold.missingTemplates) || [] } }, http: 400 };
         }
         let ws = null;
         let workspaceError = '';
@@ -234,6 +238,10 @@ export function createApi(env, info) {
 
       if (method === 'move.switch') {
         const r = stageSwitch({ relaunch: p.relaunch === true });
+        if (!r.ok) {
+          env.log('迁移：后台切换助手派出失败：' + String(r.error || ''));
+          return bad('spawn-failed', String(r.error || '派出后台切换助手失败'), 500);
+        }
         env.log('迁移：后台切换助手 ' + (r.already ? '无需再派（已切换）' : '已派出 pid=' + r.pid));
         return ok(r);
       }

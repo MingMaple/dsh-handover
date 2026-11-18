@@ -17,6 +17,7 @@ import { buildGuide, SETUP_STEPS } from './guide.mjs';
 import { readRoles, resolveRole, ROLE_LABEL, sessionMeta } from './role.mjs';
 import { listConsent } from './consent.mjs';
 import { listProfiles } from './profile.mjs';
+import { EXTRA_PROMPT_ORDER } from './extra-prompt.mjs';
 import { loadOffice, readRegistryProjects, KIND_LABEL } from './office.mjs';
 import { checkRegistries } from './system.mjs';
 
@@ -167,13 +168,12 @@ export function buildStatus(env, extra) {
       tools: typeof info.tools === 'number' ? info.tools : 0,
       inject: guard(() => env.injectList(), []),
       initErrors: guard(() => env.initErrors(), []),
-      scheduler: info.scheduler || '未知',
     },
     workspace: { root: ws, found },
     guardLast: guard(() => env.guardLast(), null),
     extraPrompt: guard(() => (typeof env.extraPrompt === 'function' ? env.extraPrompt() : ''), ''),
     extraPromptEnabled: guard(() => (typeof env.extraPromptEnabled === 'function' ? env.extraPromptEnabled() : false), false),
-    extraPromptOrder: 950,
+    extraPromptOrder: EXTRA_PROMPT_ORDER,
     roles: guard(() => {
       const store = readRoles(env.cfg);
       const map = {};
@@ -310,7 +310,11 @@ export function buildStatus(env, extra) {
       const hit = rows.find((r) => r.sid === sid);
       if (hit && hit.mtime >= wide.cutoffMs) notify.push({ sid: hit.sid, key: hit.dutyKey, name: hit.dutyName });
     }
-    const hot = rows.filter((r) => r.used !== null && r.win && r.used >= bandsFor(env.cfg, r.win).soft).length;
+    const hot = rows.filter((r) => {
+      if (r.used === null || !r.win) return false;
+      const rbands = bandsFor(env.cfg, r.win);
+      return rbands !== null && r.used >= rbands.soft;
+    }).length;
     return {
       rows,
       all,

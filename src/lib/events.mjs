@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { findLog, decodeLog, readLogAppend } from './zstd-log.mjs';
+import { findLog, decodeLog, readLogAppend, zstdAvailable, isZstdLog } from './zstd-log.mjs';
 import { projCacheDir } from './sessions.mjs';
 
 /** 取本会话事件数组；无法获取返回 []。宿主对象可能缺少 agent 或 session，取不到时按空事件处理。 */
@@ -271,7 +271,7 @@ function applyCompactionEvent(st, e) {
 
 function compactionValueOf(st) {
   const open = st.pendingStart !== null && st.pendingStart > st.lastEndSeed;
-  return { used: st.used, lock: open ? 'open' : 'clean', lastSummaryMs: st.lastSummaryMs, source: 'log' };
+  return { used: st.used, lock: open ? 'open' : 'clean', lastSummaryMs: st.lastSummaryMs, source: 'log', logStatus: 'ok', note: '' };
 }
 
 /** 由全量事件记录派生压缩状态：与增量路径同口径，供「记录已在缓存」时省掉一次整份解码。 */
@@ -282,14 +282,14 @@ function compactionValueFromRecords(recs) {
     if (!r || r.type !== 'compaction/summary' || typeof r.time !== 'number') continue;
     last = last === null ? r.time : Math.max(last, r.time);
   }
-  return { used: c.used, lock: c.lock, lastSummaryMs: last, source: 'log' };
+  return { used: c.used, lock: c.lock, lastSummaryMs: last, source: 'log', logStatus: 'ok', note: '' };
 }
 
-/** 从会话日志读压缩状态：{ used, lock, lastSummaryMs, source }。读不到日志时退回事件数组。 */
+/** 从会话日志读压缩状态：{ used, lock, lastSummaryMs, source, logStatus, note }。读不到日志时退回事件数组。 */
 export function compactionStateOf(sessionId, exec) {
   const fromEvents = () => {
     const c = countCompactions(eventsOf(exec));
-    return { used: c.used, lock: c.lock, lastSummaryMs: null, source: 'events' };
+    return { used: c.used, lock: c.lock, lastSummaryMs: null, source: 'events', logStatus: 'events', note: '' };
   };
   const sid = sessionId ? String(sessionId) : '';
   if (!sid) return fromEvents();
@@ -298,9 +298,18 @@ export function compactionStateOf(sessionId, exec) {
   let st0 = null;
   try { st0 = fs.statSync(file); } catch { return fromEvents(); }
 
+  // 日志是 zstd 帧但没有解压 API：不能当成「压缩 0 次·锁 clean」，明确标为不可用。
+  if (isZstdLog(file) && !zstdAvailable()) {
+    return Object.assign(fromEvents(), {
+      lock: 'unknown', logStatus: 'no-zstd', note: '日志解压不可用（当前 Node 缺少 zstd 支持）',
+    });
+  }
+
   // 负缓存：日志损坏时每次重解都要几百毫秒且永远不会成功，30 秒内直接走兜底。
   const bad = compactFail.get(sid);
-  if (bad && bad.size === st0.size && bad.mtimeMs === st0.mtimeMs && Date.now() - bad.at < COMPACT_FAIL_TTL_MS) return fromEvents();
+  if (bad && bad.size === st0.size && bad.mtimeMs === st0.mtimeMs && Date.now() - bad.at < COMPACT_FAIL_TTL_MS) {
+    return Object.assign(fromEvents(), { lock: 'unknown', logStatus: 'bad', note: '日志解码失败（坏帧；30 秒内不重试）' });
+  }
 
   // 全量事件若已在记录缓存里（同一 size+mtime），直接由记录派生，省掉一次整份解码。
   // 状态视图会先取记录再取压缩状态，这条捷径把同一份日志的解码次数从 2 次减到 1 次。
@@ -334,7 +343,7 @@ export function compactionStateOf(sessionId, exec) {
   if (!chunk) {
     compactFail.set(sid, { failed: true, size: st0.size, mtimeMs: st0.mtimeMs, at: Date.now() });
     evictOldest(compactFail, COMPACT_CACHE_MAX);
-    return fromEvents();
+    return Object.assign(fromEvents(), { lock: 'unknown', logStatus: 'unreadable', note: '日志读取失败，压缩状态未核' });
   }
   for (const e of chunk.records) applyCompactionEvent(state, e);
   state.offset = chunk.nextOffset;
@@ -345,8 +354,9 @@ export function compactionStateOf(sessionId, exec) {
     if (chunk.size > 0 && !chunk.records.length && chunk.nextOffset === from) {
       compactFail.set(sid, { failed: true, size: st0.size, mtimeMs: st0.mtimeMs, at: Date.now() });
       evictOldest(compactFail, COMPACT_CACHE_MAX);
+      return Object.assign(fromEvents(), { lock: 'unknown', logStatus: 'bad', note: '日志解码失败（坏帧），压缩状态未核' });
     }
-    return fromEvents();
+    return Object.assign(fromEvents(), { logStatus: 'empty' });
   }
   compactFail.delete(sid);
   state.size = chunk.size;

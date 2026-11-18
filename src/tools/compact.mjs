@@ -3,7 +3,7 @@
  * 胶囊正文为必填；前置校验由 lib/compact-gate.mjs 完成；本文件只负责校验胶囊与组织中文回告。
  */
 import { NL } from '../lib/text.mjs';
-import { CAPSULE_MAX_CHARS } from '../lib/capsule.mjs';
+import { CAPSULE_MAX_CHARS, CAPSULE_RENDER_MAX_CHARS } from '../lib/capsule.mjs';
 
 function pctOf(roi) {
   if (typeof roi !== 'number' || !Number.isFinite(roi)) return '未核';
@@ -25,18 +25,18 @@ function capsuleMissingText() {
   ].join(NL);
 }
 
-/** 超过上限时的回告：不压缩、不截断。 */
+/** 超过正文上限时的回告：硬拒绝，不压缩、不截断。 */
 function capsuleOverText(chars) {
   return [
-    '现象：压缩未执行。原因：胶囊正文 ' + chars + ' 字，超过上限 ' + CAPSULE_MAX_CHARS + '。',
-    '处置：精简胶囊正文后再次调用 compact(capsule=…)。',
+    '现象：压缩未执行。原因：胶囊正文 ' + chars + ' 字，超过正文上限 ' + CAPSULE_MAX_CHARS + ' 字（硬拒绝，不截断）。',
+    '处置：把胶囊正文精简到 ' + CAPSULE_MAX_CHARS + ' 字以内，再次调用 compact(capsule=…)。',
   ].join(NL);
 }
 
 /**
  * @param {object} env 插件环境（提供 assistantCompact）
  * @param {object} exec 工具执行上下文
- * @param {{reason?:string, mode?:string, boundary?:boolean, status?:string, capsule?:string}} args
+ * @param {{reason?:string, mode?:string, status?:string, capsule?:string}} args
  * @returns {Promise<string>} 中文结果
  */
 export async function assistantCompact(env, exec, args) {
@@ -52,30 +52,33 @@ export async function assistantCompact(env, exec, args) {
   const r = await env.assistantCompact(exec, {
     reason,
     mode,
-    boundary: a.boundary === true,
     status: typeof a.status === 'string' ? a.status : '',
     capsule,
   });
   const out = [];
   if (r && r.ok === true) {
+    const afterKnown = typeof r.tokensAfter === 'number' && Number.isFinite(r.tokensAfter);
     out.push('压缩完成（by=assistant，mode=' + (r.mode || mode) + '）。');
-    out.push('压缩前 ' + numText(r.tokensBefore) + ' token，压缩后 ' + numText(r.tokensAfter)
-      + ' token，缩减 ' + pctOf(r.roi) + '。');
+    out.push('压缩前 ' + numText(r.tokensBefore) + ' token，压缩后 '
+      + (afterKnown ? numText(r.tokensAfter) + ' token' : '待下一轮校准')
+      + '，缩减 ' + pctOf(r.roi) + '。');
+    if (!afterKnown) {
+      out.push('压缩后读数在返回瞬间是中间态，下一步边界补写一次；不要拿本次回执当水位。');
+    }
     out.push('锚点：' + (r.anchorPath || '（未解析）'));
     if (r.anchorOverBudget === true) {
       out.push('锚点 ' + numText(r.anchorTokens) + ' token，超过上限 '
         + numText(Number(env.cfg && env.cfg.anchorMaxTokens) || 1500) + '；内容未裁。');
     }
     if (r.capsuleOverBudget === true) {
-      out.push('胶囊 ' + numText(r.capsuleChars) + ' 字，超过上限 '
-        + numText(Number(env.cfg && env.cfg.capsuleMaxChars) || 1600) + '；内容未裁。');
+      out.push('胶囊 ' + numText(r.capsuleChars) + ' 字，超过渲染后参考上限 '
+        + CAPSULE_RENDER_MAX_CHARS + '；仅报告，正文未裁。');
     }
     const source = r.capsuleSource === 'mechanism' ? 'mechanism' : 'assistant';
     out.push('胶囊来源：' + (source === 'assistant'
       ? '助手自述（' + numText(r.capsuleBodyChars !== undefined ? r.capsuleBodyChars : capsule.length) + ' 字）'
       : '机制兜底') + '。');
     out.push('剩余次数：' + numText(r.remaining) + ' 次。');
-    if (r.boundary === true) out.push('已按阶段边界声明处理本次压缩。');
     if (reason) out.push('原因：' + reason + '。');
     out.push('按胶囊继续当前任务；需要历史原文时按需召回，不读旧交接全文。');
     return out.join(NL);

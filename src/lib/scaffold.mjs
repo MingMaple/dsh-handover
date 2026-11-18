@@ -180,5 +180,15 @@ export function createGlobalWorkspace(parentInput, opts) {
   // 铺目录与写说明文件共用同一套清单：init 与 scaffold 不各写一份，避免 2 处清单走偏。
   const sc = ensureScaffold(root);
   if (!sc.ok) return { ok: false, root, created: sc.created, written: sc.written, error: sc.error };
+  // 模板缺失不能静默算成功：文件体系只铺了一半，须让调用方报出来。
+  if (Array.isArray(sc.missingTemplates) && sc.missingTemplates.length) {
+    return {
+      ok: false, root, existed,
+      created: sc.created, written: sc.written, skipped: sc.skipped,
+      missingTemplates: sc.missingTemplates,
+      error: '现象：内置模板缺失，工作区未完整铺开。原因：缺 ' + sc.missingTemplates.join('、')
+        + '。处置：重新安装插件后重试，或按 `_Control_Center` 模板目录手工补齐这些文件。',
+    };
+  }
   return { ok: true, root, existed, created: sc.created, written: sc.written, skipped: sc.skipped };
 }

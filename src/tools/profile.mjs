@@ -68,7 +68,7 @@ export function pmProfileTool(env) {
       const p = profilePathFor(ws, scope);
       const r = readProfile(ws, scope);
       if (action === 'read') {
-        const v = validateProfile(ws, scope, r.profile);
+        const v = validateProfile(ws, scope);
         const out = [
           '骨架：' + scopeOf(t) + '（' + (r.exists ? '已注册' : '未注册，按默认骨架运行') + '）',
           '文件：' + (p || '（无）'),
@@ -79,14 +79,14 @@ export function pmProfileTool(env) {
         return { text: out.join(NL) };
       }
       if (action === 'validate') {
-        const v = validateProfile(ws, scope, r.profile);
+        const v = validateProfile(ws, scope);
         const out = [
           '骨架校验：' + scopeOf(t),
           '文件：' + (p || '（无）'),
           '结论：' + (v.ok ? '通过' : '未通过'),
         ];
         if (v.missing.length) out.push('缺：' + v.missing.join('、'));
-        if (r.errors.length || v.errors.length) out.push('结构错误：' + r.errors.concat(v.errors).join('；'));
+        if (v.errors.length) out.push('结构错误：' + v.errors.join('；'));
         return { text: out.join(NL) };
       }
       if (action === 'register') {

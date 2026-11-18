@@ -4,7 +4,7 @@
  * 全部注入都在本会话的步骤边界生成，作为末尾消息追加；不改 system 头，不逐步注入。
  *
  * 依赖通过 runtime 注入，共享状态集中在 index.mjs 的 runtime 对象，
- * 含 inline、scheduler、roleCache、cfg 等。
+ * 含 inline、roleCache、cfg 等。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,11 +13,11 @@ import { projCacheDir, readSelfPressure } from './sessions.mjs';
 import { appendRunLog } from './runlog.mjs';
 import { createSkipLogger } from './skip-log.mjs';
 import { compactInTurn, INLINE_UNAVAILABLE, INLINE_NO_METER } from './engine.mjs';
-import { compactionStateOf } from './events.mjs';
+import { compactionStateOf, logRecordsOf } from './events.mjs';
 import { judgeTrigger } from './triggers.mjs';
 import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionBlockText, successionCeilingText, roiAdviceText } from './inject.mjs';
-import { pressureOf, roiOf, lowRoiStreakOf, normWater } from './pressure.mjs';
-import { renderCapsule } from './capsule.mjs';
+import { pressureOf, roiOf, normWater, settlePendingAfter } from './pressure.mjs';
+import { renderCapsule, extractKeywordSentences, CAPSULE_RENDER_MAX_CHARS } from './capsule.mjs';
 import { probeConstraints } from './constraints.mjs';
 import { writeSnapshot } from './checkpoint.mjs';
 import { judgeAssistantCompact } from './compact-gate.mjs';
@@ -28,7 +28,7 @@ import { sendPrompt } from './prompt.mjs';
 /** 创建压缩主链。runtime 注入共享状态与依赖。 */
 export function createInlineEngine(runtime) {
   const {
-    ctx, cfg, env, inline, scheduler, roleCache,
+    ctx, cfg, env, inline, roleCache,
     readState, saveState, infoFor, scopedMetaOf, isChildSession,
     anchorOps,
   } = runtime;
@@ -66,7 +66,7 @@ export function createInlineEngine(runtime) {
     };
   }
 
-  /** 表面未闭合工具调用数：工具调用块数减工具结果数。 */
+  /** 表面未闭合工具调用数：工具调用块数减工具结果数；取不到即返回 NaN（未核），不得当成 0。 */
   function openToolCalls(session) {
     try {
       const nodes = session && session.surface ? session.surface.nodes || [] : [];
@@ -83,7 +83,7 @@ export function createInlineEngine(runtime) {
         }
       }
       return pending;
-    } catch { return 0; }
+    } catch { return NaN; }
   }
 
   /** 轮内压缩失败或引擎不可用时保留可见告知；例行成功不投任何消息。 */
@@ -101,7 +101,17 @@ export function createInlineEngine(runtime) {
    */
   const noteTriggerSkip = createSkipLogger({ write: appendRunLog, pct: pctText });
 
-  /** 压缩成功后的统一收尾：计数、收益、日志、胶囊与换任提示。 */
+  /** 机制胶囊的关键词摘录：必须在压缩前读取会话日志，压缩后正文可能已被置换。 */
+  function excerptSentencesFor(sid) {
+    try { return extractKeywordSentences(logRecordsOf(sid) || [], { turns: 6 }); }
+    catch { return []; }
+  }
+
+  /**
+   * 压缩成功后的统一收尾：计数、日志、胶囊与换任提示。
+   * 压缩返回瞬间的测量是中间态（被压区已从计量消失、宿主投影尚未结算），
+   * 因此这里只记「待校准」，tokensAfter／roi／roiHistory／lowRoiStreak 交由下一个步骤边界补写。
+   */
   function afterCompact(sid, by, r, extra) {
     const e = extra || {};
     const st = readState(sid) || readSessionState(sid);
@@ -109,28 +119,26 @@ export function createInlineEngine(runtime) {
     const beforeCount = Math.max(Number(logState.used) || 0, Number(st.compactions) || 0);
     st.compactions = beforeCount + 1;
     st.notified = {};
-    st.skipTierOnce = true;
     st.lastCompactAt = Date.now();
     const tokensBefore = r && typeof r.tokensBefore === 'number' ? r.tokensBefore : null;
-    const tokensAfter = r && typeof r.tokensAfter === 'number' ? r.tokensAfter : null;
-    const roi = roiOf(tokensBefore, tokensAfter);
-    st.tokensBefore = tokensBefore;
-    st.tokensAfter = tokensAfter;
-    st.roi = roi;
-    if (roi !== null) {
-      st.roiHistory = (Array.isArray(st.roiHistory) ? st.roiHistory : []).concat([roi]).slice(-3);
-    }
-    const floor = Number(cfg.roiFloor) || 0.30;
-    st.lowRoiStreak = lowRoiStreakOf(st.roiHistory, floor);
     const shadowed = r && r.result && r.result.shadowedTokenCount !== undefined
       ? r.result.shadowedTokenCount
       : (r && r.range && typeof r.range.shadowTokens === 'number' ? r.range.shadowTokens : null);
+    st.tokensBefore = tokensBefore;
+    st.tokensAfter = null;
+    st.roi = null;
+    st.pendingAfter = {
+      before: tokensBefore,
+      shadowed,
+      at: Date.now(),
+      range: r && r.range ? r.range.start + '-' + r.range.end : '',
+      count: st.compactions,
+    };
     noteInline('inline compacted ' + sid + ' by=' + by
       + ' seqs=' + (r && r.range ? r.range.start + '-' + r.range.end : '?')
       + ' shadowed=' + (shadowed === null ? '?' : shadowed)
       + ' tokensBefore=' + (tokensBefore === null ? '?' : tokensBefore)
-      + ' tokensAfter=' + (tokensAfter === null ? '?' : tokensAfter)
-      + ' roi=' + (roi === null ? '?' : roi.toFixed(3)));
+      + ' tokensAfter=pending');
     const max = Number(cfg.maxCompactionsPerSession) || 4;
     noteInline('换任计数 ' + st.compactions + '/' + max);
     const anchor = e.anchor || null;
@@ -143,13 +151,15 @@ export function createInlineEngine(runtime) {
       missing = probe.missing;
     }
     st.pendingMessages = Array.isArray(st.pendingMessages) ? st.pendingMessages : [];
+    const excerpts = Array.isArray(e.excerpts) ? e.excerpts : [];
     const capsuleText = renderCapsule({
       source: capsuleSource,
       body: capsuleSource === 'assistant' ? capsuleBody : '',
       anchor,
       anchorPath: e.anchorPath || '',
+      excerpts,
       before: tokensBefore,
-      after: tokensAfter,
+      after: null,
       shadow: shadowed,
       count: st.compactions,
       max,
@@ -157,16 +167,12 @@ export function createInlineEngine(runtime) {
       cfg,
     });
     const capsuleChars = capsuleText.length;
-    const capsuleLimit = Number(cfg.capsuleMaxChars) || 1600;
+    const capsuleLimit = CAPSULE_RENDER_MAX_CHARS;
     const capsuleOver = capsuleChars > capsuleLimit;
     if (capsuleOver) {
-      noteInline('capsule over budget ' + sid + ' chars=' + capsuleChars + ' limit=' + capsuleLimit);
+      noteInline('capsule over render budget ' + sid + ' chars=' + capsuleChars + ' limit=' + capsuleLimit);
     }
     st.pendingMessages.push({ kind: 'post-compact', text: capsuleText });
-    if (roi !== null && st.lowRoiStreak >= 2) {
-      st.pendingMessages.push({ kind: 'succession-advice', text: roiAdviceText(roi, floor, st.lowRoiStreak) });
-      noteInline('低收益换任建议 ' + sid + ' streak=' + st.lowRoiStreak);
-    }
     const prompted = Number(st.succession && st.succession.promptedCount) || 0;
     if (st.compactions >= max && prompted < st.compactions) {
       st.succession = { promptedCount: st.compactions, promptedAt: Date.now() };
@@ -177,17 +183,51 @@ export function createInlineEngine(runtime) {
     return { st, capsuleChars, capsuleOver, capsuleSource, capsuleBodyChars: capsuleBody.length };
   }
 
-  /** 强制压缩：先写锚点，再压缩；锚点失败只留痕，不阻断压缩。 */
+  /**
+   * 待校准消费：用宿主投影水位补写一次压缩后读数，并据实判定低收益建议。
+   * 记录由 settlePendingAfter 删除，重复调用不会再次累加。
+   */
+  function calibrateAfter(sid, st, used) {
+    const floor = Number(cfg.roiFloor) || 0.30;
+    const r = settlePendingAfter(st, used, floor);
+    if (!r.consumed) return null;
+    if (!r.measured) {
+      noteInline('inline compact after unmeasured ' + sid);
+      return r;
+    }
+    noteInline('inline compact calibrated ' + sid
+      + ' tokensAfter=' + st.tokensAfter
+      + ' roi=' + (r.roi === null ? '?' : r.roi.toFixed(3))
+      + ' streak=' + r.streak);
+    if (r.roi !== null && r.streak >= 2) {
+      st.pendingMessages = Array.isArray(st.pendingMessages) ? st.pendingMessages : [];
+      st.pendingMessages.push({ kind: 'succession-advice', text: roiAdviceText(r.roi, floor, r.streak) });
+      noteInline('低收益换任建议 ' + sid + ' streak=' + r.streak);
+    }
+    return r;
+  }
+
+  /** 强制压缩：先写锚点与摘录，再压缩；锚点与快照失败都只留痕，不阻断压缩。 */
   async function forceCompact(agent, sid, signal) {
     const snap = autoSnapshotFor(sid);
-    if (snap) snap.snapshotPath = writeSnapshot(snap).path;
+    if (snap) {
+      try { snap.snapshotPath = writeSnapshot(snap).path; }
+      catch (e) { noteInline('compact snapshot failed ' + sid + ': ' + msgOf(e)); }
+    }
+    const excerpts = excerptSentencesFor(sid);
     const anchor = writeAnchorFor(sid, agent.session, '');
     inline.inflight.add(sid);
     const started = Date.now();
     try {
       const r = await compactInTurn(ctx, agent, cfg, signal, { shadowTarget: cfg.shadowTarget });
       if (r && r.status === 'ok') {
-        afterCompact(sid, 'force', r, { session: agent.session, anchor: anchor.sections, anchorPath: anchor.path, source: 'mechanism' });
+        afterCompact(sid, 'force', r, {
+          session: agent.session,
+          anchor: anchor.sections,
+          anchorPath: anchor.path,
+          excerpts,
+          source: 'mechanism',
+        });
         return r;
       }
       noteInline('inline compact skipped ' + sid + ' reason=' + (r && r.reason ? r.reason : (r && r.status ? r.status : 'unknown')));
@@ -252,15 +292,15 @@ export function createInlineEngine(runtime) {
       noteTriggerSkip(sid, 'inline-inflight', null);
       return out;
     }
-    if (scheduler && scheduler.pending && typeof scheduler.pending.has === 'function' && scheduler.pending.has(sid)) {
-      noteTriggerSkip(sid, 'scheduler-pending', null);
-      return out;
-    }
     const stepNum = Number(payload && payload.step);
     const atTurnStart = !Number.isFinite(stepNum) || stepNum <= 1;
     const signal = payload ? payload.signal : undefined;
     const st = readState(sid);
     if (!st) return out;
+    const self = readSelfPressure(projCacheDir(), sid);
+    const { used, win } = normWater(self);
+    // D-171：压缩后读数在压缩返回瞬间不可信，在此步骤边界用宿主投影水位补写一次。
+    if (st.pendingAfter && calibrateAfter(sid, st, used)) saveState(sid, st);
 
     // 待注入消息：压缩后的胶囊、低收益建议与换任提示；由压缩入口写入，下一处步骤边界取走。
     if (Array.isArray(st.pendingMessages) && st.pendingMessages.length) {
@@ -271,8 +311,6 @@ export function createInlineEngine(runtime) {
 
     if (atTurnStart) {
       // 轮次起点：只注入水位行并记历史，不做到线判定、不压缩。
-      const self = readSelfPressure(projCacheDir(), sid);
-      const { used, win } = normWater(self);
       if (used === null || win === null) {
         out.push(contextMessage(pressureLineText(pressureOf({ used: null, win: null, cfg })), 'water'));
         noteTriggerSkip(sid, 'no-pressure', null);
@@ -284,14 +322,11 @@ export function createInlineEngine(runtime) {
       const profile = pressureOf({ used, win, cfg, history: st.usageHistory });
       out.push(contextMessage(pressureLineText(profile), 'water'));
       st.lastWaterAt = Date.now();
-      if (st.skipTierOnce) st.skipTierOnce = false;
       saveState(sid, st);
       return out;
     }
 
     // 轮内步骤分隔：到线判定与强制压缩只在此处发生。
-    const self = readSelfPressure(projCacheDir(), sid);
-    const { used, win } = normWater(self);
     if (used === null || win === null) {
       noteTriggerSkip(sid, 'no-pressure', null);
       return out;
@@ -305,12 +340,14 @@ export function createInlineEngine(runtime) {
     const hardCap = Number(cfg.maxCompactionsHardCap) || 6;
     const usedCompactions = Math.max(Number(cs.used) || 0, Number(st.compactions) || 0);
     const ratio = used / win;
-    // 闸门取 3 项冷却的最大值：summary 静默期、调度器冷却、轮内压缩冷却。
+    // 闸门取 3 项冷却的最大值：summary 静默期、落盘压缩时刻（state）、轮内压缩冷却。
     // 任一未结束即不判定，避免刚压缩完又在下一步重复压缩。
     const sinceSummary = cs.lastSummaryMs ? Date.now() - cs.lastSummaryMs : Infinity;
-    const quietLeft = sinceSummary < 120000 ? 120000 - sinceSummary : 0;
-    const schedCool = scheduler && typeof scheduler.cooldownLeft === 'function'
-      ? scheduler.cooldownLeft(sid, cfg.triggerCooldownMs)
+    const quietMs = Number(cfg.summaryQuietMs) > 0 ? Number(cfg.summaryQuietMs) : 120000;
+    const quietLeft = sinceSummary < quietMs ? quietMs - sinceSummary : 0;
+    const lastCompactAt = Number(st.lastCompactAt) || 0;
+    const stateCool = lastCompactAt && cfg.triggerCooldownMs
+      ? Math.max(0, Number(cfg.triggerCooldownMs) - (Date.now() - lastCompactAt))
       : 0;
     const action = judgeTrigger({
       used,
@@ -318,7 +355,7 @@ export function createInlineEngine(runtime) {
       bands: profile.bands,
       cfg,
       lockState: cs.lock,
-      cooldownLeftMs: Math.max(quietLeft, schedCool, inlineCooldownLeft(sid, cfg.triggerCooldownMs)),
+      cooldownLeftMs: Math.max(quietLeft, stateCool, inlineCooldownLeft(sid, cfg.triggerCooldownMs)),
       inTurn: true,
       notifiedSoft: !!(st.notified && st.notified.soft),
       notifiedAdvise: !!(st.notified && st.notified.advise),
@@ -328,8 +365,12 @@ export function createInlineEngine(runtime) {
       st.notified = st.notified && typeof st.notified === 'object' ? st.notified : {};
       st.notified[level] = Date.now();
       if (usedCompactions >= hardCap) {
-        out.push(contextMessage(successionCeilingText(usedCompactions, hardCap), 'succession'));
-        noteInline('压缩硬上限 ' + sid + ' level=' + level + ' count=' + usedCompactions + '/' + hardCap);
+        // 换任指令每会话只注入一条；压缩成功清空 notified 后才可能再提示。
+        if (!st.notified.ceiling) {
+          st.notified.ceiling = Date.now();
+          out.push(contextMessage(successionCeilingText(usedCompactions, hardCap), 'succession'));
+          noteInline('压缩硬上限 ' + sid + ' level=' + level + ' count=' + usedCompactions + '/' + hardCap);
+        }
         saveState(sid, st);
         return out;
       }
@@ -350,9 +391,23 @@ export function createInlineEngine(runtime) {
       return out;
     }
     if (usedCompactions >= hardCap) {
-      // 硬上限：连强制线也不再压缩，只发换任指令。每轮一条，去重留痕。
-      out.push(contextMessage(successionCeilingText(usedCompactions, hardCap), 'succession'));
+      // 硬上限：连强制线也不再压缩，只发换任指令。每会话一条，去重留痕。
+      if (!(st.notified && st.notified.ceiling)) {
+        st.notified = st.notified && typeof st.notified === 'object' ? st.notified : {};
+        st.notified.ceiling = Date.now();
+        out.push(contextMessage(successionCeilingText(usedCompactions, hardCap), 'succession'));
+        noteInline('压缩硬上限 ' + sid + ' count=' + usedCompactions + '/' + hardCap);
+      }
       noteTriggerSkip(sid, 'compaction-limit', ratio);
+      saveState(sid, st);
+      return out;
+    }
+    // 强制线唯一校验未闭合工具调用：>1 个（或取不到）说明切点落在工具调用中间，跳过并留痕。
+    // 非强制线（助手入口）不再校验，避免把「表面未同步」误判成拒绝。
+    const open = openToolCalls(agent.session);
+    if (!Number.isFinite(open) || open > 1) {
+      noteTriggerSkip(sid, 'open-tool-calls', ratio);
+      noteInline('inline compact skipped ' + sid + ' reason=open-tool-calls count=' + (Number.isFinite(open) ? open : '未核'));
       saveState(sid, st);
       return out;
     }
@@ -424,9 +479,7 @@ export function createInlineEngine(runtime) {
       anchorWritable,
       lockState: cs.lock || 'clean',
       inflight: inline.inflight.has(sid),
-      schedulerPending: !!(scheduler && scheduler.pending && typeof scheduler.pending.has === 'function' && scheduler.pending.has(sid)),
       pendingCompaction: false,
-      pendingToolCalls: openToolCalls(agent.session),
       compactionCount: Math.max(Number(cs.used) || 0, Number(st.compactions) || 0),
       maxCompactions: Number(cfg.maxCompactionsPerSession) || 4,
     });
@@ -438,10 +491,10 @@ export function createInlineEngine(runtime) {
       if (snap) snap.snapshotPath = writeSnapshot(snap).path;
       const anchor = writeAnchorFor(sid, agent.session, a.status);
       const r = await compactInTurn(ctx, agent, cfg, signalOf(exec), {
+        full: cfg.fullCompact !== false,
         shadowTarget,
         keepMinMessages: cfg.keepMinMessages,
         minKeepTokens: cfg.minKeepTokens,
-        boundary: a.boundary === true,
         mode,
       });
       if (r && r.status === 'ok') {
@@ -469,7 +522,6 @@ export function createInlineEngine(runtime) {
           capsuleOverBudget: compacted.capsuleOver,
           remaining: Math.max(0, max - (Number(after.compactions) || 0)),
           mode,
-          boundary: a.boundary === true,
         };
       }
       noteInline('inline compact skipped ' + sid + ' reason=' + (r && r.reason ? r.reason : (r && r.status ? r.status : 'unknown')));

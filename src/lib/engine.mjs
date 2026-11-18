@@ -78,17 +78,8 @@ function balancedBefore(session, seq) {
   return pending === 0;
 }
 
-/**
- * 选择压缩范围：跳过表面第一个系统消息，保留尾部，切点必须平衡。
- * 保留量的取值规则：在下列各项中取最大值。
- * 第一项为 used×(1−shadowTarget)。
- * 其余为最近 keepMinMessages 条消息的 token 和，以及 minKeepTokens。
- * 保留量不超过 used 的 60%，以免压缩后仍超出阈值。
- * 在理想切点 ±15% 内优先选用户消息起点，其次轮末，再次任意平衡位置。
- * 切点平衡指不跨未闭合的工具调用；跨过去会丢掉与调用配对的结果。
- * 返回 { start, end, keptTokens, shadowTokens }；选不出返回 null。
- */
-export function selectCompactionRange(session, measurement, plan) {
+/** 校验测量节点与表面节点一一对应；通过时返回表面、token 与起始下标。 */
+function surfaceLayout(session, measurement) {
   if (!session || !session.surface || !measurement || !Array.isArray(measurement.nodes)) return null;
   const priced = measurement.nodes;
   const surface = session.surface.nodes || [];
@@ -98,15 +89,71 @@ export function selectCompactionRange(session, measurement, plan) {
   }
   const head = eventOf(session, surface[0]);
   const firstIdx = head && head.type === 'system/message' ? 1 : 0;
+  return { surface, priced, firstIdx, tokens: priced.map((node) => Number(node.tokens) || 0) };
+}
+
+/**
+ * 全量压缩范围：起点为系统头之后第一个节点，终点为当前步之前一个节点。
+ * 切点固定取表面最后一个节点，不向前搜索：助手线压缩发生在工具调用内部，
+ * 此时最后一个节点就是当前步的 assistant 消息。该节点必须是含 tool-call 的
+ * assistant/message，否则返回 null，不做猜测。
+ * 当前步的工具调用位于割点之后，不跨割点，满足宿主的配对平衡要求。
+ * 不做保留条数下限、遮蔽比目标与 token 下限。
+ * 返回 { start, end, keptTokens, shadowTokens }；结构不符合预期返回 null。
+ */
+export function selectFullRange(session, measurement) {
+  const layout = surfaceLayout(session, measurement);
+  if (!layout) return null;
+  const { surface, firstIdx, tokens } = layout;
+  const cut = surface.length - 1;
+  if (cut <= firstIdx + 1) return null;
+  const step = eventOf(session, surface[cut]);
+  if (!step || step.type !== 'assistant/message') return null;
+  const content = step.data && step.data.message ? step.data.message.content : null;
+  if (!Array.isArray(content) || !content.some((block) => block && block.type === 'tool-call')) return null;
+
+  // 后缀和：suffix[i] 为第 i 条起到末尾的 token 合计。
+  const suffix = new Array(surface.length + 1);
+  suffix[surface.length] = 0;
+  for (let i = surface.length - 1; i >= 0; i -= 1) suffix[i] = suffix[i + 1] + tokens[i];
+  return {
+    start: surface[firstIdx],
+    end: surface[cut - 1],
+    keptTokens: suffix[cut],
+    shadowTokens: suffix[firstIdx] - suffix[cut],
+  };
+}
+
+/**
+ * 选择压缩范围：跳过表面第一个系统消息，切点必须平衡。
+ * plan.full 为 true 时先取全量范围；全量范围不成立（表面结构不符合预期）
+ * 时回退到保留尾部策略，避免压缩能力丢失。
+ * 保留量的取值规则：在下列各项中取最大值。
+ * 第一项为 used×(1−shadowTarget)。
+ * 其余为最近 keepMinMessages 条消息的 token 和，以及 minKeepTokens。
+ * 保留量不超过 used 的 60%，以免压缩后仍超出阈值。
+ * 在理想切点 ±15% 内优先选用户消息起点，其次轮末，再次任意平衡位置。
+ * 切点平衡指不跨未闭合的工具调用；跨过去会丢掉与调用配对的结果。
+ * 返回 { start, end, keptTokens, shadowTokens }；选不出返回 null。
+ */
+export function selectCompactionRange(session, measurement, plan) {
+  const layout = surfaceLayout(session, measurement);
+  if (!layout) return null;
+  const { surface, firstIdx, tokens } = layout;
   if (firstIdx >= surface.length - 1) return null;
 
-  const tokens = priced.map((node) => Number(node.tokens) || 0);
+  const p = plan || {};
+  if (p.full === true) {
+    const full = selectFullRange(session, measurement);
+    if (full) return full;
+    // 全量范围不成立时继续走尾部策略，由下方逻辑决定是否可压。
+  }
+
   const sum = tokens.reduce((a, b) => a + b, 0);
   const used = Number.isFinite(measurement.totalTokens) && measurement.totalTokens > 0
     ? measurement.totalTokens : sum;
   if (!(used > 0)) return null;
 
-  const p = plan || {};
   const shadowTarget = Number.isFinite(p.shadowTarget) && p.shadowTarget >= 0 && p.shadowTarget < 1
     ? p.shadowTarget : 0.55;
   const keepMinMessages = Number.isFinite(p.keepMinMessages) && p.keepMinMessages > 0
@@ -184,8 +231,11 @@ function anySignal(signals) {
 
 /**
  * 轮内同步压缩：不投用户消息，不改变轮次。
- * @param {object} plan {shadowTarget, keepMinMessages, minKeepTokens, boundary, mode}
- * @returns {Promise<{status:'ok',range:object,result:object,tokensBefore:number|null,tokensAfter:number|null}|{status:'no-range'}>}
+ * @param {object} plan {full, shadowTarget, keepMinMessages, minKeepTokens, mode}
+ *   full 为 true 时助手线取全量范围；全量范围不成立时回退尾部策略。
+ * @returns {Promise<{status:'ok',range:object,result:object,tokensBefore:number|null,tokensAfter:null}|{status:'no-range'}>}
+ *   tokensAfter 恒为 null：压缩返回瞬间的测量是中间态（被压区已从计量消失、宿主投影尚未结算），
+ *   读数由调用方在下一个步骤边界用宿主投影水位校准（D-171）。
  */
 export async function compactInTurn(ctx, agent, cfg, signal, plan) {
   const compaction = compactionOf(ctx, agent);
@@ -213,10 +263,10 @@ export async function compactInTurn(ctx, agent, cfg, signal, plan) {
   const tokensBefore = typeof measurement.totalTokens === 'number' ? measurement.totalTokens : null;
   const options = plan || {};
   const range = selectCompactionRange(session, measurement, {
+    full: options.full === true,
     shadowTarget: options.shadowTarget !== undefined ? options.shadowTarget : (cfg && cfg.shadowTarget),
     keepMinMessages: options.keepMinMessages !== undefined ? options.keepMinMessages : (cfg && cfg.keepMinMessages),
     minKeepTokens: options.minKeepTokens !== undefined ? options.minKeepTokens : (cfg && cfg.minKeepTokens),
-    boundary: options.boundary,
   });
   if (!range) return { status: 'no-range', reason: 'retained-all' };
 
@@ -228,14 +278,9 @@ export async function compactInTurn(ctx, agent, cfg, signal, plan) {
   if (timer && typeof timer.unref === 'function') timer.unref();
   try {
     const result = await compaction.compactRegion(range.start, range.end, agent, anySignal([signal, ac.signal]));
-    let tokensAfter = null;
-    try {
-      let header2;
-      try { header2 = typeof session.requestHeader === 'function' ? session.requestHeader() : undefined; } catch { header2 = undefined; }
-      const after = header2 ? meter.measure(session, header2) : meter.measure(session);
-      if (after && typeof after.totalTokens === 'number') tokensAfter = after.totalTokens;
-    } catch { tokensAfter = null; }
-    return { status: 'ok', range, result, tokensBefore, tokensAfter };
+    // 不再在压缩返回后立刻测量：此时被压区已从计量消失、摘要节点与宿主投影尚未结算，
+    // 读到的是中间态（D-171）。压缩后读数统一由主链在下一个步骤边界校准。
+    return { status: 'ok', range, result, tokensBefore, tokensAfter: null };
   } catch (e) {
     if (timedOut && !(signal && signal.aborted)) {
       throw new InlineCompactionError(INLINE_TIMEOUT, '现象：轮内压缩超时。原因：超过 ' + timeoutMs + ' ms 仍未返回。处置：缩短压缩范围后重试。', e);

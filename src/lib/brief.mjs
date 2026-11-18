@@ -21,7 +21,7 @@ export function stampTz(ms) {
 /** 会话短号：去掉 session- 前缀后取末 8 位。 */
 function sidShort(sid) {
   const s = sid.indexOf('session-') === 0 ? sid.slice(8) : sid;
-  return s.slice(0, 8);
+  return s.slice(-8);
 }
 
 function thousands(n) {
@@ -43,9 +43,10 @@ export function composeBrief(input) {
   } else {
     const pct = (input.selfUsed / input.selfWin) * 100;
     const bands = bandsFor(cfg, input.selfWin);
-    const tail = input.selfUsed >= bands.hard ? '已过强制线，插件将强制压缩'
-      : input.selfUsed >= bands.advise ? '已过建议线，插件只提示，由助手择机压缩'
-        : input.selfUsed >= bands.soft ? '已过整理线，插件只提示，由助手择机压缩' : '可继续';
+    const tail = bands === null ? '不判定（窗口读不到）'
+      : input.selfUsed >= bands.hard ? '已过强制线，插件将强制压缩'
+        : input.selfUsed >= bands.advise ? '已过建议线，插件只提示，由助手择机压缩'
+          : input.selfUsed >= bands.soft ? '已过整理线，插件只提示，由助手择机压缩' : '可继续';
     out.push("水位   " + pct.toFixed(1) + "%（" + thousands(input.selfUsed) + " / " + thousands(input.selfWin) + "）→ " + tail);
   }
   const gate = input.gate;

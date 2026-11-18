@@ -7,13 +7,14 @@
  * 任何一项不通过，整体不落任何写操作，只返回中文原因。
  */
 import fs from 'node:fs';
-import { NL, readUtf8 } from './text.mjs';
+import { NL, readUtf8, writeFileAtomic } from './text.mjs';
 import { lineageKeyOf, loadOffice, nextName, registerHolder, stampNow } from './office.mjs';
 import { checkConsent, consumedConsent } from './consent.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { resolveWorkspaceFor, promptFor, workspaceIdOfPath, workspacePathOf } from './session-ops.mjs';
 import { bandsFor, normWater } from './pressure.mjs';
+import { nextSectionCheck } from './lint.mjs';
 
 /** 交接里不得残留的占位符。 */
 const HANDOVER_PLACEHOLDERS = ['待填', 'TODO', '（建完后填）', '<填'];
@@ -30,34 +31,6 @@ function currentGlobalId(ws) {
   } catch { return ''; }
 }
 
-/**
- * 找接任指令节：含「## 下一步」或「## 2.」这类标题；没有标题时接受 §2 的写法。
- * 判据与 ho_status(view="gate") 的交接体检一致：这一节至少要有一个条目（列表、表格或编号行）。
- */
-function nextSectionOf(text) {
-  const lines = text.split(NL);
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (!l.startsWith('## ')) continue;
-    if (l.indexOf('下一步') !== -1 || /^##\s*2(?:[.、\s]|$)/.test(l)) { start = i; break; }
-  }
-  if (start === -1) {
-    if (/§\s*2/.test(text)) return { ok: true };
-    return { ok: false, reason: '缺少接任指令节：应有「## 下一步」或「## 2.」一节' };
-  }
-  const rows = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    if (lines[i].startsWith('## ')) break;
-    const t = lines[i].trim();
-    if (/^[-*]\s+/.test(t)) rows.push(t);
-    else if (/^\|/.test(t) && t.indexOf('---') === -1) rows.push(t);
-    else if (/^\d+[.、]\s+/.test(t)) rows.push(t);
-  }
-  if (!rows.length) return { ok: false, reason: '「下一步」一节没有列出任何条目' };
-  return { ok: true };
-}
-
 /** 交接结构检查（只判结构）：返回缺项列表，空数组表示通过。 */
 function auditHandover(file) {
   const problems = [];
@@ -70,7 +43,8 @@ function auditHandover(file) {
   let text = '';
   try { text = readUtf8(file).replace(/^\uFEFF/, ''); } catch (e) { return ['交接文件读取失败：' + msgOf(e)]; }
   if (!text.trim()) return ['交接文件为空：' + file];
-  const next = nextSectionOf(text);
+  // 与 ho_status(view="gate") 的交接体检共用同一判据（D-130）：体检通过即换任结构通过。
+  const next = nextSectionCheck(text);
   if (!next.ok) problems.push(next.reason);
   for (const p of HANDOVER_PLACEHOLDERS) {
     if (text.indexOf(p) !== -1) problems.push('仍有占位符：' + p);
@@ -80,8 +54,10 @@ function auditHandover(file) {
 
 /**
  * 换任硬闸：以 rotate 留痕为准。输入均为已取好的事实，纯函数，便于单测。
- * 7 项：rotate 留痕、归档副本与 sha256、归档先于新交接、交接未被改动、
- * 结构体检、压缩锁、压缩排队与未闭合工具调用。
+ * 共 9 项（原交接不存在、无需归档时跳过「归档先于新交接」，为 8 条）：
+ * ① rotate 留痕；② 新交接写入时刻；③ 归档副本与 sha256；
+ * ④ 归档先于新交接；⑤ 交接未被改动；⑥ 结构体检；
+ * ⑦ 压缩锁；⑧ 无进行中的压缩；⑨ 无未闭合工具调用。
  * @param {{flow?:object, archiveSha256?:string, archiveMtimeMs?:number, handoverMtimeMs?:number,
  *   lint?:object, lock?:string, compactionPending?:boolean, openToolCalls?:number}} input
  * @returns {{ok:boolean, lines:string[]}}
@@ -118,7 +94,7 @@ export function judgeRotateGate(input) {
   return { ok, lines };
 }
 
-/** 在旧会话的交接末尾追加「换任登记」：先备份到同目录 .bak，再追加。 */
+/** 在旧会话的交接末尾追加「换任登记」：先备份到同目录 .bak，再原子写回。 */
 function appendSuccessionBlock(file, lines) {
   const cur = readUtf8(file);
   const bom = cur.charCodeAt(0) === 0xFEFF ? '\uFEFF' : '';
@@ -126,7 +102,7 @@ function appendSuccessionBlock(file, lines) {
   fs.copyFileSync(file, file + '.bak');
   const gap = body.endsWith(NL) ? NL : NL + NL;
   const block = ['## 换任登记', ''].concat(lines).join(NL);
-  fs.writeFileSync(file, bom + body + gap + block + NL, 'utf8');
+  writeFileAtomic(file, bom + body + gap + block + NL);
   return file + '.bak';
 }
 
@@ -219,7 +195,7 @@ export async function runSuccession(env, exec, opts) {
     const { used, win } = normWater(self);
     if (used !== null && win !== null) {
       const bands = bandsFor(env.cfg, win);
-      if (used < bands.advise) {
+      if (bands !== null && used < bands.advise) {
         return reject('本会话水位 ' + used + ' token，未到建议线 ' + bands.advise + '，通常无需换任；确需换任请传 force=true。');
       }
     }
@@ -246,7 +222,10 @@ export async function runSuccession(env, exec, opts) {
   // 「全局 id」填**现任全局**：项目与杂项换任时，已交出的旧会话不是全局，不能顶替这个位置。
   let prompt = '';
   try {
-    const globalId = kind === 'global' ? selfId : (currentGlobalId(ws) || selfId);
+    // 全局名册在体系根上；杂项换任时 ws 是任务工作区，不能拿它找全局。
+    const officeWs = typeof env.resolveWs === 'function' ? String(env.resolveWs(exec) || ws) : ws;
+    let globalId = kind === 'global' ? selfId : currentGlobalId(officeWs);
+    if (!globalId) globalId = '（未登记全局，勿直发）';
     const base = promptFor(env, { ws, kind, project, task, title: name, sessionId: '', globalSessionId: globalId, extra: '' });
     prompt = base + NL + NL + [
       '接任交接：' + handoverFile,

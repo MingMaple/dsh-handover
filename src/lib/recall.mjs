@@ -2,6 +2,7 @@
  * 检索：多路召回（字面、正则、分词、结构）加倒数排名融合，重复命中合并为组。
  * 索引只在内存中构建，不落盘；原文一律来自会话日志。
  */
+import vm from 'node:vm';
 import { visibleTextOf, toolCallMap } from './events.mjs';
 import { deriveSegments, segmentForSeq } from './segments.mjs';
 import { estimateTokens } from './facts.mjs';
@@ -11,6 +12,8 @@ const RRF_K = 60;
 const MERGE_SCAN = 300;
 const MERGE_JACCARD = 0.85;
 const MODES = ['auto', 'literal', 'regex', 'bm25', 'structural'];
+/** 单次正则扫描的墙钟上限：超时即放弃本轮，避免灾难性回溯卡死插件线程。 */
+const REGEX_TIMEOUT_MS = 500;
 
 const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 const STOP = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'http', 'https', 'true', 'false']);
@@ -420,29 +423,48 @@ function literalHits(corpus, query, limit, spec) {
 
 /**
  * 正则模式校验：返回拒绝原因，可用时返回空串。
- * 拒绝超长模式与明显可回溯的嵌套量词，避免检索把进程拖死。
+ * 拒绝超长模式、嵌套量词与「交替分组 + 量词」，这些是回溯复杂度的主要来源。
  */
 export function regexIssue(pattern) {
   const p = String(pattern || '');
   if (!p) return '模式为空';
   if (p.length > 200) return '模式长度 ' + p.length + ' 超过 200 个字符，请缩短或改用 mode=literal';
   if (/\([^)]*[+*]\)\s*[+*]/.test(p)) return '模式含嵌套量词，可能回溯爆炸，请改写';
+  // (a|aa)+、(a|b)*、(?:x|yy){2,} 这类交替分组后接量词会指数级回溯，直接拒绝。
+  if (/\([^)]*\|[^)]*\)\s*(?:[+*]|\{\d*,?\d*\})/.test(p)) {
+    return '模式含「交替分组 + 量词」，可能灾难性回溯，请改写或改用 mode=literal';
+  }
   try { new RegExp(p, 'i'); } catch (e) { return '模式无法编译：' + (e && e.message ? e.message : e); }
   return '';
 }
 
+/**
+ * 在独立 VM 上下文里执行正则扫描，超时即中断。
+ * 返回 { hits:[{k,pos}], timedOut }；超时前已得到的命中保留。
+ */
+function regexScan(texts, pattern) {
+  const hits = [];
+  if (!texts.length) return { hits, timedOut: false };
+  try {
+    vm.runInNewContext(
+      'for (let k = 0; k < texts.length; k++) { const m = re.exec(texts[k]); if (m) hits.push({ k: k, pos: m.index }); }',
+      { texts, hits, re: new RegExp(String(pattern), 'i') },
+      { timeout: REGEX_TIMEOUT_MS, displayErrors: false },
+    );
+    return { hits, timedOut: false };
+  } catch (e) {
+    const timedOut = !!(e && (e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT' || /timed out|timeout/i.test(String(e.message || e))));
+    return { hits, timedOut };
+  }
+}
+
 /** 正则召回：模式不合格时返回空列表；原因由调用方通过 regexIssue 取。 */
 function regexHits(corpus, pattern, limit) {
-  if (regexIssue(pattern)) return { hits: [], total: 0, all: [] };
-  const re = new RegExp(String(pattern), 'i');
-  const out = [];
-  for (const doc of corpus) {
-    const m = re.exec(doc.text);
-    if (!m) continue;
-    out.push({ seq: doc.seq, pos: m.index, score: 2 });
-  }
+  if (regexIssue(pattern)) return { hits: [], total: 0, all: [], timedOut: false };
+  const scan = regexScan(corpus.map((doc) => doc.text), pattern);
+  const out = scan.hits.map((one) => ({ seq: corpus[one.k].seq, pos: one.pos, score: 2 }));
   out.sort((a, b) => b.score - a.score || a.seq - b.seq);
-  return { hits: out.slice(0, limit || 30), total: out.length, all: out };
+  return { hits: out.slice(0, limit || 30), total: out.length, all: out, timedOut: scan.timedOut };
 }
 
 /** 分词召回：只对查询词倒排并集里的文档打分，整句命中另给固定加权。 */
@@ -727,9 +749,11 @@ export function search(records, opts) {
   const perRoute = { literal: 0, regex: 0, bm25: 0, structural: 0 };
   let lists = [];
   let route = mode;
+  let regexTimedOut = false;
   if (mode === 'regex') {
     const r = regexHits(index.corpus, query, 40);
     perRoute.regex = r.total;
+    regexTimedOut = r.timedOut === true;
     lists = [r.all];
   } else if (mode === 'literal') {
     const r = literalHits(index.corpus, query, 40, spec);
@@ -770,7 +794,9 @@ export function search(records, opts) {
     groups,
     index: index.key,
     segments: index.segments,
-    rejected: mode === 'regex' ? regexIssue(query) : '',
+    rejected: mode === 'regex' ? (regexIssue(query) || (regexTimedOut
+      ? '正则扫描超过 ' + REGEX_TIMEOUT_MS + ' 毫秒已中止，请缩小范围或改用 mode=literal'
+      : '')) : '',
     suggestion: empty ? {
       segments: index.segments.slice(-5).map((s) => ({ index: s.index, label: s.label, range: s.fromSeq + '-' + s.toSeq })),
       keywords: suggestKeywords(index),

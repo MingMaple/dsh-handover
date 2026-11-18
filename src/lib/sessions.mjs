@@ -195,7 +195,10 @@ export function scanSessions(opts) {
   const unknown = [];
   for (const r of rows) {
     if (r.used === null) unknown.push(r.sid);
-    else if (r.win && r.used >= bandsFor(cfg, r.win).soft) hot.push(r.sid);
+    else if (r.win) {
+      const bands = bandsFor(cfg, r.win);
+      if (bands !== null && r.used >= bands.soft) hot.push(r.sid);
+    }
   }
   const pool = rows.filter((r) => r.kind === "平级" && r.project !== null && r.project !== "-");
   const byProject = new Map();

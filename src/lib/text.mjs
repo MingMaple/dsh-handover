@@ -1,6 +1,7 @@
 /** 文本与路径小工具：无第三方依赖，全部同步 IO，仅供工具调用内部使用。 */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export const NL = String.fromCharCode(10);
 
@@ -55,11 +56,17 @@ export function assertSafeName(name, label, maxLen) {
 const JSON_DIR_TTL_MS = 30000;
 const jsonDirCache = new Map();
 
-/** 目录签名：名字数 + *.json 总字节 + 最新 mtimeMs。任一变化都说明需要重解析。 */
+/** 最新 mtime 文件的原文哈希：同长度、同 mtime 的就地改写靠它识别。 */
+function digestOf(p) {
+  try { return crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex'); } catch { return ''; }
+}
+
+/** 目录签名：名字数 + *.json 总字节 + 最新 mtimeMs + 最新文件的原文哈希。任一变化都说明需要重解析。 */
 function dirSignature(dir, names) {
   let count = 0;
   let bytes = 0;
   let latest = 0;
+  let latestName = '';
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     try {
@@ -67,10 +74,10 @@ function dirSignature(dir, names) {
       if (!st.isFile()) continue;
       count++;
       bytes += st.size;
-      if (st.mtimeMs > latest) latest = st.mtimeMs;
+      if (st.mtimeMs > latest) { latest = st.mtimeMs; latestName = name; }
     } catch { /* 跳过坏文件 */ }
   }
-  return { count, bytes, latest };
+  return { count, bytes, latest, latestName, latestHash: latestName ? digestOf(path.join(dir, latestName)) : '' };
 }
 
 export function readJsonDir(dir) {
@@ -82,13 +89,14 @@ export function readJsonDir(dir) {
   try { names = fs.readdirSync(dir); } catch { return []; }
   if (hit) {
     const sig = dirSignature(dir, names);
-    if (sig.count === hit.sig.count && sig.bytes === hit.sig.bytes && sig.latest === hit.sig.latest) {
+    if (sig.count === hit.sig.count && sig.bytes === hit.sig.bytes && sig.latest === hit.sig.latest
+      && sig.latestHash === hit.sig.latestHash) {
       hit.at = now;
       return hit.items;
     }
   }
   const out = [];
-  const sig = { count: 0, bytes: 0, latest: 0 };
+  const sig = { count: 0, bytes: 0, latest: 0, latestName: '', latestHash: '' };
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const p = path.join(dir, name);
@@ -97,10 +105,11 @@ export function readJsonDir(dir) {
       if (!st.isFile()) continue;
       sig.count++;
       sig.bytes += st.size;
-      if (st.mtimeMs > sig.latest) sig.latest = st.mtimeMs;
+      if (st.mtimeMs > sig.latest) { sig.latest = st.mtimeMs; sig.latestName = name; }
       out.push({ name, path: p, data: JSON.parse(fs.readFileSync(p, 'utf8')), mtimeMs: st.mtimeMs });
     } catch { /* 跳过坏文件 */ }
   }
+  if (sig.latestName) sig.latestHash = digestOf(path.join(dir, sig.latestName));
   jsonDirCache.set(key, { at: Date.now(), sig, items: out });
   return out;
 }

@@ -3,7 +3,7 @@
  *   phase（默认）：水位、压缩、段索引、快照、判据与建议动作
  *   pressure：压力遥测（水位、余量、增速、剩余轮数、分档线与档位）
  *   brief：水位、闸门、会话清点、交接漂移、阶段建议
- *   diag：服务可解析性、调度器、初始化错误、角色与工具集
+ *   diag：服务可解析性、初始化错误、角色与工具集
  *   drift：交接漂移体检
  *   tokens：按会话 id 统计轮数、步数、每步 token
  *   gate：通用约束条闸门、交接体检与体系注册路径检查
@@ -27,7 +27,6 @@ import { deriveSegments, segmentStats, gainRatio } from '../lib/segments.mjs';
 import { listSnapshots } from '../lib/checkpoint.mjs';
 import { anchorPathFor, readAnchor } from '../lib/anchor.mjs';
 import { estimateTokens } from '../lib/facts.mjs';
-import { backfillStats } from '../lib/resume.mjs';
 import { findLog, decodeLog, turnStarts } from '../lib/zstd-log.mjs';
 import { activeConsentsFor, formatConsentLine } from '../lib/consent.mjs';
 import { capText, STATUS_MAX_LINES } from '../lib/limit.mjs';
@@ -123,19 +122,19 @@ function staleNoteFrom(sid, lastSummaryMs) {
 function phaseText(env, args, exec) {
   const meId = env.selfId(exec);
   const self = readSelfPressure(env.cacheDir(), meId || '');
-  const { win } = normWater(self);
-  const real = self.used === null || self.win === null ? null : (self.used / self.win) * 100;
+  const { used: realUsed, win } = normWater(self);
+  const real = realUsed === null || win === null ? null : (realUsed / win) * 100;
   const ratio = typeof args.simulateRatio === 'number' ? args.simulateRatio : (real === null ? null : real / 100);
   const used = typeof args.simulateRatio === 'number' && win
     ? Math.round(args.simulateRatio * win)
     : (typeof self.used === 'number' && Number.isFinite(self.used) ? self.used : null);
-  const bands = win ? bandsFor(env.cfg, win) : null;
+  const bands = bandsFor(env.cfg, win);
   // 先取事件记录，再取压缩状态：压缩状态会复用记录缓存的派生结果，同一份日志只解一遍。
   const src = eventSourceOf(meId, exec);
   // 压缩状态只取一次：后面 count / lock / staleNote 全部复用它，不再各解一遍日志。
   const st = typeof env.compactionState === 'function' ? env.compactionState(exec) : null;
   const count = st
-    ? { used: st.used, lock: st.lock, lastSummaryMs: st.lastSummaryMs }
+    ? { used: st.used, lock: st.lock, lastSummaryMs: st.lastSummaryMs, note: st.note || '' }
     : env.compactionCount(exec);
   const lock = st ? st.lock : env.lockState(exec);
   const segments = segmentsOf(meId, src.records);
@@ -158,7 +157,6 @@ function phaseText(env, args, exec) {
   });
   const adv = decide({ used, win, bands, cfg: env.cfg, lockState: lock, macro });
   const snaps = listSnapshots(meId);
-  const bf = backfillStats(meId);
   const lastSnapRatio = snaps.latestPath ? snapshotRatioOf(snaps.latestPath) : null;
   const drop = lastSnapRatio !== null && ratio !== null ? lastSnapRatio - ratio : null;
   const state = typeof env.sessionState === 'function' ? env.sessionState(exec) : null;
@@ -171,17 +169,16 @@ function phaseText(env, args, exec) {
   out.push('压缩      ' + count.used + ' 次 · 换任计数 ' + Math.max(count.used, (state && state.compactions) || 0) + '/' + limit + (count.note ? '  ' + count.note : ''));
   out.push('锁        ' + lock);
   out.push('段索引    ' + (src.source === 'none' ? '未核' : stats.count + ' 段 · 累计遮蔽 ' + stats.tokens + ' token · 最近 ' + (stats.lastAt || '未核')));
-  out.push('快照      ' + (snaps.count ? snaps.count + ' 份 · 最近 ' + snaps.latest : '未核') + ' · 回填 ' + (bf.total ? bf.total + ' 次' : '未核'));
+  out.push('快照      ' + (snaps.count ? snaps.count + ' 份 · 最近 ' + snaps.latest : '未核'));
   out.push('最近压缩  ' + (count.lastSummaryMs ? stampTz(count.lastSummaryMs) : '未核'));
   out.push('压缩回落  ' + (drop === null ? '未核' : (drop >= 0 ? '回落 ' + (Math.round(drop * 1000) / 10) + ' 点' : '回升 ' + (Math.round(-drop * 1000) / 10) + ' 点')));
   out.push('分档      ' + (bands
     ? 'soft ' + kText(bands.soft) + ' · advise ' + kText(bands.advise) + ' · hard ' + kText(bands.hard) + ' · 宿主 ' + kText(bands.host)
-    : '未核（窗口读不到）'));
+    : '不判定（窗口读不到）'));
   if (state) {
     const soft = state.notified && state.notified.soft;
     const advise = state.notified && state.notified.advise;
-    out.push('提示状态  soft=' + (soft ? '已提示' : '未提示') + ' · advise=' + (advise ? '已提示' : '未提示')
-      + (state.skipTierOnce ? ' · 压缩后跳过一轮' : ''));
+    out.push('提示状态  soft=' + (soft ? '已提示' : '未提示') + ' · advise=' + (advise ? '已提示' : '未提示'));
     if (state.succession && state.succession.promptedAt) {
       out.push('换任提示  ' + stampTz(state.succession.promptedAt) + ' · 计数 ' + state.succession.promptedCount + '/' + limit);
     }
@@ -190,7 +187,7 @@ function phaseText(env, args, exec) {
     const si = env.storeInfo(exec);
     if (si) out.push('存储      ' + si.dir + (si.staged ? '（暂存目录）' : '（会话目录内）') + ' · 文件 ' + (si.files.length ? si.files.join('、') : '无'));
   }
-  out.push('判据      强制线 ' + (bands ? kText(bands.hard) : '未核') + (adv.action === 'force' ? '（命中）' : '（未命中）')
+  out.push('判据      强制线 ' + (bands ? kText(bands.hard) : '不判定') + (adv.action === 'force' ? '（命中）' : '（未命中）')
     + ' · 宏观重置 ' + (macro.hit ? '命中' : '0/4'));
   if (macro.hit) out.push('追加理由  ' + macro.reasons.join('；'));
   out.push('建议      ' + adv.action + ' —— ' + adv.reason);
@@ -226,7 +223,9 @@ function pressureText(env, args, exec) {
   out.push('余量      ' + p.headroom + ' token');
   out.push('增速      ' + (p.growth === null ? '未核（样本不足）' : (p.growth > 0 ? '+' : '') + p.growth + ' token/轮'));
   out.push('剩余轮数  ' + (p.remainingTurns === null ? '未核' : p.remainingTurns + ' 轮'));
-  out.push('分档线    soft ' + p.bands.soft + ' · advise ' + p.bands.advise + ' · hard ' + p.bands.hard + ' · 宿主 ' + p.bands.host);
+  out.push('分档线    ' + (p.bands
+    ? 'soft ' + p.bands.soft + ' · advise ' + p.bands.advise + ' · hard ' + p.bands.hard + ' · 宿主 ' + p.bands.host
+    : '不判定（窗口读不到）'));
   out.push('当前档位  ' + p.level + '（' + LEVEL_GLOSS[p.level] + '）');
   out.push('建议      ' + LEVEL_ADVICE[p.level]);
   return out;
@@ -245,7 +244,7 @@ function briefText(env, args, exec) {
     silentHours: env.cfg.sessionScanHours,
   });
   const drift = computeDrift({ ws, cacheDir: env.cacheDir(), slack: env.cfg.driftSlack, all: false });
-  const bands = self.win !== null ? bandsFor(env.cfg, self.win) : null;
+  const bands = bandsFor(env.cfg, self.win);
   const adv = decide({ used: self.used, win: self.win, bands, cfg: env.cfg, lockState: 'unknown' });
   const selfPercent = self.used === null || self.win === null ? null : (self.used / self.win) * 100;
   const ok = gate.ok && (selfPercent === null || !bands || self.used < bands.advise);
@@ -264,12 +263,11 @@ function briefText(env, args, exec) {
   return lines;
 }
 
-function diagText(env, state, exec) {
+function diagText(env, exec) {
   const out = [];
   const meId = env.selfId(exec);
   out.push('会话      ' + (meId || '?'));
   if (typeof env.version === 'function') out.push('版本      ' + env.version());
-  out.push('调度器    ' + (state.schedulerReady() ? '就绪' : '未就绪' + (state.schedulerError() ? '：' + state.schedulerError() : '（稍后重试或重启）')));
   if (typeof env.injectList === 'function') out.push('inject    ' + env.injectList().join(' / '));
   if (typeof env.initErrors === 'function') {
     const errs = env.initErrors();
@@ -295,7 +293,7 @@ function diagText(env, state, exec) {
     ? env.compactionState(exec)
     : (() => { const c = countCompactions(eventsOf(exec)); return { used: c.used, lock: c.lock, source: 'events' }; })();
   const src = eventSourceOf(meId, exec);
-  out.push('压缩      ' + st.used + ' 次；锁 ' + st.lock + '；来源 ' + st.source + '；事件源 ' + src.source + '（' + src.records.length + ' 条）');
+  out.push('压缩      ' + st.used + ' 次；锁 ' + st.lock + '；来源 ' + st.source + '；事件源 ' + src.source + '（' + src.records.length + ' 条）' + (st.note ? '  ' + st.note : ''));
   out.push('段索引    ' + (src.records.length ? segmentsOf(meId, src.records).length + ' 段' : '未核'));
   out.push('快照      ' + (listSnapshots(meId).count || '未核'));
   const anchorFile = meId ? anchorPathFor(meId) : '';
@@ -342,8 +340,9 @@ function diagText(env, state, exec) {
     const mv = typeof env.moveInfo === 'function' ? env.moveInfo() : null;
     if (mv) out.push('迁移      ' + mv.phase + ' · ' + mv.src + (mv.dst ? (mv.sameTarget ? '（目标与源一致）' : '  →  ' + mv.dst) : ''));
   } catch { /* ignore */ }
-  out.push('配置      budget=' + env.cfg.budgetMode + ' soft=' + env.cfg.budgetSoft + ' advise=' + env.cfg.budgetAdvise
-    + ' hard=' + env.cfg.budgetHard + ' reserved=' + env.cfg.reservedOutput
+  const ratioPct = (v, dflt) => Math.round((Number(v) || dflt) * 100) + '%';
+  out.push('配置      分档 ' + ratioPct(env.cfg.softRatio, 0.35) + '/' + ratioPct(env.cfg.adviseRatio, 0.50) + '/'
+    + ratioPct(env.cfg.hardRatioCap, 0.65) + ' reserved=' + env.cfg.reservedOutput
     + ' maxCompactions=' + env.cfg.maxCompactionsPerSession + '/' + env.cfg.maxCompactionsHardCap
     + ' shadow=' + env.cfg.shadowTarget + ' roiFloor=' + env.cfg.roiFloor);
   if (typeof env.handoverFor === 'function') {
@@ -379,10 +378,21 @@ function driftText(env, args, exec) {
   return out;
 }
 
-function tokensText(args) {
+function tokensText(env, args, exec) {
   const out = [];
   const list = Array.isArray(args.sessions) ? args.sessions.filter((s) => typeof s === 'string' && s.trim() !== '') : [];
   if (!list.length) throw new Error('现象：`view=tokens` 的 `sessions` 为空。原因：token 体检须给出会话 id。处置：传入会话 id 数组后重试。');
+  // 跨会话体检与 recall 同一权限口径：只有全局会话能看别人的活动元数据。
+  const normSid = (s) => (String(s || '').indexOf('session-') === 0 ? String(s) : 'session-' + String(s || '').trim());
+  const meId = env.selfId(exec) || '';
+  const foreign = list.filter((s) => normSid(s) !== normSid(meId));
+  if (foreign.length) {
+    let info = null;
+    try { info = env.roleOf(exec); } catch { info = null; }
+    if (!info || info.role !== 'global') {
+      throw new Error('现象：`view=tokens` 的会话不在本会话范围。原因：跨会话体检仅对全局会话开放。处置：只传本会话 id，或改由全局会话执行。');
+    }
+  }
   out.push('会话 轮 步 输出tok 每步tok 最贵返回 超20步轮 判定');
   for (const sid of list) {
     const full = sid.indexOf('session-') === 0 ? sid : 'session-' + sid;
@@ -425,7 +435,8 @@ function recallText(env, args, exec) {
   if (!meId) return { text: '现象：未取得本会话 id。原因：宿主未提供会话标识。处置：重启 DSH 后重试。' };
   const want = String(a.session_id || '').trim();
   const sid = want || meId;
-  if (want && want !== meId) {
+  const normSid = (s) => (String(s || '').indexOf('session-') === 0 ? String(s) : 'session-' + String(s || '').trim());
+  if (want && normSid(want) !== normSid(meId)) {
     let info = null;
     try { info = env.roleOf(exec); } catch { info = null; }
     if (!info || info.role !== 'global') {
@@ -533,11 +544,10 @@ function recallText(env, args, exec) {
  * 8 个视图共用一个只读入口，避免工具数量随诊断项增长。
  *
  * @param {object} env 插件环境，提供水位、压缩状态与角色解析。
- * @param {object} state 宿主状态，提供 `schedulerReady` 与 `schedulerError`。
  * @returns {object} 工具定义，供宿主注册。
  * 副作用：无；只读缓存与日志。
  */
-export function pmStatusTool(env, state) {
+export function pmStatusTool(env) {
   const gate = pmGateTool(env);
   return {
     name: nameOf('status'),
@@ -567,14 +577,20 @@ export function pmStatusTool(env, state) {
     async execute(args, exec) {
       const view = typeof args.view === 'string' && args.view ? args.view : 'phase';
       if (VIEWS.indexOf(view) === -1) throw new Error('现象：`view` 取值不在允许范围。原因：收到 `' + String(view) + '`，只接受 ' + VIEWS.join('、') + '。处置：改用上述取值之一后重试。');
-      if (view === 'gate') return gate.execute(args, exec);
-      if (view === 'recall') return recallText(env, args, exec);
+      if (view === 'gate') {
+        const g = await gate.execute(args, exec);
+        return { text: capText(g && g.text !== undefined ? g.text : String(g || ''), { maxLines: STATUS_MAX_LINES, hint: '闸门输出过长：先用 `scope=project` 查单个项目，或按库逐个复核。' }) };
+      }
+      if (view === 'recall') {
+        const r = recallText(env, args, exec);
+        return { text: capText(r && r.text !== undefined ? r.text : String(r || ''), { maxLines: STATUS_MAX_LINES, hint: '召回输出过长：用 `offset=<seq>` 或 `around=<seq>` 继续读取，或缩小 `limit`。' }) };
+      }
       const out = view === 'phase' ? phaseText(env, args, exec)
         : view === 'pressure' ? pressureText(env, args, exec)
           : view === 'brief' ? briefText(env, args, exec)
-            : view === 'diag' ? diagText(env, state, exec)
+            : view === 'diag' ? diagText(env, exec)
               : view === 'drift' ? driftText(env, args, exec)
-                : tokensText(args);
+                : tokensText(env, args, exec);
       return { text: capText(out.join(NL), { maxLines: STATUS_MAX_LINES, hint: '状态过长：先用 `view=phase` 查看摘要，需要细节再按 `view` 取值。' }) };
     },
   };

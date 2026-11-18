@@ -48,9 +48,8 @@ export function pmHandoverTool(env) {
         offset: { type: 'integer', description: 'read 起始行，从 1 计。例：`80`。' },
         limit: { type: 'integer', description: 'read 最多返回的行数。例：`40`。' },
         reason: { type: 'string', description: 'compact 的原因，可选。' },
-        capsule: { type: 'string', description: 'compact 必填。助手自述胶囊正文，trim 后 1–1400 字。标准：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。' },
-        mode: { type: 'string', enum: ['auto', 'aggressive', 'minimal'], description: 'compact 的遮蔽比：auto 0.55、aggressive 0.70、minimal 0.40。' },
-        boundary: { type: 'boolean', description: 'compact 时声明当前处于阶段边界。' },
+        capsule: { type: 'string', description: 'compact 必填。助手自述胶囊正文，trim 后 1–4000 字（正文上限，超出即拒绝）。标准：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。' },
+        mode: { type: 'string', enum: ['auto', 'aggressive', 'minimal'], description: 'compact 遮蔽比：auto 0.55、aggressive 0.70、minimal 0.40。仅回退尾部策略时生效。' },
         status: { type: 'string', description: 'compact 时给锚点补的现状，可选。' },
       },
     },
@@ -86,7 +85,7 @@ export function pmHandoverTool(env) {
           }
         : { kind: target.kind, info };
       const snapOpts = taskName
-        ? { kind: target.kind, info: { role: 'misc', task: taskName }, snapshotDir: path.join(ws, '_Temp', '_Global', 'tasks', taskName, 'Snapshots') }
+        ? { kind: target.kind, info: { role: 'misc', task: taskName } }
         : { kind: target.kind, info };
       const noteStep = (kind, data) => {
         try { if (typeof env.noteHandoverStep === 'function') env.noteHandoverStep(exec, kind, data); } catch { /* 留痕失败不阻断写入 */ }

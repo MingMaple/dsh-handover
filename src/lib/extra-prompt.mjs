@@ -12,6 +12,8 @@ import path from 'node:path';
 export const EXTRA_PROMPT_ORDER = 950;
 export const EXTRA_PROMPT_SECTION = 'dsh-handover:extra-prompt';
 const EXTRA_PROMPT_MAX = 20000;
+/** 旧通道请求体上限 64 KB，留出 JSON 信封与转义余量；20000 个中文字符约 60 KB，按字节须再判一次。 */
+const EXTRA_PROMPT_MAX_BYTES = 56 * 1024;
 
 function storePath() {
   return path.join(os.homedir(), '.dsh', 'storages', 'dsh-handover.extra-prompt.json');
@@ -43,8 +45,12 @@ export function readExtraPrompt() {
  */
 export function writeExtraPrompt(text, enabled) {
   const clean = String(text == null ? '' : text).trim();
+  const bytes = Buffer.byteLength(clean, 'utf8');
   if (clean.length > EXTRA_PROMPT_MAX) {
     throw new Error('现象：全局前置提示词过长（' + clean.length + ' 字符）。原因：上限为 ' + EXTRA_PROMPT_MAX + ' 字符。处置：精简正文后重试。');
+  }
+  if (bytes > EXTRA_PROMPT_MAX_BYTES) {
+    throw new Error('现象：全局前置提示词过长（' + clean.length + ' 字符，UTF-8 ' + bytes + ' 字节）。原因：上限为 ' + EXTRA_PROMPT_MAX + ' 字符且 ' + EXTRA_PROMPT_MAX_BYTES + ' 字节（旧通道请求体 64 KB）；多字节字符按字节计会超限。处置：精简正文后重试。');
   }
   const on = enabled !== false && clean.length > 0;
   const p = storePath();

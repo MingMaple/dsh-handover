@@ -106,11 +106,9 @@ function emptyState(sid) {
     lastTierPromptAt: 0,
     lastWaterAt: 0,
     compactions: 0,
-    skipTierOnce: false,
     succession: { promptedCount: 0, promptedAt: 0 },
     handoverFlow: {},
     pendingMessages: [],
-    backfill: {},
     usageHistory: [],
     updatedAt: Date.now(),
   };
@@ -127,7 +125,6 @@ function normalize(sid, raw, createdAtFallback) {
     : { promptedCount: 0, promptedAt: 0 };
   out.handoverFlow = raw.handoverFlow && typeof raw.handoverFlow === 'object' ? raw.handoverFlow : {};
   out.pendingMessages = Array.isArray(raw.pendingMessages) ? raw.pendingMessages : [];
-  out.backfill = raw.backfill && typeof raw.backfill === 'object' ? raw.backfill : {};
   out.usageHistory = Array.isArray(raw.usageHistory)
     ? raw.usageHistory
       .filter((x) => x && typeof x === 'object' && Number.isFinite(x.at) && Number.isFinite(x.used))
@@ -140,7 +137,6 @@ function normalize(sid, raw, createdAtFallback) {
   out.compactions = Number.isFinite(raw.compactions) ? raw.compactions : 0;
   out.lastTierPromptAt = Number.isFinite(raw.lastTierPromptAt) ? raw.lastTierPromptAt : 0;
   out.lastWaterAt = Number.isFinite(raw.lastWaterAt) ? raw.lastWaterAt : 0;
-  out.skipTierOnce = raw.skipTierOnce === true;
   return out;
 }
 

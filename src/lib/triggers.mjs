@@ -97,7 +97,7 @@ export function judgeTrigger(input) {
   const i = input || {};
   const tier = judgeTier(i);
   if (i.inTurn !== true) return { action: 'idle', line: tier.line, reason: '会话不在轮次内：空闲会话不判定' };
-  if (i.lockState === 'orphaned' || i.lockState === 'open') {
+  if (i.lockState === 'open') {
     return { action: 'idle', line: tier.line, reason: '压缩锁未闭合：先处理压缩锁' };
   }
   if (num(i.cooldownLeftMs, 0) > 0) {
@@ -125,7 +125,7 @@ export function judgeTrigger(input) {
 export function decidePhase(input) {
   const i = input || {};
   const cfg = i.cfg || {};
-  if (i.lockState === 'orphaned' || i.lockState === 'open') {
+  if (i.lockState === 'open') {
     return { action: 'blocked', reason: '检测到未闭合的压缩锁（compaction/start 无配对 end）：先处理压缩锁，再判压缩' };
   }
   const used = num(i.used, null);
@@ -140,6 +140,7 @@ export function decidePhase(input) {
   if (tier.action === 'notifyAdvise' || tier.action === 'notifySoft') {
     return { action: 'notify', reason: tier.reason + '：提示助手先停在安全断点、按标准写胶囊，再调用压缩，插件不压缩' };
   }
+  // 当前无调用方传入 snapshot，保留为扩展点：将来若增加事件级快照，在此接入。
   if (i.snapshot && i.snapshot.needed === true) {
     return { action: 'snapshot', reason: '微快照事件命中：' + (i.snapshot.reasons || []).join('；') };
   }

@@ -39,7 +39,7 @@
 
 ## 验证
 
-1. `ho_status(view="diag")` 应报当前版本、工具数与调度器就绪。
+1. `ho_status(view="diag")` 应报当前版本与工具数。
 2. `ho_docmap(action="registry-check")` 应报路径全部存在；失效项按输出修正。
 3. `ho_status(view="gate")` 应无「旧文档定位待迁移」提示。
 4. 设置页分档线按当前版本显示，不再出现 32%。

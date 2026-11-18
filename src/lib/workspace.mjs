@@ -11,7 +11,7 @@ export function hasCenter(p) {
 /**
  * 没有 exec 时的回退顺序：先取配置 workspaceRoot。
  * 其次取标题含「全局」且带 _Control_Center 的工作区，再次取任一带 _Control_Center 的工作区。
- * 都取不到时返回进程 cwd。
+ * 都取不到时返回空串（视为没有工作区根），由调用方拒绝写入；不把进程 cwd 当作工作区根（D-112）。
  */
 export function routeWorkspace(env) {
   try { if (env && env.cfg && env.cfg.workspaceRoot) return env.cfg.workspaceRoot; } catch { /* ignore */ }
@@ -20,5 +20,5 @@ export function routeWorkspace(env) {
   const list = Array.isArray(rows) ? rows : [];
   for (const r of list) if (String(r.title).indexOf('全局') !== -1 && hasCenter(r.path)) return r.path;
   for (const r of list) if (hasCenter(r.path)) return r.path;
-  try { return process.cwd(); } catch { return ''; }
+  return '';
 }

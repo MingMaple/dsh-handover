@@ -6,14 +6,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALL_TOOL_NAMES } from '../src/lib/names.mjs';
+import { ENTRY_ACTIONS } from '../src/tools/ho_docmap.mjs';
 import { listFiles, scanFiles } from './lib/register.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const readme = path.join(root, 'README.md');
+// 归档目录里的版本说明属历史记录，与 docs/releases 同样不参与当前口径检查。
+const isArchived = (f) => f.indexOf(path.sep + '_archive' + path.sep) !== -1;
 const files = [readme]
   .concat(listFiles(path.join(root, 'docs'), ['.md']))
-  .filter((f) => fs.existsSync(f));
+  .filter((f) => fs.existsSync(f))
+  .filter((f) => !isArchived(f));
 const releasesDir = path.join(root, 'docs', 'releases');
 const releaseFiles = files.filter((f) => path.dirname(f) === releasesDir);
 const problems = [];
@@ -93,6 +97,23 @@ else if (ver[1] !== pkg.version) problems.push('版本不一致：package.json �
 const hits = scanFiles(files, { ui: false });
 for (const h of hits) {
   problems.push(path.relative(root, h.file) + ':' + h.line + ' ' + h.rules.join('、'));
+}
+
+// 7. 动作名：提示段、回执与骨架只能教入口实际接受的动作。
+// 1.2 合并入口后再保留旧动作名，会让模型照做即被拒绝，属流程阻断；版本说明与归档不在此列。
+{
+  const actFiles = files.filter((f) => path.dirname(f) !== releasesDir)
+    .concat(listFiles(path.join(root, 'src'), ['.md', '.mjs']));
+  const re = /ho_docmap\s*\(?\s*action\s*=\s*["']?([a-z][a-z-]*)/g;
+  for (const file of actFiles) {
+    const text = fs.readFileSync(file, 'utf8');
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (ENTRY_ACTIONS.indexOf(m[1]) === -1) {
+        problems.push(path.relative(root, file) + ' 出现 ho_docmap 未接受的动作名「' + m[1] + '」');
+      }
+    }
+  }
 }
 
 if (problems.length) {

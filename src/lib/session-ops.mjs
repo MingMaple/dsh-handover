@@ -12,7 +12,7 @@ import { bandsFor } from './pressure.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { ABORTED_TEXT, aborted } from './abort.mjs';
-import { lineageKeyOf, loadOffice, registerHolder } from './office.mjs';
+import { lineageKeyOf, loadOffice, nextName, registerHolder } from './office.mjs';
 import { migrateIdentity } from './identity.mjs';
 import { pathKey } from './pathkey.mjs';
 
@@ -182,7 +182,9 @@ function reuseBlocker(env, ws, kind, key) {
     win = p && typeof p.win === 'number' && Number.isFinite(p.win) && p.win > 0 ? p.win : null;
   } catch { used = null; win = null; }
   if (used === null || win === null) return '';
-  const soft = bandsFor(env.cfg, win).soft;
+  const bands = bandsFor(env.cfg, win);
+  if (bands === null) return '';
+  const soft = bands.soft;
   if (used >= soft) return '';
   const label = kind === 'global' ? '全局类别' : kind === 'project' ? '项目「' + key + '」' : '杂项任务「' + key + '」';
   return '拒绝新建：' + label + '已有在任会话 ' + (cur.name || '（未命名）') + '（' + cur.sessionId + '），水位 '
@@ -223,6 +225,14 @@ export async function sessionNew(env, args, exec, signal) {
     if (block) throw new Error(block);
   }
 
+  // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
+  // 先解析再迁移：解析失败时不得已经把任务库移走（D-128）。
+  const workspaceId = resolveWorkspaceFor(env, exec, finalRole, project, task, {
+    workspace: args.workspace,
+    cwd: args.cwd,
+    wantGlobal: title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global',
+  });
+
   // 全局任务整体独立：先把任务库移入项目或杂项位置，沿用现有体系，不重建、不重新注册。
   let migrated = null;
   if (args.from_task) {
@@ -241,13 +251,6 @@ export async function sessionNew(env, args, exec, signal) {
     out.push('全局任务已独立：' + migrated.summary);
   }
 
-  // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
-  const workspaceId = resolveWorkspaceFor(env, exec, finalRole, project, task, {
-    workspace: args.workspace,
-    cwd: args.cwd,
-    wantGlobal: title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global',
-  });
-
   if (aborted(signal)) throw new Error(ABORTED_TEXT);
   const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task }, signal);
   const sessionId = made.sessionId || '';
@@ -257,15 +260,20 @@ export async function sessionNew(env, args, exec, signal) {
   // 建会话即登记在任：全局手工建/换会话与自服务换任共用一张登记表，不让注册表漏记或与实况分叉。
   try {
     if (officeKind) {
+      const key = lineageKeyOf(officeKind, project, task);
+      // 缺 title 时按在任表自动起名：空名 registerHolder 必然失败，留下未登记的会话（D-129）。
+      const regName = title.trim() ? title : nextName(loadOffice(ws), key);
       // 工作区一栏写**实际落点**（用户指定的那个工作区），不是调用者自己所在的工作区根。
       const reg = registerHolder(ws, {
-        kind: officeKind, project, task, name: title, sessionId,
+        kind: officeKind, project, task, name: regName, sessionId,
         workspace: workspacePathOf(env, workspaceId) || ws,
       });
-      out.push('在任登记：' + reg.key + ' → ' + title + (reg.previous ? '（原 ' + reg.previous.name + ' 进历史）' : ''));
+      out.push('在任登记：' + reg.key + ' → ' + regName + (reg.previous ? '（原 ' + reg.previous.name + ' 进历史）' : ''));
     }
   } catch (e) {
-    out.push('在任登记失败：' + String(e && e.message ? e.message : e) + '（不影响会话本身）');
+    // 与 session-create 同口径：已建会话不回收，但必须让调用方看到失败（D-129）。
+    throw new Error('会话已建成，但在任登记失败：' + String(e && e.message ? e.message : e)
+      + '（会话 id：' + sessionId + '；不回收已建会话）。处置：用 ho_sessions(action="office-register", name="…") 补登');
   }
   const meId = env.selfId(exec) || '（未知）';
   // 交接路径按**新会话自身的角色**取用：项目读项目交接、杂项读任务交接，都不退回全局交接。

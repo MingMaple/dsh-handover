@@ -1,16 +1,10 @@
-/** 交接文档读写：原子写 + 写前备份 + 存档（整篇重写先归档）+ 写后体检（判据复用 lib/lint.mjs）。路径按会话角色解析。 */
+/** 交接文档读写：原子写 + 存档（整篇重写先归档与 .bak）+ 写后体检（判据复用 lib/lint.mjs）。路径按会话角色解析。 */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { readUtf8, writeFileAtomic } from './text.mjs';
 import { lintGlobal, lintProject } from './lint.mjs';
-import { snapshotDirFor, archiveDirFor } from './role.mjs';
-
-function stamp() {
-  const d = new Date();
-  const p = (n) => (n < 10 ? "0" + n : "" + n);
-  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
-}
+import { archiveDirFor } from './role.mjs';
 
 export function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -118,31 +112,20 @@ export function archiveHandover(ws, file, opts) {
 }
 
 /**
- * 写交接：先把旧文件复制到 <作用域>/Snapshots/pm-handover-<stamp>/，再原子替换，最后按角色体检。
- * `opts.noBackup` 为 true 时跳过备份（整篇重写已先归档）。
- * @param {object} [opts] { info?: 角色信息（决定体检判据与备份目录）, kind?: 'global'|'project'|'misc', noBackup?: boolean }
- * @returns {{ path, backup, verdict, reasons, bytes }}
+ * 写交接：原子替换，最后按角色体检。write 只用于首次创建；整篇重写（rotate）先归档旧交接，
+ * 回滚点是归档副本与换任时的 .bak，不再另做写前快照（D-140）。
+ * @param {object} [opts] { info?: 角色信息（决定体检判据）, kind?: 'global'|'project'|'misc' }
+ * @returns {{ path, verdict, reasons, bytes }}
  */
 export function writeHandover(ws, file, text, opts) {
   const o = opts || {};
   const info = o.info || { role: o.kind === 'project' ? 'project' : o.kind === 'misc' ? 'misc' : 'global' };
-  let dir = null;
-  try { dir = o.snapshotDir || snapshotDirFor(ws, info); } catch { dir = path.join(ws, '_Temp', '_Global', 'Snapshots'); }
-  let backup = null;
-  try {
-    if (!o.noBackup && fs.existsSync(file)) {
-      const bdir = path.join(dir, "pm-handover-" + stamp());
-      fs.mkdirSync(bdir, { recursive: true });
-      backup = path.join(bdir, path.basename(file));
-      fs.copyFileSync(file, backup);
-    }
-  } catch (e) { throw new Error("备份失败，已中止写入：" + e.message); }
   const body = text;
   writeFileAtomic(file, body);
   const res = (o.kind === 'project' || o.kind === 'misc' || info.role === 'project' || info.role === 'misc')
     ? lintProject(file)
     : lintGlobal(file);
-  return { path: file, backup, verdict: res.verdict, reasons: res.reasons, bytes: Buffer.byteLength(body, "utf8") };
+  return { path: file, verdict: res.verdict, reasons: res.reasons, bytes: Buffer.byteLength(body, "utf8") };
 }
 
 function findSameArchive(dir, sha) {
@@ -174,6 +157,6 @@ export function rewriteHandover(ws, file, text, opts) {
       ? { dest: same, bytes: fs.statSync(same).size, sha256: sha, reused: true }
       : Object.assign(archiveHandover(ws, file, o), { reused: false });
   }
-  const res = writeHandover(ws, file, text, Object.assign({}, o, { noBackup: true }));
+  const res = writeHandover(ws, file, text, o);
   return Object.assign({}, res, { archived });
 }

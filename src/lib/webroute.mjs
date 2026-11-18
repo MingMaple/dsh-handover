@@ -94,7 +94,8 @@ export function registerStatusRoute(ctx, env, info, apiIn) {
               return;
             }
 
-            if (tail === '/setup' || tail === '/deploy' || tail === '/global-session' || tail === '/register' || tail === '/extra-prompt' || tail === '/role') {
+            if (tail === '/setup' || tail === '/deploy' || tail === '/global-session' || tail === '/register' || tail === '/extra-prompt' || tail === '/role'
+              || tail === '/consent.grant' || tail === '/consent.revoke' || tail === '/consent.list') {
               if (method !== 'POST') { res.writeHead(405, { allow: 'POST' }); res.end(); return; }
               const input = await readBody(req, res);
               if (input === null) return;

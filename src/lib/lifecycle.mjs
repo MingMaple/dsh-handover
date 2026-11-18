@@ -11,14 +11,21 @@ import { readExtraPrompt, writeExtraPrompt, EXTRA_PROMPT_ORDER, EXTRA_PROMPT_SEC
 import { grantConsent, activeConsentsFor } from './consent.mjs';
 import { registrySignature } from './system.mjs';
 
-/** 创建生命周期接线。runtime 提供 ctx、cfg、env、roleOps、pkgInfo、initErrors、schedulerInfo、toolCount。 */
+/** 创建生命周期接线。runtime 提供 ctx、cfg、env、roleOps、pkgInfo、initErrors、toolCount。 */
 export function createLifecycle(runtime) {
-  const { ctx, cfg, env, roleOps, pkgInfo, initErrors, schedulerInfo, toolCount } = runtime;
+  const { ctx, cfg, env, roleOps, pkgInfo, initErrors, toolCount } = runtime;
   const msgOf = (e) => String(e && e.message ? e.message : e);
 
   // ---------------- 用户全局前置提示词（段序 950，位于工具段之前）
   // 与插件自身的会话约束无关：仅在用户开启且内容非空时注册；关闭或留空时不占用注入位置。
   let extraDispose = null;
+  // 段注册在根作用域，由宿主按插件持有；不挂 effect 时停用/卸载不保证释放该段。
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      try { if (typeof extraDispose === 'function') extraDispose(); } catch { /* 段已失效 */ }
+      extraDispose = null;
+    }, 'dsh-handover: 全局前置提示词段回收');
+  }
   function applyExtraPrompt(state) {
     try { if (typeof extraDispose === 'function') extraDispose(); } catch { /* 旧段已失效 */ }
     extraDispose = null;
@@ -140,12 +147,10 @@ export function createLifecycle(runtime) {
   function installSettingsPage() {
     try {
       const info = pkgInfo();
-      const st = schedulerInfo();
       const pageInfo = {
         name: info.name,
         version: info.version,
         tools: toolCount(),
-        scheduler: st.ready ? '就绪' : '未就绪' + (st.error ? '：' + st.error : ''),
       };
       const api = createApi(env, pageInfo);
       env.api = api;
@@ -194,8 +199,16 @@ export function createLifecycle(runtime) {
             input: { hint: cmd.hint },
             handler: ({ agent, rawInput }) => {
               const arg = String(rawInput || '').trim();
-              const sid = arg ? resolveShortSid(env, arg) : (agent && agent.id ? String(agent.id) : '');
-              if (!sid) return { kind: 'error', text: '无法获取会话 id：请写成 /' + cmd.name + ' session-xxxx' };
+              // 填了参数就必须解析到真实会话：解析不到即报错，不把输入原样签发授权（D-111）。
+              const sid = arg ? resolveShortSid(env, arg, { strict: true }) : (agent && agent.id ? String(agent.id) : '');
+              if (!sid) {
+                return {
+                  kind: 'error',
+                  text: arg
+                    ? '找不到与「' + arg + '」匹配的会话：请核对 8 位短号或完整 session-id 后重试；不带参数则授权本会话。'
+                    : '无法获取会话 id：请写成 /' + cmd.name + ' session-xxxx',
+                };
+              }
               const g = grantConsent(sid, cmd.note, cmd.kind);
               // 授权到达后立即重装提示段：目标会话下一轮即可看到该行（当前空闲亦然）。
               try { env.refreshPromptFor(sid); } catch { /* 装配失败不影响授权本身 */ }

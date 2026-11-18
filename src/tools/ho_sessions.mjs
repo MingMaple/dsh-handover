@@ -81,7 +81,6 @@ export function pmSessionsTool(env) {
       properties: {
         action: { type: 'string', enum: ACTIONS, description: '动作，缺省 `list`。各动作所需参数见下。' },
         order: { type: 'string', enum: ['handover', 'compact'], description: '`order` 投递给目标会话的指令：`handover` 要求写交接，`compact` 要求压缩。' },
-        resume: { type: 'string', enum: ['continue', 'wait'], description: '压缩后的去向，保留字段：`continue` 继续作答，`wait` 等待下一轮。' },
         include_subagents: { type: 'boolean', description: '`list` 是否连子会话一并列出。缺省 `false`，只列平级会话。' },
         limit: { type: 'number', description: '`list` 最多返回的行数，缺省 40。例：`20`。' },
         session_id: { type: 'string', description: '目标会话 id，取自 `list` 输出的会话号。例：`session-3f2a9c`。' },
@@ -136,7 +135,7 @@ export function pmSessionsTool(env) {
         out.push('已建立全局任务库：`' + r.dir + '`');
         out.push('  新建 ' + r.created.length + ' 个文件' + (r.created.length ? '：' + r.created.join('、') : ''));
         out.push('交接：`_Control_Center/tasks/' + String(args.task) + '/Handover.md`；用 `ho_handover(action=…, task="' + String(args.task) + '")` 读写。');
-        out.push('体系注册已登记进 `_Control_Center/records/systems.md`；计划用 `ho_docmap(action="plan", task="' + String(args.task) + '", mode="write")`。');
+        out.push('体系注册已登记进 `_Control_Center/records/systems.md`；计划用 `ho_docmap(action="plan-write", task="' + String(args.task) + '")`。');
         out.push('独立为项目或杂项会话：`ho_sessions(action="new", role="project"|"misc", from_task="' + String(args.task) + '", …)`，须当前用户确认。');
         return { text: out.join(NL) };
       }

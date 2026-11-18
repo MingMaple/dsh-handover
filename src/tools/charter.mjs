@@ -83,7 +83,8 @@ export function pmCharterTool(env) {
         return { text: [note, file, "共 " + heads.length + " 节：", ...heads.slice(0, max)].filter(Boolean).join(NL) };
       }
       if (fromBundle) text = note + NL + NL + text;
-      if (section === "8.1.1.4") {
+      // 通用约束条特例只属于 Charter：其他 doc 配该节时按各自正文查找，避免串文档。
+      if (doc === "charter" && section === "8.1.1.4") {
         const cp = charterPath(ws);
         const src = isFile(cp) ? readUtf8(cp) : bundledTemplate('Charter.skeleton.md');
         const blk = canonicalBlock(src);

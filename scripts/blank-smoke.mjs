@@ -23,7 +23,7 @@ const BLANK = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-blank-'));
 process.env.USERPROFILE = BLANK;
 process.env.HOME = BLANK;
 
-const { apply, schedDepsFor } = await import(pathToFileURL(path.join(dist, 'index.mjs')).href);
+const { apply } = await import(pathToFileURL(path.join(dist, 'index.mjs')).href);
 const reg = { tools: [], sections: [], logs: [], listeners: {} };
 const ctx = {
   tools: {
@@ -311,7 +311,6 @@ for (const t of reg.tools) {
 // ---------- 角色：判定、路径、工具集、续跑文案、按角色装配 ----------
 const DIST = (rel) => pathToFileURL(path.join(dist, rel)).href;
 const { resolveRole, handoverPathFor, toolsetFor, writeRole, readRoles } = await import(DIST('lib/role.mjs'));
-const { fillResumePrompt } = await import(DIST('lib/schedule.mjs'));
 const { resolveConfig } = await import(DIST('lib/config.mjs'));
 
 // 建一个像样的工作区，好让 cwd 推导走到 _Control_Center
@@ -511,6 +510,7 @@ ok(badPf.errors.length > 0, '骨架不应接受 .. 路径', JSON.stringify(badPf
 const profTool = reg.tools.find((t) => t.name === 'ho_docmap');
 ok(!!profTool, '应注册 ho_docmap');
 if (profTool) {
+  writeRole({}, 'session-prof', { role: 'project', project: 'Demo', source: 'test' });
   const profExec = { agent: { session: { header: { id: 'session-prof', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), title: 'Demo1' } } } };
   const pres = await profTool.execute({ action: 'profile-presets' }, profExec);
   ok(/application/.test(pres.text) && /animation/.test(pres.text), 'ho_docmap 应返回骨架预设');
@@ -524,30 +524,8 @@ if (profTool) {
   ok(/无权读写/.test(crossErr), '项目会话传别的项目名应明确报错', crossErr);
 }
 
-// 回归锁：压缩调度器拿的是**会话 id 字符串**。早期版本这里错配了 exec 版函数，
-// 结果续跑消息永远走 resumePromptUnknown（连全局会话都被写成「本会话还没设定角色」）。
-{
-  const seen = [];
-  const deps = schedDepsFor({
-    infoOfSid: (sid) => { seen.push(sid); return { role: 'global', project: '', task: '', sessionId: sid }; },
-    handoverForSid: (sid) => ({ path: 'W/_Control_Center/records/Global_Handover.md', sessionId: sid }),
-  });
-  const info = deps.roleOf('session-abc');
-  const hp = deps.handoverFor('session-abc');
-  ok(info && info.role === 'global', '调度器按会话 id 解析角色（不是 exec）', JSON.stringify(info));
-  ok(seen.indexOf('session-abc') !== -1, '传给 roleOf 的就是会话 id 原文', JSON.stringify(seen));
-  ok(hp && /Global_Handover\.md$/.test(hp.path), '调度器能拿到本会话的交接绝对路径', JSON.stringify(hp));
-}
 const tcfg = resolveConfig({});
-const tp = fillResumePrompt(tcfg, { n: 2, handover: hpP.path, role: 'project' });
-ok(tp.indexOf(hpP.path) !== -1, '续跑文案应带本会话的交接绝对路径', tp.slice(0, 90));
-ok(tp.indexOf('Global_Handover.md') === -1, '项目会话的续跑文案不得出现全局交接路径');
-const tu = fillResumePrompt(tcfg, { n: 1, handover: '', role: 'plain' });
-ok(/普通会话，不参与交接/.test(tu), '普通会话的续跑文案应说明不参与交接', tu.slice(0, 90));
-const tg = fillResumePrompt(tcfg, { n: 3, handover: hpG.path, role: 'global' });
-ok(tg.indexOf('第 3 次压缩') !== -1, '续跑文案应填上次数', tg.slice(0, 40));
 ok(tcfg.directPeer === 'on', '会话之间直接对话应默认允许', String(tcfg.directPeer));
-ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办时收尾停止', tg.slice(0, 120));
 
 // 判据按 token 分档：整理线与建议线只提示，强制线兜底；宏观重置只作追加理由。
 {
@@ -577,6 +555,7 @@ ok(tg.indexOf('收尾并停止') !== -1, '续跑文案应允许交接无待办�
   const handTool = reg.tools.find((t) => t.name === 'ho_handover');
   ok(!!handTool, '应注册 ho_handover');
   if (handTool) {
+    writeRole({}, 'session-arch', { role: 'project', project: 'Demo', source: 'test' });
     const archExec = { name: 'ho_handover', arguments: { action: 'archive' }, agent: { session: { header: { id: 'session-arch', cwd: path.join(WS, 'Projects', 'Demo', 'Demo库'), title: 'Demo1' } } } };
     const r = await handTool.execute({ action: 'archive' }, archExec);
     const m = /已归档\s*`?([^`\n]+?\.md)`?/.exec(r.text || '');
@@ -602,6 +581,7 @@ const projAgent = {
   },
   inject: (m) => calls.injected.push(m),
 };
+writeRole({}, 'session-proj', { role: 'project', project: 'Demo', source: 'test' });
 for (const cb of listeners) cb({ agent: projAgent, source: 'fresh' });
 ok(calls.restrict.length === 0, '按步路径不用 restrict 收窄工具', String(calls.restrict.length));
 const projGatePack = gateFor('ho_sessions');
@@ -619,7 +599,7 @@ ok(secNorm.indexOf('Projects/Demo') !== -1 && secNorm.indexOf('_Project_Meta/Dem
 ok(secNorm.indexOf('任务完成不报全局') !== -1, '项目提示段应写明任务完成不向全局报告', secNorm.slice(0, 400));
 ok(secNorm.indexOf('任务达成') === -1, '项目提示段不得再出现任务达成');
 ok(secNorm.indexOf('可直接 peer') !== -1, '项目提示段应允许会话之间直接对话', secNorm.slice(0, 400));
-ok(secNorm.indexOf('resume=wait') !== -1, '项目提示段应说明收尾压缩不唤醒');
+ok(secNorm.indexOf('resume=wait') === -1, '项目提示段不再写 resume=wait（参数已删）');
 ok(secNorm.indexOf('_Control_Center/standards/') !== -1, '项目提示段应给出通用规范的查找范围', secNorm.slice(-240));
 ok(secNorm.indexOf('把某某写成规范') !== -1 && secNorm.indexOf('本会话所在的工作区') !== -1 && secNorm.indexOf('写入通用规范库') !== -1 && secNorm.indexOf('报全局') !== -1, '项目提示段应写明未指明写本库、通用规范库报全局', secNorm.slice(-400));
 console.log('项目提示段 token 实测：' + budget.estimateTokens(projText) + '（参考值 ' + budget.TOKEN_BUDGET.projectTokens + '，不判失败）');
@@ -656,6 +636,7 @@ const globAgent = {
   },
   inject: () => { gCalls.injected++; },
 };
+writeRole({}, 'session-glob', { role: 'global', source: 'test' });
 for (const cb of listeners) cb({ agent: globAgent, source: 'fresh' });
 ok(gCalls.restrict === 0, '全局角色不应被裁剪', String(gCalls.restrict));
 ok(gCalls.sections.some((s) => s.name === 'dsh-handover:manual'), '全局也应遮蔽兜底段', JSON.stringify(gCalls.sections.map((s) => s.name)));
@@ -831,6 +812,7 @@ if (typeof reg.guardFn === 'function') {
   ok(gPeer === undefined, '会话之间可直接对话，不必经全局转述', String(gPeer));
   const gNew = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Demo库' }, 'session-proj', path.join(WS, 'Projects', 'Demo', 'Demo库'), 'Demo1'));
   ok(typeof gNew === 'string' && /仅属全局/.test(gNew), '项目会话不得建平级会话', String(gNew));
+  writeRole({}, 'session-misc', { role: 'misc', task: '示例任务', source: 'test' });
   const gMisc = reg.guardFn(guardExec('peer', { action: 'new', workspace: 'Misc' }, 'session-misc', path.join(WS, '_Misc', 'tasks', '示例任务'), '杂项1'));
   ok(gMisc === undefined, '杂项会话自建 Misc 换任应放行', String(gMisc));
 }

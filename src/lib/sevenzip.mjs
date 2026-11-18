@@ -33,14 +33,16 @@ export function extract(bin, archive, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
   return run7z(bin, ['x', '-y', '-o' + destDir, archive]);
 }
-let probed = null;
+/** 探测结果按「配置路径」分别缓存：改配置后立即重探，不沿用上一次的结果。 */
+const probed = new Map();
 
 /**
  * 探测可用的 7-Zip：配置路径 → 常见安装位置 → PATH 里的 7z。
  * 返回空串表示本机没有；调用方须能退回内置归档器（lib/archive.mjs），不得因此中断打包。
  */
 export function sevenZipBin(configured) {
-  if (probed !== null) return probed;
+  const key = String(configured || '');
+  if (probed.has(key)) return probed.get(key);
   const cands = [];
   if (configured) cands.push(configured);
   for (const c of CANDIDATES) cands.push(c);
@@ -50,8 +52,8 @@ export function sevenZipBin(configured) {
   for (const c of cands) {
     if (!BARE.has(c) && !fs.existsSync(c)) continue;
     const r = run7z(c, ['i']);
-    if (r.code === 0) { probed = c; return c; }
+    if (r.code === 0) { probed.set(key, c); return c; }
   }
-  probed = '';
+  probed.set(key, '');
   return '';
 }

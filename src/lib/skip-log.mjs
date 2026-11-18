@@ -34,6 +34,12 @@ export function createSkipLogger(opts) {
       for (const [k, v] of seen) {
         if (t - v >= ttlMs) seen.delete(k);
       }
+      // 全未过期时按插入顺序淘汰最旧键：Map 必须有界（D-126）。
+      while (seen.size >= maxKeys) {
+        const oldest = seen.keys().next();
+        if (oldest.done) break;
+        seen.delete(oldest.value);
+      }
     }
     seen.set(key, t);
     try {

@@ -4,7 +4,7 @@
  * 行文用标准书面语：示例一律写成可以直接提出的要求。
  * 水位与工具数由 facts.mjs、names.mjs 推导，不在这里重复写死。
  */
-import { compactSummaryText } from './facts.mjs';
+import { compactSummaryText, bandsText } from './facts.mjs';
 import { ALL_TOOL_NAMES } from './names.mjs';
 
 /** 首次安装、尚未接入工作区时的下一步（设置页与工具输出共用同一份）。 */
@@ -18,6 +18,8 @@ export const SETUP_STEPS = [
 
 export function buildGuide(cfg) {
   const max = Number(cfg && cfg.maxCompactionsPerSession) || 4;
+  const hardCap = Number(cfg && cfg.maxCompactionsHardCap) || 6;
+  const hostPct = Math.round((Number(cfg && cfg.hostSummaryRatio) || 0.8) * 100);
   const compact = compactSummaryText(cfg);
   const toolCount = ALL_TOOL_NAMES.length;
   return {
@@ -30,7 +32,7 @@ export function buildGuide(cfg) {
       { when: '首次安装', say: '部署全局文件体系', what: '本页「一键部署」一次完成 3 步：建立文件体系、注册「全局」工作区、建立「全局」会话' },
       { when: '作业开始与结束', say: '先出一份起始简报', what: '汇总上下文水位、通用约束条闸门、会话清点、交接漂移与阶段建议（ho_status view=brief）' },
       { when: '查阅规则', say: '取出 Charter 第 7.2.3 节', what: '按节返回规则正文，避免整篇读取；插件用法请传 doc="runtime"（ho_docmap action=rules-read）' },
-      { when: '交接与压缩续跑', say: '写好交接文档后压缩并继续', what: 'ho_handover action=rotate 一步完成归档旧交接、写入新正文与结构体检。承接项由返回给出。过整理线后助手择机调用 ho_handover action=compact 执行压缩。可用动作：read、rotate、archive、compact（ho_handover）' },
+      { when: '交接与压缩后继续', say: '写好交接文档后压缩并继续', what: 'ho_handover action=rotate 一步完成归档旧交接、写入新正文与结构体检。承接项由返回给出。过整理线后助手择机调用 ho_handover action=compact 执行压缩。可用动作：read、rotate、archive、compact（ho_handover）' },
       { when: '上下文到线', say: '查询本会话的上下文水位与判据', what: '按 token 分档：整理线 soft、建议线 advise、强制线 hard。前两档只注入提示。强制线由插件兜底压缩，宿主 80% 只读观测（ho_status view=pressure）' },
       { when: '压缩后回读原文', say: '把第 3 段里关于部署的那几行找出来', what: '三路召回并按倒数排名融合，命中时给出 seq 指针与前后三行。空结果给出候选段与建议关键词；按 seq 展开邻近事件用 around（ho_status view=recall）' },
       { when: '换任', say: '让在任会话自己完成换任', what: '先由当前用户授权：聊天框发送 /allow-reset，或在设置页「授权」卡点击「授权重置」。在任会话随后校验交接、建立接任会话并登记在任（ho_sessions action=succeed）' },
@@ -47,7 +49,7 @@ export function buildGuide(cfg) {
       { when: '在新机器恢复', say: '预演这次恢复', what: '校验、列出覆盖清单、备份后写入；默认仅预演（ho_workspace action=backup-restore）' },
       { when: '归档会话', say: '把这个会话归档', what: 'DeepSeek Harness（DSH）只提供归档；再次唤醒须先解归档（ho_sessions action=archive、unarchive）' },
       { when: '建立工作区', say: '把这个目录注册为工作区', what: 'init 在指定目录下建立整套全局文件体系。list、create 与 delete 管理注册，删除只删注册（ho_workspace）' },
-      { when: '自检', say: '检查插件当前状态', what: '服务可用性、压缩调度器与压缩计数、本会话角色与工具集、水位与迁移状态（ho_status view=diag）' },
+      { when: '自检', say: '检查插件当前状态', what: '服务可用性、压缩计数与压缩状态、本会话角色与工具集、水位与迁移状态（ho_status view=diag）' },
       { when: '查在任', say: '现在 Demo1 由谁在任', what: '按全局、项目、杂项查询在任会话的名称与会话 id（ho_sessions action=office-read）。也可用命令行 node scripts/office.mjs 查询' },
       { when: '写作规范', say: '按写作规范检查这份文档', what: '执行 _Control_Center/standards/写作规范/README.md 所列的 W 条款；插件自带的语体门禁扫描 README、docs、templates 与 src' },
     ],
@@ -57,13 +59,13 @@ export function buildGuide(cfg) {
         tools: [
           ['ho_status', '会话状态、闸门与原文召回。view=phase 水位（默认）。pressure 压力、brief 简报、diag 自检、drift 漂移。tokens 体检、gate 闸门、recall 召回（含 around）'],
           ['ho_docmap', '体系注册、计划、骨架、台账与规则正文：action=registry-*、plan-*、profile-*、changelog-append、rules-read'],
-          ['ho_sessions', '会话清点与调度：list 清点、role 设角色、new 建会话、office-read 查在任、succeed 换任、archive 归档'],
+          ['ho_sessions', '会话清点与角色：list 清点、role 设角色、new 建会话、office-read 查在任、succeed 换任、archive 归档'],
         ],
       },
       {
         title: '写入与迁移入口（改动文件时带备份或预演）',
         tools: [
-          ['ho_handover', '读写、换任重写与归档本会话交接。action=rotate 归档旧交接并写入新正文，action=compact 轮内压缩。3 项前置校验通过才执行'],
+          ['ho_handover', '读写、换任重写与归档本会话交接。action=rotate 归档旧交接并写入新正文，action=compact 轮内压缩。前置校验通过才执行'],
           ['ho_workspace', '工作区生命周期：init、scaffold、list、create、delete、move-*；action=backup-* 管快照与迁移包'],
         ],
       },
@@ -75,7 +77,7 @@ export function buildGuide(cfg) {
       },
     ],
     rules: [
-      '插件按 token 分档提示：整理线 soft、建议线 advise、强制线 hard。分档按窗口纯比例：整理线 35%、建议线 50%、强制线 65%。上述均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。前两档只注入提示，由助手先写胶囊。再调用 ho_handover(action="compact", capsule=…)。强制线由插件兜底压缩，宿主 80% 只读观测。助手入口与提示在 ' + max + ' 次后关闭，强制线兜底至 6 次，此后只办理换任。宏观重置保留 4 条追加提示理由。其一为累计遮蔽不少于 2 倍窗口；其二为压缩增量比低于 0.5。其三为同错或同文件重复不少于 2 次；其四为里程碑或当前用户要求。',
+      '插件按 token 分档提示：整理线 soft、建议线 advise、强制线 hard。' + bandsText(cfg) + '前两档只注入提示，由助手先写胶囊。再调用 ho_handover(action="compact", capsule=…)。强制线由插件兜底压缩，宿主 ' + hostPct + '% 只读观测。助手入口与提示在 ' + max + ' 次后关闭，强制线兜底至 ' + hardCap + ' 次，此后只办理换任。宏观重置保留 4 条追加提示理由。其一为累计遮蔽不少于 2 倍窗口；其二为压缩增量比低于 0.5。其三为同错或同文件重复不少于 2 次；其四为里程碑或当前用户要求。',
       '压缩不可逆：历史会被摘要替换。压缩前写会话锚点，约束逐条原文保留；交接只在更替会话时使用。',
       '压缩后以胶囊为准，不读旧交接全文。换任后按「先读交接、再读计划、后执行」恢复；没有计划则跳过第二步。',
       '会话之间可直接用 peer（action=send）通信，不必经全局转述。默认沉默仍适用：仅在到交接线、需当前用户决定、发现全局口径有误时发送一条。',

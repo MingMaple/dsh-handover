@@ -178,7 +178,9 @@ export function resolveRole(opts) {
   const sid = String(o.sessionId || '');
   const store = o.roles || readRoles(o.cfg);
   const hit = sid ? store.sessions[sid] : null;
-  if (hit) {
+  const plain = (source) => ({ role: 'plain', project: '', task: '', source, sessionId: sid });
+  const fromStore = () => {
+    if (!hit) return null;
     const role = String(hit.role || '');
     if (ROLES.indexOf(role) !== -1) {
       // 角色表里的名字要当目录名用。历史写入或手工编辑留下的非法名字一律不认，继续往下推断，
@@ -193,7 +195,15 @@ export function resolveRole(opts) {
     if (role === 'unknown') {
       return { role: 'plain', project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
     }
+    return null;
+  };
+  // 装配只认角色注册文件：子会话一律不装配，未注册按普通处理（D-105）。
+  if (o.registeredOnly === true) {
+    if (o.subagent === true) return plain('subagent');
+    return fromStore() || plain('none');
   }
+  const stored = fromStore();
+  if (stored) return stored;
   const title = String(o.title || '');
   if (title.indexOf('全局') !== -1) return { role: 'global', project: '', task: '', source: 'title', sessionId: sid };
   try {

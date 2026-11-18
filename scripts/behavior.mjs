@@ -8,7 +8,7 @@
  * 6. 语体门禁可执行并按 W 条款判定；
  * 7. 交接固定流程：rotate 一步归档、写入与结构体检，且 write 不得改写已有交接。
  * 8. 会话协作：collect 先完成先返回、同时完成一起返回、最终回复全文不截断。
- * 9. 判据、段索引、检索与微快照；10. 回填合并与回读提示。
+ * 9. 判据、段索引、检索与微快照。
  *
  * 全程在系统临时目录内完成，不碰真实工作区与真实 HOME。
  * 用法：node scripts/behavior.mjs [--dist <dist 目录>]
@@ -61,7 +61,6 @@ const { pmPeerTool, collabMemberReason } = await imp('tools/peer.mjs');
 const { deriveSegments } = await imp('lib/segments.mjs');
 const { extractSnapshot, renderSnapshot } = await imp('lib/checkpoint.mjs');
 const { search } = await imp('lib/recall.mjs');
-const { shouldSendBackfill, markBackfill, buildBackfillText } = await imp('lib/resume.mjs');
 const { pmStatusTool } = await imp('tools/ho_status.mjs');
 
 function w(rel, text) {
@@ -110,6 +109,7 @@ section('1 三线制与注入');
   cachePressure('session-plan', BANDS.soft);
   // 投影缓存目录有 1.5 秒读缓存：同一目录的后续用例须在首次读取前落盘，避免读到旧快照。
   cachePressure('session-force', 130000);
+  cachePressure('session-ceil', BANDS.hard + 1000);
   const prompts = [];
   const sections = [];
   const definitions = [];
@@ -133,7 +133,7 @@ section('1 三线制与注入');
     inject: () => {},
   };
   const { apply } = await imp('index.mjs');
-  apply(ctx, { workspaceRoot: WS, retainTokens: 1 });
+  apply(ctx, { workspaceRoot: WS });
   ok(prompts.length === 0, '插件装配不向会话投递用户消息', String(prompts.length));
   ok(!sections.find((s) => s.name === 'dsh-handover:reminder'), '不注册动态提醒提示段（不改系统提示词）');
   const manualSection = sections.find((s) => s.name === 'dsh-handover:manual');
@@ -164,6 +164,7 @@ section('1 三线制与注入');
   writeRole({}, 'session-force', { role: 'project', project: 'Demo' });
   const handlers = new Map();
   let compactCalls = 0;
+  let forceRange = null;
   const seqs = Array.from({ length: 30 }, (_, i) => i + 1);
   const events = new Map(seqs.map((seq) => {
     const type = seq === 1 ? 'system/message' : seq % 2 === 0 ? 'user/message' : 'assistant/message';
@@ -185,7 +186,7 @@ section('1 三线制与注入');
     session,
     ctx: {
       tokenMeter: { measure: () => ({ totalTokens: 30000, nodes: priced }) },
-      compaction: { compactRegion: async () => { compactCalls += 1; return { shadowedTokenCount: 100 }; } },
+      compaction: { compactRegion: async (start, end) => { compactCalls += 1; forceRange = { start, end }; return { shadowedTokenCount: 100 }; } },
       systemPrompt: { section: () => () => {} },
     },
   };
@@ -201,16 +202,52 @@ section('1 三线制与注入');
     inject: () => {},
   };
   const { apply } = await imp('index.mjs');
-  apply(ctx, { workspaceRoot: WS, retainTokens: 1 });
+  apply(ctx, { workspaceRoot: WS });
   const pre = handlers.get('agent/pre-step');
   const decision = await pre({ agent, turn: 1, step: 2 }, () => Promise.resolve({ kind: 'enter', messages: [] }));
   ok(compactCalls === 1, '强制线由插件强制压缩一次', String(compactCalls));
+  ok(forceRange && forceRange.start === 2 && forceRange.end < 29, '强制线仍按尾部策略，不压到当前步', JSON.stringify(forceRange));
   ok(fs.existsSync(anchorPathFor('session-force')), '强制压缩前写入会话锚点', anchorPathFor('session-force'));
   const texts = (decision.messages || []).map((m) => m.content[0].text);
   ok(texts.some((t) => /已到强制线/.test(t) && t.indexOf(kText(BANDS.hard)) !== -1), '强制前注入强制线提示');
   ok(texts.some((t) => /\[压缩完成·机制兜底\]/.test(t) && /约束（逐条原文）：/.test(t)), '压缩后注入机制兜底胶囊');
   ok(readSessionState('session-force').compactions === 1, '压缩计数持久化');
   ok(readSessionState('session-force').notified.soft === undefined, '压缩成功重置提示状态');
+}
+{
+  // 达硬上限后每会话只注入一条换任指令；后续步骤不再重复。
+  writeRole({}, 'session-ceil', { role: 'project', project: 'Demo' });
+  const st0 = readSessionState('session-ceil');
+  st0.compactions = Number(cfg.maxCompactionsHardCap) || 6;
+  writeSessionState('session-ceil', st0);
+  const agent = {
+    id: 'session-ceil',
+    status: 'running',
+    session: { header: { id: 'session-ceil', cwd: WS, title: 'Demo1' }, surface: { nodes: [] }, eventAt: () => null },
+    ctx: { systemPrompt: { section: () => () => {} } },
+  };
+  const handlers = new Map();
+  const ctx = {
+    tools: { register: () => {}, guard: () => {}, resolve: () => {} },
+    systemPrompt: { section: () => () => {} },
+    sessionController: { prompt: async () => ({ accepted: true }) },
+    agents: { list: () => [agent], get: () => agent },
+    logger: { warn: () => {}, info: () => {} },
+    effect: (fn) => fn(),
+    on: (name, fn) => { handlers.set(name, fn); },
+    get: () => null,
+    inject: () => {},
+  };
+  const { apply } = await imp('index.mjs');
+  apply(ctx, { workspaceRoot: WS });
+  const pre = handlers.get('agent/pre-step');
+  const next = () => Promise.resolve({ kind: 'enter', messages: [] });
+  const textOf = (d) => (d.messages || []).map((m) => m.content[0].text).join('\n');
+  const steps = [];
+  for (const step of [2, 3, 4]) steps.push(textOf(await pre({ agent, turn: 2, step }, next)));
+  const ceilingCount = steps.filter((t) => /已达硬上限/.test(t)).length;
+  ok(ceilingCount === 1, '达硬上限后连续三步只注入一条换任指令', '条数 ' + ceilingCount);
+  ok(!/已到强制线/.test(steps.join('\n')), '达硬上限后不再走强制压缩分支');
 }
 
 // ---------- 2 行动计划与阅读顺序
@@ -246,8 +283,6 @@ section('2 行动计划与阅读顺序');
   ok(fs.existsSync(arch) && fs.readdirSync(arch).some((n) => /^PLAN_\d{8}_\d{6}\.md$/.test(n)), '旧计划归档名带时间标注');
   const tpl = fs.readFileSync(path.join(dist, 'templates', 'Plan.skeleton.md'), 'utf8');
   ok(/##\s*\d*\s*目标[\s\S]*##\s*\d*\s*步骤[\s\S]*##\s*\d*\s*验收[\s\S]*##\s*\d*\s*风险/.test(tpl), '计划模板含目标、步骤、验收、风险');
-  const resume = cfg.resumePrompt;
-  ok(resume.indexOf('交接') !== -1 && resume.indexOf('计划') !== -1 && resume.indexOf('交接') < resume.indexOf('计划'), '续跑提示先交接后计划');
   const manual = scopedManual({ role: 'project', project: 'Demo' }, { ws: WS, cfg, system: '体系注册（项目「Demo」）' });
   ok(manual.indexOf('PLAN.md') !== -1 && manual.indexOf('先读交接、再读计划、后执行') !== -1, '项目提示段写明计划与恢复顺序');
 }
@@ -510,58 +545,6 @@ section('9 判据、段索引、检索与微快照');
   const emptyOut = await recallStatus.execute({ view: 'recall', query: '不存在的词组xyz', mode: 'literal' }, recallExec);
   ok(/没有命中/.test(emptyOut.text) && /ho_status\(view="recall"/.test(emptyOut.text), '召回视图空结果给出用法', emptyOut.text.slice(0, 160));
 }
-{
-  ok(shouldSendBackfill('session-bf', 1000, 300000).send === true, '首次压缩应投回填');
-  markBackfill('session-bf', 1000, 'snap.md');
-  const merged = shouldSendBackfill('session-bf', 2000, 300000);
-  ok(merged.send === false && merged.merged === true, '五分钟内连续压缩合并为一条');
-  ok(shouldSendBackfill('session-bf', 400000, 300000).send === true, '超过窗口恢复投递');
-  const text = buildBackfillText({ n: 1, snapshotPath: 'snap.md', handoverPath: 'hand.md', segmentCount: 2, lastLabel: '部署' });
-  ok(/snap\.md/.test(text) && /hand\.md/.test(text) && /ho_status\(view="recall"/.test(text), '回填含快照、交接与检索提示');
-}
-{
-  // 端到端：假会话完成一次压缩后，首条消息必须是含快照路径与交接路径的回填消息。
-  const sid = 'session-sched';
-  const sdir = path.join(HOME, '.dsh', 'sessions', 'slug', sid);
-  fs.mkdirSync(sdir, { recursive: true });
-  const lines = [
-    { type: 'user/message', seq: 1, time: Date.now() - 9000, data: { content: [{ type: 'text', text: '目标：验证回填消息。' }] } },
-    { type: 'compaction/summary', seq: 2, time: Date.now() - 8000, data: { compactionId: 'c1', summary: [{ type: 'text', text: '## Current Work\n- 回填验证。' }] } },
-  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
-  fs.writeFileSync(path.join(sdir, 'session.v4.jsonl.zstd'), zlib.zstdCompressSync(Buffer.from(lines, 'utf8')));
-  const prompts = [];
-  const agent = {
-    status: 'idle',
-    session: { header: { id: sid } },
-    ctx: { compaction: { compactNow: async () => ({ shadowedTokenCount: 10 }) } },
-  };
-  const ctx = {
-    agents: { get: () => agent },
-    sessionController: { prompt: async (r) => { prompts.push(r); return { accepted: true }; } },
-    logger: null,
-    get: () => null,
-  };
-  const schedMod = await imp('lib/schedule.mjs');
-  const sched = schedMod.createScheduler({
-    ctx,
-    cfg,
-    roleOf: () => ({ role: 'project', project: 'Demo' }),
-    handoverFor: () => ({ path: 'E:/ws/_Project_Meta/Demo/Handover.md' }),
-  });
-  const r1 = await sched.request(sid, { n: 1, resume: 'continue', consent: 'checked', delayMs: 1 });
-  ok(r1.status === 'ok' && prompts.length === 1, '压缩后只投一条消息', JSON.stringify({ status: r1.status, n: prompts.length }));
-  const msg = prompts.length ? String(prompts[0].content[0].text) : '';
-  ok(/快照：/.test(msg) && msg.indexOf(path.join(sdir, 'dsh-handover')) !== -1, '首条消息带会话目录内的快照路径', msg.slice(0, 80));
-  ok(msg.indexOf('_Project_Meta/Demo/Handover.md') !== -1, '首条消息带交接路径', msg.slice(0, 120));
-  ok(/ho_status\(view="recall"/.test(msg), '首条消息带检索提示');
-  const r2 = await sched.request(sid, { n: 2, resume: 'continue', consent: 'checked', delayMs: 1 });
-  ok(r2.status === 'ok-merged' && prompts.length === 2, '五分钟内第二次压缩仍发续跑'
-    , JSON.stringify({ status: r2.status, n: prompts.length }));
-  const msg2 = prompts.length > 1 ? String(prompts[1].content[0].text) : '';
-  ok(/自动续跑/.test(msg2), '合并后的消息只有续跑段', msg2.slice(0, 80));
-  ok(msg2.indexOf('快照：') === -1, '合并后不重复回填快照', msg2.slice(0, 120));
-  sched.dispose();
-}
 
 // ---------- 11 与官方预设解耦
 section('11 与官方预设解耦');
@@ -591,6 +574,72 @@ section('11 与官方预设解耦');
   ok(!/agentPresets/.test(idx), '注入面不含预设服务');
 }
 
+// ---------- 12 压缩范围：助手线全量，强制线保留尾部
+section('12 压缩范围');
+{
+  // 100 个节点：系统头 + 98 个历史节点 + 当前步助手消息（含 tool-call）。
+  const seqs = Array.from({ length: 100 }, (_, i) => i + 1);
+  const typeAt = (seq) => (seq === 1 ? 'system/message' : seq === 100 ? 'assistant/message' : seq % 2 === 0 ? 'user/message' : 'turn/end');
+  const events = new Map(seqs.map((seq) => {
+    const type = typeAt(seq);
+    const data = type === 'assistant/message'
+      ? { message: { content: [{ type: 'tool-call', toolName: 'ho_status' }] } }
+      : type === 'user/message'
+        ? { content: [{ type: 'text', text: '步骤 ' + seq }] }
+        : { message: { content: [{ type: 'text', text: '回复 ' + seq }] } };
+    return [seq, { seq, type, data }];
+  }));
+  const priced = seqs.map((seq) => ({ seq, tokens: 1000 }));
+  const ranges = [];
+  const session = {
+    header: { id: 'session-full', cwd: WS, title: 'Demo1' },
+    surface: { nodes: seqs },
+    eventAt: (seq) => events.get(seq),
+    requestHeader: () => undefined,
+  };
+  const agent = {
+    id: 'session-full',
+    status: 'running',
+    session,
+    ctx: {
+      tokenMeter: { measure: () => ({ totalTokens: 100000, nodes: priced }) },
+      compaction: { compactRegion: async (start, end) => { ranges.push({ start, end }); return { shadowedTokenCount: 98000 }; } },
+      systemPrompt: { section: () => () => {} },
+    },
+  };
+  writeRole({}, 'session-full', { role: 'project', project: 'Demo' });
+  const build = async (extra) => {
+    const registered = new Map();
+    const handlers = new Map();
+    const c = {
+      tools: { register: (t) => registered.set(t.name, t), guard: () => {}, resolve: () => {} },
+      systemPrompt: { section: () => () => {} },
+      sessionController: { prompt: async () => ({ accepted: true }) },
+      agents: { list: () => [agent], get: () => agent },
+      logger: { warn: () => {}, info: () => {} },
+      effect: (fn) => fn(),
+      on: (name, fn) => { handlers.set(name, fn); },
+      get: () => null,
+      inject: () => {},
+    };
+    const { apply } = await imp('index.mjs');
+    apply(c, Object.assign({ workspaceRoot: WS }, extra || {}));
+    return registered.get('ho_handover');
+  };
+  const fullTool = await build({});
+  const fullExec = { agent };
+  const fullOut = await fullTool.execute({ action: 'compact', capsule: '目标：全量压缩验证' }, fullExec);
+  ok(ranges.length === 1 && ranges[0].start === 2 && ranges[0].end === 99,
+    '助手线全量压缩终点为当前步之前', JSON.stringify(ranges[0] || null));
+  ok(/压缩完成/.test(fullOut.text), '助手线全量压缩回告成功', fullOut.text.split('\n')[0]);
+
+  ranges.length = 0;
+  const tailTool = await build({ fullCompact: false });
+  await tailTool.execute({ action: 'compact', capsule: '目标：回退尾部策略验证' }, fullExec);
+  ok(ranges.length === 1 && ranges[0].end === 55 && ranges[0].end < 99,
+    'fullCompact=false 退回保留尾部策略', JSON.stringify(ranges[0] || null));
+}
+
 fs.rmSync(SB, { recursive: true, force: true });
 console.log('');
 if (fails.length) {
@@ -598,4 +647,4 @@ if (fails.length) {
   for (const f of fails) console.log('  - ' + f);
   process.exit(1);
 }
-console.log('BEHAVIOR OK（十一类行为测试全过）');
+console.log('BEHAVIOR OK（十二类行为测试全过）');

@@ -7,6 +7,7 @@
 import { handoverPathFor, scopeLabel } from './role.mjs';
 import { consentPromptLines } from './consent.mjs';
 import { rubricText } from './inject.mjs';
+import { bandsText } from './facts.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -28,8 +29,13 @@ const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/
 /** 暂任与协作的落点：规范与提示词随任务库独立。 */
 const DELEGATION_POINTER = '暂任：当前用户说「交接给外部会话」「交给另一个会话」「暂任」即暂任，不是换任。步骤：刷新交接；把提示词写入任务库 Delegation_Prompt.md（旧提示词归档到 _archive/）；回复中的代码块只给一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」。暂任不改变交接归属与在任登记：不申请授权、不建接任会话，交出方仍是在任者。席位变更仅在当前用户明确要求时另行办理。细则见任务库 rules/Delegation_Rules.md，协作模板见 templates/Prompt_Templates.md。';
 
-/** 协作收结果的口径：被派方不发消息，协调方按完成顺序收集最终回复。 */
-const COLLAB_LINE = '协作收结果：进入协作前，先以 peer(action="collab", sessions=[…]) 注册。协作期间，被交办方不得向交办者或同组成员发送明文消息，工具端会拒绝。宿主自带的 send_message 亦由插件守卫拦截。普通对话无需注册。协调方以 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复。timeout_ms 按任务预估设置，最低 120000。collect 取回全部结果后，限制自动解除。';
+/** 协作收结果的口径：被派方不发消息，协调方按完成顺序收集最终回复。guard=false 时如实说明拦截不可用（D-110）。 */
+function collabLine(guard) {
+  const enforced = guard === false
+    ? '当前内核无 tools.guard，插件无法在工具端拦截，务必遵守本条。'
+    : '工具端会拒绝。宿主自带的 send_message 亦由插件守卫拦截。';
+  return '协作收结果：进入协作前，先以 peer(action="collab", sessions=[…]) 注册。协作期间，被交办方不得向交办者或同组成员发送明文消息，' + enforced + '普通对话无需注册。协调方以 peer(action="collect", sessions=[…], timeout_ms=…) 取先完成者的最终回复。timeout_ms 按任务预估设置，最低 120000。collect 取回全部结果后，限制自动解除。';
+}
 
 /** 写交接的固定流程（各档角色共用）：只写这一行，细则在规范与模板里。 */
 const HANDOVER_FLOW = '写交接按固定流程执行。以 ho_handover(action="rotate", text=…) 一步完成归档旧交接、写入新正文与结构体检。返回的承接项需自行并入新正文。';
@@ -52,7 +58,7 @@ function workflowLines(cfg) {
     '- 写行动计划 PLAN.md（任务根）：先读模板 `_Control_Center/templates/Plan.skeleton.md`，再把上一份计划归档到任务根 `_archive/`。随后新建空白文件，按模板节次写入。不读旧计划，不在旧计划上改写。写完回看上下文核对；发现缺口时给出方案询问当前用户，优劣不明时并列全部方案。',
     '- 任务收尾时把当前计划归档到任务根 `_archive/`，并从注册文件删除「计划」一行。',
     '- 子智能体（细则见 Charter §十一 与运行时手册 §12.4）：仅在单块 ≥15 步或需读 ≥10 个文件时派出。同时须确需隔离、结果可机械验收，并发 ≤3。单个子智能体自身亦需十余步，结论还需回读。可由脚本批量处理再抽检者，先编写脚本。同一批文件的下一道工序交回原作者续用，不另开会话。提示词由本会话派发时，应写入规范文件地址与体系说明；插件不向其上下文注入内容。',
-    '- 当前用户确认后执行。余量不足时先压缩或办理更替会话。压缩后按胶囊继续。更替会话后按「先读交接、再读计划、后执行」恢复。任务已收尾时选 resume=wait，压缩后不唤醒。',
+    '- 当前用户确认后执行。余量不足时先压缩或办理更替会话。压缩后按胶囊继续。更替会话后按「先读交接、再读计划、后执行」恢复。',
     '- 每轮只做与当前任务直接相关的事；未经要求的检查不发起，工具正常返回即予采信。',
   ];
 }
@@ -64,16 +70,16 @@ function rhythmLines(cfg) {
   const cap = Number(c.maxCompactionsHardCap) || 6;
   return [
     '四、上下文与压缩',
-    '- 分档按 token：整理线 soft、建议线 advise、强制线 hard。分档按窗口纯比例：整理线 35%、建议线 50%、强制线 65%。上述均为可用窗口比例，不设绝对上限。可用窗口 = 窗口 − 预留输出 13K。200K 窗实得 65K/94K/122K，1M 窗约 345K/494K/642K。窗口读不到时退回绝对预算 80K/120K/180K。',
+    '- 分档按 token：整理线 soft、建议线 advise、强制线 hard。' + bandsText(c),
     '- 到整理线与建议线由插件注入提示。建议线先写胶囊再压缩：先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。到强制线由插件机制兜底压缩。',
     '- 每轮开始时注入一行压力画像；到线提示同一会话同一档位只注入一次，压缩成功后重置。注入只追加到末尾，不改系统提示结构。',
     rubricText(),
     '- 压缩计数：助手压缩与强制压缩都计。达到 ' + max + ' 次后助手入口与提示关闭，强制线仍兜底至 ' + cap + ' 次；此后只能写交接并更替会话。',
-    '- 压缩后以胶囊为准，不读旧交接全文；交接只在更替会话时使用。助手胶囊由本会话自述目标、已定方案、下一步与易错点。机制兜底胶囊含约束逐条原文、已确认事实与指针、未完成与下一步，并给出锚点路径。助手胶囊与 DSH 摘要互补。',
-    '- 微观层：工具失败、文件写入、计划或待办变更时触发微快照。快照 6 项为目标、已确认事实、未决、下一步、指针与时刻；缺项写「未核，待确认」。快照与锚点存放在会话目录内 dsh-handover/，随会话删除而消失。',
+    '- 压缩后以胶囊为准，不读旧交接全文；交接只在更替会话时使用。助手胶囊由本会话自述目标、已定方案、下一步与易错点。机制兜底胶囊只放目标、约束逐条原文与状态，另附最近 6 轮按关键词抽取的句子。关键词为下一步、待办、未完成、待确认、待修、错误、失败、异常、路径，抽不到写「（无）」。助手胶囊与 DSH 摘要互补。',
+    '- 微观层：微快照只在压缩前写入，助手入口与强制线各一次。快照 6 项为目标、已确认事实、未决、下一步、指针与时刻；缺项写「未核，待确认」。快照与锚点存放在会话目录内 dsh-handover/，随会话删除而消失。',
     '- 换任一步到位：ho_handover(action="rotate", text=…) 归档旧交接并写入新正文。随后由当前用户发送 /allow-reset 或点击「授权重置」，再调用 ho_sessions(action="succeed")。未获授权不得建接任会话；不得用同会话压缩冒充清空上下文。',
-    '- 交接只写在途与指针，篇幅以结构控制为主，不规定字节与页数。单份全文不超过 500 行；超限先删过期内容，不删在途信息。不粘贴大段代码、日志与命令输出，需要时给出路径。',
-    '- 事件级微快照由插件自动落盘，不必手工写入。整篇重写交接用 action="rotate"；不经该动作而手改交接的，更替会话会被拒绝。',
+    '- 交接只写在途与指针，篇幅以结构控制为主。写作目标 500 行以内。单次读取超过 600 行即截断。超限先删过期内容，不删在途信息。不粘贴大段代码、日志与命令输出，需要时给出路径。',
+    '- 整篇重写交接用 action="rotate"；不经该动作而手改交接的，更替会话会被拒绝。',
     '- 探查与批量任务先量后取：用脚本统计行数、字段数与文件数。不要把整份 CSV、题面或日志一次性刷进上下文。单条工具结果将超过约 100 行或 4KB 时，改用 offset/limit，或只取表头与计数。',
     '- 脚本回显只给汇总与失败项，不超过 40 行。同一批数据不为探查另写脚本；分析、生成、自测在一个脚本里完成。',
     '- 本机 shell 是 Windows PowerShell 5.1，默认编码 gb2312。Get-Content 按 ANSI 解码，Set-Content -Encoding utf8 再编码。用它们转写含中文的文件会出现双重编码，得到乱码（典型「绗笁鏂」）。转写文本一律用 node 脚本，或 [IO.File]::ReadAllText 与 WriteAllText 配 UTF-8 无 BOM。不要把 Get-Content 管道给 Set-Content。',
@@ -105,7 +111,7 @@ export function globalManual(opts) {
     HANDOVER_FLOW,
     '体系注册：_Control_Center/records/systems.md 只列各任务体系文件的路径。本段只注入这些引用，不注入各任务正文。',
     '全局任务库：_Control_Center/tasks/<任务名>/。每个任务各有独立交接与计划，并可一键独立为项目或杂项会话。',
-    COLLAB_LINE,
+    collabLine(o.guard),
     ABORT_LINE,
     SKIP_LINE,
     WRITING_POINTER,
@@ -160,7 +166,7 @@ export function scopedManual(info, opts) {
     '会话间可直接 peer（action="send"）。默认沉默：仅在 3 种情形下向全局报告。其一为水位达到建议线（advise）且已写交接；其二为需当前用户决定；其三为全局口径有误。任务完成不报全局。',
     WRITING_POINTER,
     DELEGATION_POINTER,
-    COLLAB_LINE,
+    collabLine(o.guard),
     ABORT_LINE,
     SKIP_LINE,
     '',

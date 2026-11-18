@@ -20,6 +20,27 @@ import { sha256 } from './handover-io.mjs';
 const SKIP_DIRS = ['__pycache__', '.git', 'node_modules', '.obsidian'];
 const SKIP_FILES = ['.DS_Store', 'Thumbs.db'];
 
+/** 显式入参的路径归一：绝对路径原样，相对路径按工作区根解析，避免落到 DSH 进程 cwd。 */
+function resolveAgainst(ws, p) {
+  const s = String(p == null ? '' : p);
+  if (!s || !ws) return s;
+  return path.isAbsolute(s) ? s : path.resolve(String(ws), s);
+}
+
+/** 同名冲突时追加 -2、-3…；只处理打包产物的 .7z 与 .tar.gz 2 种扩展名。 */
+function uniqueArchivePath(p) {
+  if (!fs.existsSync(p)) return p;
+  const m = path.basename(p).match(/^(.*?)(\.tar\.gz|\.7z)$/i);
+  const dir = path.dirname(p);
+  const stem = m ? m[1] : path.basename(p);
+  const ext = m ? m[2] : '';
+  for (let i = 2; i < 1000; i++) {
+    const q = path.join(dir, stem + '-' + i + ext);
+    if (!fs.existsSync(q)) return q;
+  }
+  return p;
+}
+
 /**
  * 选归档格式：auto（有 7-Zip 用 7z，否则用内置 tar.gz）、7z、tar。
  * 内置归档器是功能等价的兜底方案：空白机器上没有 7-Zip 也必须能打包、校验、恢复。
@@ -39,9 +60,10 @@ function chooseFormat(args, cfg) {
 /** 解包到 dir（按魔数判断格式，不看扩展名）。
  * @param {string} packPath 包路径
  * @param {string} dir 解包目标目录
+ * @param {object} [cfg] 配置；`sevenZipPath` 与打包时同源，避免探测缓存串味
  * @returns {{code:number, out:string}} code 为 0 表示成功，out 为人类可读的过程说明
  */
-function unpack(packPath, dir) {
+function unpack(packPath, dir, cfg) {
   const fmt = detectFormat(packPath);
   if (fmt === 'targz') {
     try {
@@ -53,7 +75,7 @@ function unpack(packPath, dir) {
     }
   }
   if (fmt === '7z') {
-    const bin = sevenZipBin('');
+    const bin = sevenZipBin(cfg && cfg.sevenZipPath);
     if (!bin) return { code: -1, out: '该包为 7z 格式，但本机无 7-Zip；请安装 7-Zip，或改用 tar.gz 包。' };
     fs.mkdirSync(dir, { recursive: true });
     return run7zSafe(bin, packPath, dir);
@@ -83,7 +105,7 @@ function run7zSafe(bin, packPath, dir) {
 export function stampNow() {
   const d = new Date();
   const p = (n) => (n < 10 ? '0' + n : '' + n);
-  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
 }
 
 function walk(root, rel, out) {
@@ -182,7 +204,7 @@ export function packNow(env, args, exec) {
   }
   const stamp = stampNow();
   const label = kind === 'global' ? '全局' : name;
-  const stagingRoot = path.join(ws, '_Temp', '_Global', 'Scratch', 'pack-' + stamp);
+  const stagingRoot = path.join(ws, '_Temp', '_Global', 'Scratch', 'pack-' + stamp + '-' + process.pid);
   const payload = path.join(stagingRoot, 'payload');
   const files = [];
   for (const e of entries) {
@@ -209,11 +231,11 @@ export function packNow(env, args, exec) {
   const absLines = renderAbsoluteRefs(abs, { title: '绝对路径体检（包内）', max: 200 });
   const md = ['# 迁移包（最简版）', '', '- 目标: ' + kind + (name ? ':' + name : ''), '- 生成: ' + manifest.createdAt, '- 文件: ' + files.length + ' 个 / ' + total + ' B', '- 说明: ' + (args.note || '（无）'), '', ...absLines, '', '## 跨平台注意', '', '- **库内引用一律相对路径**：本包内有 ' + abs.totalHits + ' 处写死的绝对路径，插件只报告、不改写文件内容，迁移后须由人工或项目会话修改。', '- 源平台 ' + manifest.sourcePlatform + '；换行 CRLF ' + abs.crlf + ' 个 / LF ' + abs.lf + ' 个' + (abs.nonUtf8.length ? '；非 UTF-8 ' + abs.nonUtf8.length + ' 个' : '') + '。', '- 目标机若为其他系统（Windows ↔ macOS/Linux）：盘符、路径分隔符、大小写敏感性、换行与编码均须项目会话自行核对。', '', '## 目标环境前置（先完成这两项，再执行恢复）', '', '1. 安装 dsh-handover 插件（否则本工具不存在）；', '2. 打开本包随附的交接文件（_Project_Meta/<项目名>/Handover.md 或全局 _Control_Center/records/Global_Handover.md），按其中内容恢复状态。', '', '## 恢复', '', 'ho_workspace(action="backup-restore", pack="<本包绝对路径>", dry_run=true)   # 先预演，再加 apply=true', '', '> 会话本身不迁移：连续性只依托交接文档。'].join(NL);
   fs.writeFileSync(path.join(stagingRoot, 'MIGRATION.md'), md, 'utf8');
-  const outDir = args.out || path.join(ws, '_Archives', '_Global', 'Backups');
+  const outDir = resolveAgainst(ws, args.out || path.join(ws, '_Archives', '_Global', 'Backups'));
   fs.mkdirSync(outDir, { recursive: true });
   const pick = chooseFormat(args, env.cfg);
   const ext = pick.fmt === '7z' ? '.7z' : '.tar.gz';
-  const archive = path.join(outDir, label + '-migration-' + stamp + ext);
+  const archive = uniqueArchivePath(path.join(outDir, label + '-migration-' + stamp + ext));
   if (fs.existsSync(archive)) throw new Error('目标包已存在，不覆盖：' + archive);
   if (pick.fmt === '7z') {
     const a = z7pack(pick.bin, archive, stagingRoot);
@@ -239,11 +261,11 @@ export function packNow(env, args, exec) {
 
 export function packVerify(env, args, exec) {
   const ws = env.resolveWs(exec);
-  const packPath = args.pack;
+  const packPath = resolveAgainst(ws, args.pack);
   if (!packPath) throw new Error('action=verify 需要 pack（包路径）');
   if (!fs.existsSync(packPath)) throw new Error('包不存在：' + packPath);
-  const tmp = path.join(ws, '_Temp', '_Global', 'Scratch', 'verify-' + stampNow());
-  const ex = unpack(packPath, tmp);
+  const tmp = path.join(ws, '_Temp', '_Global', 'Scratch', 'verify-' + stampNow() + '-' + process.pid);
+  const ex = unpack(packPath, tmp, env.cfg);
   if (ex.code !== 0) throw new Error('解包失败：' + String(ex.out).slice(-300));
   const mf = path.join(tmp, 'manifest.json');
   if (!fs.existsSync(mf)) throw new Error('包内缺 manifest.json：' + packPath);
@@ -273,13 +295,13 @@ export function packVerify(env, args, exec) {
 
 export function packRestore(env, args, exec) {
   const ws = env.resolveWs(exec);
-  const target = args.target || ws;
-  const packPath = args.pack;
+  const target = resolveAgainst(ws, args.target || ws);
+  const packPath = resolveAgainst(ws, args.pack);
   if (!packPath) throw new Error('action=restore 需要 pack（包路径）');
   if (!fs.existsSync(packPath)) throw new Error('包不存在：' + packPath);
   const apply = args.apply === true && args.dry_run !== true;
-  const tmp = path.join(ws, '_Temp', '_Global', 'Scratch', 'restore-' + stampNow());
-  const ex = unpack(packPath, tmp);
+  const tmp = path.join(ws, '_Temp', '_Global', 'Scratch', 'restore-' + stampNow() + '-' + process.pid);
+  const ex = unpack(packPath, tmp, env.cfg);
   if (ex.code !== 0) throw new Error('解包失败：' + String(ex.out).slice(-300));
   const mf = path.join(tmp, 'manifest.json');
   if (!fs.existsSync(mf)) throw new Error('包内缺 manifest.json');
@@ -301,7 +323,7 @@ export function packRestore(env, args, exec) {
   }
   const abs = scanAbsoluteRefs(path.join(tmp, 'payload'), manifest.files.map((f) => f.path));
   const crossPlatform = manifest.sourcePlatform && manifest.sourcePlatform !== process.platform;
-  const backupDir = path.join(ws, '_Temp', '_Global', 'Snapshots', 'restore-' + stampNow());
+  const backupDir = uniqueArchivePath(path.join(ws, '_Temp', '_Global', 'Snapshots', 'restore-' + stampNow() + '-' + process.pid));
   const adds = [], overwrites = [];
   for (const f of manifest.files) {
     const dest = path.join(target, f.path.split('/').join(path.sep));

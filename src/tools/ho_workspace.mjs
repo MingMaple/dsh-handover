@@ -231,6 +231,13 @@ function baseWorkspaceTool(env) {
       if (action === 'move-switch') {
         const r = stageSwitch({ relaunch: args.relaunch === true });
         if (r.already) { out.push('已处于切换态（原路径即链接），无需再次切换。'); return { text: out.join(NL) }; }
+        if (!r.ok) {
+          out.push('现象：' + (r.error || '派出后台切换助手失败') + '。');
+          out.push('  未生成任何切换动作，DSH 退出后不会自动切换。');
+          out.push('  处置：完全退出 DSH 后手工执行 `' + String(r.helper || '') + '`'
+            + '（Windows 用 `' + String(r.cmd || '') + '`，POSIX 用 `' + String(r.sh || '') + '`）。');
+          return { text: out.join(NL) };
+        }
         out.push('已派出后台切换助手（pid ' + r.pid + '）。');
         out.push('  该助手会在完全退出 DSH 后自动完成：旧目录改名、原位建立链接、校验指向' + (r.relaunch ? '，然后重新启动 DSH' : '') + '。');
         out.push('  日志：`' + r.log + '`。');

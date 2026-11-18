@@ -153,10 +153,12 @@ export function writeProfile(ws, info, raw) {
   return { path: p, profile: r.profile };
 }
 
-/** 校验：结构错误与必需项缺失分开报；docs 与 optional 不强制存在。 */
+/** 校验：结构错误与必需项缺失分开报；docs 与 optional 不强制存在。
+ * 未显式传入 profile 时自读文件，结构错误一并写入 errors，调用方只读 errors 也不会漏报。 */
 export function validateProfile(ws, info, profile) {
-  const p = profile || readProfile(ws, info).profile;
-  const errors = [];
+  const rd = profile === undefined || profile === null ? readProfile(ws, info) : null;
+  const p = rd ? rd.profile : profile;
+  const errors = rd && Array.isArray(rd.errors) ? rd.errors.slice() : [];
   const missing = [];
   const root = path.join(ws, p.root || '');
   for (const rel of p.required || []) {
@@ -191,10 +193,10 @@ export function listProfiles(ws) {
       const file = path.join(d, role === 'project' ? PROJECT_FILE : TASK_FILE);
       const info = { role, project: role === 'project' ? name : '', task: role === 'misc' ? name : '' };
       const r = readProfile(ws, info);
-      const v = validateProfile(ws, info, r.profile);
+      const v = validateProfile(ws, info);
       out.push({
         role, name, path: file, exists: r.exists,
-        kind: r.profile.kind, ok: v.ok, missing: v.missing, errors: r.errors.concat(v.errors),
+        kind: r.profile.kind, ok: v.ok, missing: v.missing, errors: v.errors,
       });
     }
   };

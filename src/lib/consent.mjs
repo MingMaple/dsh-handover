@@ -3,9 +3,9 @@
  * 因此「同意」必须由用户自己产生，AI 不能自己给自己批。
  *
  * 授权入口只有用户亲手产生的那一次：设置页点击，或聊天页斜杠命令。
- * 授权一次有效 5 分钟，只对指定会话与指定种类生效。
- * 压缩与换任各有各的授权，互不顶替。
- * 种类取 compact（压缩）或 succeed（换任），缺省为 compact。
+ * 授权一次有效 5 分钟，只对指定会话生效。
+ * 压缩不需要授权（压缩走前置校验）；只有换任（上下文重置）需要授权。
+ * 种类取 succeed（换任）；compact 仅为旧授权文件兼容保留，缺省仍按 compact 取值。
  * 旧文件里没有 kind 的条目按 compact 处理。
  */
 import fs from 'node:fs';
@@ -111,7 +111,7 @@ export function checkConsent(sessionId, kind) {
       kind: k,
       reason: k === 'succeed'
         ? '现象：当前用户未授权上下文重置。原因：换任授权一次性有效，过期或从未授权时不可用。处置：在聊天框发送 /allow-reset'
-        : '现象：当前会话没有有效的压缩授权。原因：授权一次性有效，旧压缩授权入口已停用。处置：在聊天框发送 /allow-reset',
+        : '现象：当前会话没有有效的压缩授权。原因：压缩已改为按前置校验执行，无需用户授权；旧压缩授权入口已停用。处置：直接调用 `ho_handover(action="compact")`。',
     };
   }
   return { ok: true, kind: k, until: hit.until, leftMs: hit.until - now, atText: hit.atText || '' };

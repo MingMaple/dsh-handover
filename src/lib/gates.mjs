@@ -101,7 +101,19 @@ export function syncCheck(ws) {
   const rows = [];
   let bad = 0;
   for (const lib of libraryRoots(ws)) {
-    const rules = readUtf8(path.join(lib.root, 'RULES.md'));
+    let rules = '';
+    let readError = '';
+    try {
+      rules = readUtf8(path.join(lib.root, 'RULES.md'));
+    } catch (e) {
+      // 单个库读不到只让该库带错误，其余库照常复核；否则 brief 与 gate 会整页失败。
+      readError = String(e && e.message ? e.message : e);
+    }
+    if (readError) {
+      bad++;
+      rows.push({ name: lib.name, titleOk: false, waterOk: false, missing: [], total: blk.body.length, ok: false, readError });
+      continue;
+    }
     const missing = blk.body.filter((l) => rules.indexOf(l) === -1);
     const titleOk = rules.indexOf(TITLE_KEY) !== -1;
     const waterOk = rules.indexOf(WATER_KEY) !== -1;
@@ -129,6 +141,10 @@ export function renderSyncCheck(res) {
   if (res.error) { out.push(res.error + '：' + res.path); return out; }
   out.push('通用约束条同步复核  库数 ' + res.total + '  正文 ' + res.bodyLines + ' 行  来源 §8.1.1.4' + (res.builtin ? '（工作区无 Workspace_Charter.md，采用插件内置口径）' : ''));
   for (const r of res.libraries) {
+    if (r.readError) {
+      out.push('  ' + r.name + '  读不到  ' + r.readError);
+      continue;
+    }
     const flag = r.ok ? '通过' : '未通过';
     out.push('  ' + r.name + '  标题 ' + (r.titleOk ? '通过' : '缺') + '  正文 ' + (r.total - r.missing.length) + '/' + r.total +
       '  水位自查 ' + (r.waterOk ? '通过' : '缺') + '  ' + flag);
@@ -158,16 +174,20 @@ export function renderDocmapCheck(res) {
   const out = [];
   out.push('体系注册  任务 ' + res.rows.length + ' 个');
   if (!res.rows.length) {
-    out.push('  尚无任何任务注册（空注册不注入正文，属正常）');
+    out.push('  尚无任何任务目录（空注册不注入正文，属正常）');
     out.push('判定：无需检查');
     return out;
   }
   for (const r of res.rows) {
-    out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists ? r.entries + ' 条' : '未设置') + '  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在'));
+    out.push('  ' + r.label + '  ' + r.rel + '  ' + (r.exists
+      ? r.entries + ' 条  ' + (r.bad.length ? '失效 ' + r.bad.length + ' 条' : '路径全部存在')
+      : '未设置（缺 System.md）'));
     for (const b of r.bad.slice(0, 3)) out.push('        失效：' + b.path + ' —— ' + b.problem);
   }
-  out.push('判定：' + (res.missing === 0
-    ? '全部落位。'
-    : res.missing + ' 条路径失效，由该类别在任会话用 ho_docmap(action="write") 更新。'));
+  out.push('判定：' + (res.missing
+    ? res.missing + ' 条路径失效，由该类别在任会话用 ho_docmap(action="registry-write") 更新。'
+    : res.unset
+      ? res.unset + ' 个任务未设置体系注册，由该类别在任会话用 ho_docmap(action="registry-write") 建立。'
+      : '全部落位。'));
   return out;
 }

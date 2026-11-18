@@ -16,7 +16,6 @@ export function createToolRegistry(runtime) {
   const {
     ctx, cfg, env, perStep, registered, initErrors,
     isChildSession, infoFor, scopedMetaOf, roleCache, titleOf,
-    schedulerReady, schedulerError,
   } = runtime;
   const msgOf = (e) => String(e && e.message ? e.message : e);
   let guardLast = null;
@@ -48,7 +47,7 @@ export function createToolRegistry(runtime) {
   }
 
   const tools = [
-    pmStatusTool(env, { schedulerReady, schedulerError }),
+    pmStatusTool(env),
     pmHandoverTool(env),
     pmDocmapTool(env),
     pmSessionsTool(env),
@@ -78,10 +77,18 @@ export function createToolRegistry(runtime) {
     }
   }
 
+  // 旧内核没有 tools.guard：会话/协作守卫无从注册，越权动作只受规则约束（D-110）。
+  const guardAvailable = (() => { try { return typeof ctx.tools.guard === 'function'; } catch { return false; } })();
+  if (!guardAvailable) {
+    const m = '工具守卫：当前内核无 tools.guard，会话守卫与协作守卫未注册，越权动作只能靠规则约束（旧内核）';
+    env.log(m);
+    initErrors.push(m);
+  }
+
   // ---------------- 会话守卫（Charter §7.2.4）：新建会话与设置角色仅属全局；
   // 会话之间可直接用 peer（action=send）通信，无须经全局转述。
   // directPeer=off 时退回「只能向全局报告」的旧口径。
-  if (cfg.wakeAuthority !== 'off' && typeof ctx.tools.guard === 'function') {
+  if (cfg.wakeAuthority !== 'off' && guardAvailable) {
     try {
       ctx.tools.guard((exec) => {
         const nm = exec && exec.name;
@@ -121,14 +128,19 @@ export function createToolRegistry(runtime) {
 
   // ---------------- 协作守卫：协作注册期间，被交办方不得经由 DSH 自带的 send_message 发送明文消息。
   // 不改动 DSH 本体，只挂一层工具守卫；普通会话与普通对话不受影响。
-  if (typeof ctx.tools.guard === 'function') {
+  if (guardAvailable) {
     try {
       ctx.tools.guard((exec) => {
         const nm = exec && exec.name;
         if (nm !== 'send_message') return undefined;
         const sid = env.selfId(exec) || '';
+        let raw = (exec && exec.arguments) || {};
+        if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+        // send_message 的目标参数名随宿主版本而异：取到就按目标判定，取不到则由守卫维持全禁。
+        const target = String(raw.session_id || raw.sessionId || raw.to || raw.target
+          || raw.agent_id || raw.agentId || '');
         let why = '';
-        try { why = collabMemberReason(sid); } catch { why = ''; }
+        try { why = collabMemberReason(sid, target); } catch { why = ''; }
         if (!why) return undefined;
         guardLast = { sid, allow: false, source: '协作注册', title: titleOf(sid) };
         return why;

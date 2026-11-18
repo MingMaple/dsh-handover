@@ -153,46 +153,78 @@ function frameLength(buf, off) {
   return off + total > buf.length ? -1 : total;
 }
 
-/** 解压一段帧内容并按行解析；解压失败即按坏帧跳过。返回是否成功。 */
+/** 当前运行时是否提供 zstd 解压 API（Node 22.15 之前不存在）。 */
+export function zstdAvailable() {
+  return typeof zlib.zstdDecompressSync === 'function';
+}
+
+/** 文件是否以 zstd 帧魔数开头（明文 JSONL 不需要 zstd 支持）。 */
+export function isZstdLog(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const b = Buffer.allocUnsafe(4);
+      const got = fs.readSync(fd, b, 0, 4, 0);
+      return got === 4 && b.readUInt32LE(0) === FRAME_MAGIC_LE;
+    } finally { fs.closeSync(fd); }
+  } catch { return false; }
+}
+
+/** 解压一段帧内容并按行解析；返回 'ok' | 'bad'（坏帧）| 'no-zstd'（缺 API，未尝试）。 */
 function decodeFrameInto(out, buf, off, len, carryRef) {
+  if (!zstdAvailable()) return 'no-zstd';
   let text = '';
-  try { text = zlib.zstdDecompressSync(buf.subarray(off, off + len)).toString('utf8'); } catch { return false; }
+  try { text = zlib.zstdDecompressSync(buf.subarray(off, off + len)).toString('utf8'); } catch { return 'bad'; }
   carryRef.value = pushLines(out, text, carryRef.value);
-  return true;
+  return 'ok';
 }
 
 /**
- * 解码多帧 zstd 日志，返回事件数组（坏帧跳过）；明文 JSONL 直接解析。
+ * 解码多帧 zstd 日志，返回带状态的结果：{ records, status, badFrames }。
+ * status：ok（全部帧成功）｜partial（部分坏帧，records 为已解出的行）｜bad（有帧但一条都没解出）
+ *         ｜empty（可解码但没有事件）｜no-zstd（缺 zstd API，未尝试）｜unreadable（文件读不到）。
+ * 调用方据此区分「无事件」与「解压不可用/坏帧」，不要把失败当成空日志。
  * 逐帧解压、逐行解析，不把全部帧拼成一个巨型字符串（10MB 日志的拼接峰值约 150MB）。
  * 帧边界按 block 头计算，遇到结构非法就退回魔数扫描继续，因此仍能跨过坏帧。
  */
-export function decodeLog(file) {
+export function decodeLogResult(file) {
   let buf;
-  try { buf = fs.readFileSync(file); } catch { return null; }
+  try { buf = fs.readFileSync(file); } catch { return { records: [], status: 'unreadable', badFrames: 0 }; }
   const first = buf.indexOf(MAGIC);
   if (first < 0) {
     let text = '';
-    try { text = buf.toString('utf8'); } catch { return null; }
+    try { text = buf.toString('utf8'); } catch { return { records: [], status: 'unreadable', badFrames: 0 }; }
     const rows = [];
     pushLines(rows, text, '');
-    return rows.length ? rows : null;
+    return rows.length ? { records: rows, status: 'ok', badFrames: 0 } : { records: [], status: 'empty', badFrames: 0 };
   }
+  if (!zstdAvailable()) return { records: [], status: 'no-zstd', badFrames: 0 };
   const out = [];
   const carryRef = { value: '' };
+  let badFrames = 0;
   let pos = first;
   while (pos < buf.length) {
     const len = frameLength(buf, pos);
     if (len < 0) {
       // 尾部写了一半且后面没有魔数时到此为止；结构非法时跳到下一个魔数继续。
+      if (len === -2) badFrames++;
       const j = buf.indexOf(MAGIC, pos + 4);
       if (j < 0) break;
       pos = j;
       continue;
     }
-    decodeFrameInto(out, buf, pos, len, carryRef);
+    if (decodeFrameInto(out, buf, pos, len, carryRef) === 'bad') badFrames++;
     pos += len;
   }
-  return out;
+  const status = out.length ? (badFrames ? 'partial' : 'ok') : (badFrames ? 'bad' : 'empty');
+  return { records: out, status, badFrames };
+}
+
+/** 兼容入口：解得出事件即返回数组；空日志返回 []；解压不可用/坏帧/读不到返回 null。 */
+export function decodeLog(file) {
+  const r = decodeLogResult(file);
+  if (r.status === 'no-zstd' || r.status === 'unreadable' || r.status === 'bad') return null;
+  return r.records;
 }
 
 /**

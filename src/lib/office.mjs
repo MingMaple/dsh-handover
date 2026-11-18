@@ -73,17 +73,26 @@ function generationOf(name) {
 /** 下一编号：该类别历史上出现过的最大号 + 1；没有历史就从 1 起算。 */
 export function nextName(store, key) {
   const lin = store && store.lineages ? store.lineages[key] : null;
+  // 类别名自身可能以数字结尾（如 Demo2）：先剥出前缀，把类别尾号计入基线。
+  // 否则「Demo2」的首任会拼成 Demo23，下一任再把 23 当代数，位数越滚越多（D-133）。
+  const keyText = String(key || '').trim();
+  const km = GEN_RE.exec(keyText);
+  const prefix = km ? km[1] : keyText;
   const names = [];
   if (lin && lin.current && lin.current.name) names.push(lin.current.name);
   for (const h of (lin && Array.isArray(lin.history) ? lin.history : [])) {
     if (h && h.name) names.push(h.name);
   }
-  let max = 0;
+  let max = km ? Number(km[2]) : 0;
   for (const n of names) {
-    const g = generationOf(n);
-    if (g !== null && g > max) max = g;
+    const s = String(n).trim();
+    if (!s.startsWith(prefix)) continue;
+    const tail = s.slice(prefix.length);
+    if (!/^\d+$/.test(tail)) continue;
+    const g = Number(tail);
+    if (g > max) max = g;
   }
-  return String(key) + String(max + 1);
+  return prefix + String(max + 1);
 }
 
 /**
@@ -166,6 +175,8 @@ export function formatRow(row, askedAs) {
 /** 登记一位在任者：原在任者进历史，写盘后同步 Registry.md。 */
 export function registerHolder(ws, opts) {
   const o = opts || {};
+  // 没有工作区根时拒绝登记：空串会拼出相对路径，把 _Control_Center 写进进程目录（D-112）。
+  if (!String(ws || '').trim()) throw new Error('没有工作区根，拒绝写入在任登记表');
   const key = lineageKeyOf(o.kind, o.project, o.task);
   if (!key) throw new Error('类别名缺失：全局传 kind=global，项目传 project，杂项传 task');
   const store = loadOffice(ws);

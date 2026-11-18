@@ -9,6 +9,7 @@ import { visibleTextOf, collectSignals } from './events.mjs';
 import { stampTz } from './brief.mjs';
 import { storeDirFor } from './store.mjs';
 import { serviceOf } from './engine.mjs';
+import { writeFileAtomic } from './text.mjs';
 
 const UNVERIFIED = '未核，待确认';
 /** 微快照保留上限：同目录只留最近 8 份。 */
@@ -198,10 +199,16 @@ export function renderSnapshot(snap) {
   return out.join(String.fromCharCode(10));
 }
 
+/** 快照文件名：秒级时刻 + 毫秒后缀，同一秒内多次写仍可区分（D-122）。 */
+const SNAPSHOT_RE = /^micro_\d{8}_\d{6}(?:_\d{3})?(?:_\d+)?\.md$/;
+
 function stampForFile(ms) {
   const d = new Date(ms);
   const p = (n) => (n < 10 ? '0' + n : '' + n);
-  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  const p3 = (n) => (n < 10 ? '00' + n : n < 100 ? '0' + n : '' + n);
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_'
+    + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '_'
+    + p3(ms % 1000);
 }
 
 /** 写一份快照；返回路径与字节数。写完后只保留最近 SNAPSHOT_KEEP 份。 */
@@ -210,11 +217,14 @@ export function writeSnapshot(snap) {
   const dir = storeDirFor(snap.sid);
   fs.mkdirSync(dir, { recursive: true });
   const ms = typeof snap.atMs === 'number' ? snap.atMs : Date.now();
-  const file = path.join(dir, 'micro_' + stampForFile(ms) + '.md');
+  const base = 'micro_' + stampForFile(ms);
+  // 同一 atMs 连续写 2 次时追加序号，避免后写覆盖前写（D-122）。
+  let file = path.join(dir, base + '.md');
+  for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, base + '_' + n + '.md');
   const text = renderSnapshot(snap);
-  fs.writeFileSync(file, text, 'utf8');
+  writeFileAtomic(file, text);
   try {
-    const names = fs.readdirSync(dir).filter((n) => /^micro_\d{8}_\d{6}\.md$/.test(n)).sort();
+    const names = fs.readdirSync(dir).filter((n) => SNAPSHOT_RE.test(n)).sort();
     for (const name of names.slice(0, Math.max(0, names.length - SNAPSHOT_KEEP))) {
       try { fs.unlinkSync(path.join(dir, name)); } catch { /* 删除失败忽略 */ }
     }
@@ -226,7 +236,7 @@ export function writeSnapshot(snap) {
 export function listSnapshots(sid) {
   const dir = storeDirFor(sid);
   let names = [];
-  try { names = fs.readdirSync(dir).filter((n) => /^micro_\d{8}_\d{6}\.md$/.test(n)).sort(); } catch { names = []; }
+  try { names = fs.readdirSync(dir).filter((n) => SNAPSHOT_RE.test(n)).sort(); } catch { names = []; }
   const latest = names.length ? names[names.length - 1] : '';
   return {
     count: names.length,

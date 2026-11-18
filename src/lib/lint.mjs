@@ -62,6 +62,20 @@ function bulletRows(lines) {
   return lines.filter((l) => /^\s*(?:[-*+]|\d+[.)、])\s+/.test(l));
 }
 
+/**
+ * 「下一步／待办」节的统一结构判据：lint 与换任结构检查共用，避免 2 套规则（D-130）。
+ * 标题接受「下一步」或「待办」；条目接受表格行、无序列表与有序列表。
+ * @returns {{ok:boolean, reason?:string}}
+ */
+export function nextSectionCheck(text) {
+  const nxt = sectionLines(text, '下一步') || sectionLines(text, '待办');
+  if (!nxt) return { ok: false, reason: '缺「下一步待办」一节' };
+  if (tableRows(nxt).length <= 1 && bulletRows(nxt).length === 0) {
+    return { ok: false, reason: '「下一步待办」未列出任何条目' };
+  }
+  return { ok: true };
+}
+
 /** 全局交接体检：{ verdict, reasons }。 */
 export function lintGlobal(file) {
   if (!isFile(file)) return { verdict: "读不到", reasons: ["文件不存在：" + file] };
@@ -118,9 +132,8 @@ export function lintProject(file) {
     // 只判「有没有实质内容」；不设字数下限（2026-11-11 口径：交接类文档不设体积上限）。
     if (core.length === 0) bad.push("正在做的事 为空节（或仅有引用块说明），无实质内容");
   }
-  const nxt = sectionLines(text, '下一步') || sectionLines(text, '待办');
-  if (!nxt) bad.push("缺「下一步待办」一节");
-  else if (tableRows(nxt).length <= 1 && bulletRows(nxt).length === 0) bad.push("「下一步待办」未列出任何条目");
+  const nxt = nextSectionCheck(text);
+  if (!nxt.ok) bad.push(nxt.reason);
   const ph = firstPlaceholder(text);
   if (ph) bad.push("残留模板占位符：" + ph);
   if (bad.length) return { verdict: "不合格", reasons: bad };
