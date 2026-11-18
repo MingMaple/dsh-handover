@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, readPressure } from './lib/sessions.mjs';
-import { readJsonDir, isDir, isFile } from './lib/text.mjs';
+import { readJsonDir, readJsonFileLazy, isDir, isFile } from './lib/text.mjs';
 import { migrateIdentity } from './lib/identity.mjs';
 import { capText, HANDOVER_MAX_LINES } from './lib/limit.mjs';
 import { judgeMacroReset, judgeHardCap, decidePhase, judgeTrigger, judgeTier } from './lib/triggers.mjs';
@@ -665,6 +665,20 @@ const homeBak = { u: process.env.USERPROFILE, h: process.env.HOME };
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-selftest-'));
 process.env.USERPROFILE = tmpHome;
 process.env.HOME = tmpHome;
+
+/* ---------------- 单文件缓存：同长度同刻度改写 ---------------- */
+
+const lazyDir = path.join(tmpHome, 'lazy');
+fs.mkdirSync(lazyDir, { recursive: true });
+const lazyFile = path.join(lazyDir, 's.json');
+const lazyTick = new Date(1794700000000);
+fs.writeFileSync(lazyFile, '{"v":"aa"}', 'utf8');
+fs.utimesSync(lazyFile, lazyTick, lazyTick);
+eq('单文件缓存首次读取', readJsonFileLazy(lazyDir, ['s']).data.v, 'aa');
+fs.writeFileSync(lazyFile, '{"v":"bb"}', 'utf8');
+fs.utimesSync(lazyFile, lazyTick, lazyTick);
+eq('同长度同 mtime 改写读到新值', readJsonFileLazy(lazyDir, ['s']).data.v, 'bb');
+
 resetBackfill('session-selftest');
 eq('首次回填应投递', shouldSendBackfill('session-selftest', 1000, 300000).send, true);
 markBackfill('session-selftest', 1000, 'snap.md');

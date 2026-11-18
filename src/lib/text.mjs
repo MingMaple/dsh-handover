@@ -109,7 +109,12 @@ export function readJsonDir(dir) {
  * 按候选文件名逐个直读 <dir>/<stem>.json，命中即返回 { name, data }，全部失败返回 null。
  * 只取单个会话的数据时不要调用 readJsonDir：该函数会全量解析 400 多个文件。
  */
-/** 单文件读取缓存：按路径 + mtime + size 复用解析结果，避免每步重复解析投影缓存。 */
+/**
+ * 单文件读取缓存：按路径存原文与解析结果，命中先比对原文。
+ * 只用 mtime + size 判重会漏掉同长度改写。
+ * 2 次写入可能落在同一时间戳刻度，size 又相同，缓存会返回旧值。
+ * 原文比对多 1 次读盘，省下的是 JSON 解析，仍比每步重解析便宜。
+ */
 const lazyFileCache = new Map();
 const LAZY_FILE_MAX = 128;
 
@@ -121,15 +126,19 @@ export function readJsonFileLazy(dir, stems) {
     const p = path.join(String(dir), s + '.json');
     let st = null;
     try { st = fs.statSync(p); } catch { continue; }
+    let buf = null;
+    try { buf = fs.readFileSync(p); } catch { continue; }
     const hit = lazyFileCache.get(p);
-    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+    if (hit && hit.buf.equals(buf)) {
+      hit.mtimeMs = st.mtimeMs;
+      hit.size = st.size;
       lazyFileCache.delete(p);
       lazyFileCache.set(p, hit);
-      return { name: s + '.json', data: hit.data, mtimeMs: hit.mtimeMs, size: hit.size };
+      return { name: s + '.json', data: hit.data, mtimeMs: st.mtimeMs, size: st.size };
     }
     try {
-      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-      lazyFileCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, data });
+      const data = JSON.parse(buf.toString('utf8'));
+      lazyFileCache.set(p, { buf, data, mtimeMs: st.mtimeMs, size: st.size });
       while (lazyFileCache.size > LAZY_FILE_MAX) lazyFileCache.delete(lazyFileCache.keys().next().value);
       return { name: s + '.json', data, mtimeMs: st.mtimeMs, size: st.size };
     } catch { /* 试下一个候选 */ }
