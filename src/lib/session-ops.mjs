@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话管理的实现。原 ho_session_new 等 4 个入口的代码已并入本文件。
  * 对外只经 ho_sessions(action=…) 暴露，省去 4 份 schema 的固定开销。
  */
@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { NL, readUtf8, isDir, isFile } from './text.mjs';
-import { handoverPathFor, assertProjectName, assertTaskName } from './role.mjs';
+import { handoverPathFor, assertProjectName, assertTaskName, PENDING_MIGRATION } from './role.mjs';
 import { workspaceRows } from './registry.mjs';
 import { bandsFor } from './pressure.mjs';
 import { sendPrompt } from './prompt.mjs';
@@ -14,6 +14,8 @@ import { newSessionIn } from './session-create.mjs';
 import { ABORTED_TEXT, aborted } from './abort.mjs';
 import { lineageKeyOf, loadOffice, nextName, registerHolder } from './office.mjs';
 import { migrateIdentity } from './identity.mjs';
+import { detachGlobalTask, syncGlobalRefs } from './system.mjs';
+import { stampTz } from './brief.mjs';
 import { pathKey } from './pathkey.mjs';
 
 const FENCE = String.fromCharCode(96, 96, 96);
@@ -85,6 +87,8 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
       return p.indexOf('/projects/' + want) !== -1 || p.indexOf('/_project_meta/' + want) !== -1;
     });
     if (!hit) {
+      // 全局任务独立且暂不迁移时，目标项目目录尚不存在，回落到调用者所在工作区。
+      if (o.fallbackWs === true) return pickWorkspace(ws);
       throw new Error('项目「' + project + '」尚无对应工作区。' + NL + '已注册的工作区：' + NL + choices
         + NL + '方案一：先 ho_workspace(action="create", path="<该项目目录>", title="' + project + '")，再建会话；'
         + NL + '方案二：把 workspace 传成上列任一工作区。');
@@ -92,6 +96,7 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
     return String(hit.id);
   }
   if (wantGlobalWs) return pickWorkspace(ws);
+  if (o.fallbackWs === true) return pickWorkspace(ws);
   throw new Error('新建会话须指明工作区：传 workspace（id、标题或路径），或 cwd（某个已注册工作区的根）。' + NL
     + '已注册的工作区：' + NL + choices + NL
     + '全局会话落在标题含「全局」的工作区。项目会话同时传 project 与该项目的 workspace；杂项会话传该项目之外的独立工作区。');
@@ -225,16 +230,25 @@ export async function sessionNew(env, args, exec, signal) {
     if (block) throw new Error(block);
   }
 
+  // 迁移方式：缺省 ask（先建会话与登记，迁移留待会话首轮确认）。auto 与 direct 保持旧语义。
+  const migrateMode = args.migrate === 'direct' ? 'direct' : args.migrate === 'auto' ? 'auto' : 'ask';
+  // 全局任务独立且不迁时，新会话尚未有目标项目目录，工作区只能回落到调用者所在的那个。
+  const askKeep = !!args.from_task && migrateMode === 'ask';
+
   // ---- 工作区解析：新建会话必须落到明确的工作区，不允许静默落进调用者所在的工作区。
   // 先解析再迁移：解析失败时不得已经把任务库移走（D-128）。
   const workspaceId = resolveWorkspaceFor(env, exec, finalRole, project, task, {
     workspace: args.workspace,
     cwd: args.cwd,
     wantGlobal: title.indexOf('全局') !== -1 || args.role === 'global' || args.kind === 'global',
+    fallbackWs: askKeep,
   });
 
-  // 全局任务整体独立：先把任务库移入项目或杂项位置，沿用现有体系，不重建、不重新注册。
+  // 全局任务整体独立：ask 时先建会话与登记，文件体系留在原处，迁移由新会话首轮确认。
   let migrated = null;
+  let layout = finalRole === 'project' || finalRole === 'misc' ? finalRole : '';
+  let layoutName = finalRole === 'project' ? project : (finalRole === 'misc' ? task : '');
+  let pending = null;
   if (args.from_task) {
     let caller = null;
     try { caller = env.roleOf(exec); } catch { caller = null; }
@@ -242,17 +256,29 @@ export async function sessionNew(env, args, exec, signal) {
     const oldTask = String(args.from_task).trim();
     assertTaskName(oldTask);
     if (finalRole !== 'project' && finalRole !== 'misc') throw new Error('from_task 须同时给 role=project 或 role=misc');
-    migrated = migrateIdentity({
-      ws,
-      prev: { role: 'global-task', task: oldTask },
-      next: { role: finalRole, project, task },
-      mode: 'auto',
-    });
-    out.push('全局任务已独立：' + migrated.summary);
+    if (migrateMode === 'ask') {
+      layout = 'global-task';
+      layoutName = oldTask;
+      pending = {
+        kind: PENDING_MIGRATION,
+        from: { role: 'global-task', project: '', task: oldTask },
+        to: { role: finalRole, project, task },
+        at: stampTz(Date.now()),
+      };
+      out.push('全局任务已独立：文件体系仍在 _Control_Center/tasks/' + oldTask + '/，迁移待新会话首轮确认。');
+    } else {
+      migrated = migrateIdentity({
+        ws,
+        prev: { role: 'global-task', task: oldTask },
+        next: { role: finalRole, project, task },
+        mode: migrateMode,
+      });
+      out.push('全局任务已独立：' + migrated.summary);
+    }
   }
 
   if (aborted(signal)) throw new Error(ABORTED_TEXT);
-  const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task }, signal);
+  const made = await newSessionIn(env, { workspaceId, title, role: finalRole, project, task, layout, layoutName, pending }, signal);
   const sessionId = made.sessionId || '';
   if (!sessionId) throw new Error(made.error || 'create 没有返回 sessionId');
   if (made.error) throw new Error(made.error + '（会话 id：' + sessionId + '；不回收已建会话）');
@@ -275,16 +301,40 @@ export async function sessionNew(env, args, exec, signal) {
     throw new Error('会话已建成，但在任登记失败：' + String(e && e.message ? e.message : e)
       + '（会话 id：' + sessionId + '；不回收已建会话）。处置：用 ho_sessions(action="office-register", name="…") 补登');
   }
+  // 独立且未迁：全局总注册撤行 + 打标记。只删行会在下次同步时被重新登记，标记先行才稳。
+  if (pending && args.from_task) {
+    try {
+      const d = detachGlobalTask(ws, String(args.from_task).trim());
+      out.push('全局总注册：已撤行' + (d.changed ? '（已改写）' : '（无变化）') + '；重复同步不会再登记。');
+    } catch (e) {
+      out.push('全局总注册撤行失败：' + String(e && e.message ? e.message : e) + '。处置：用 ho_docmap(action="registry-check") 核对后手工撤行。');
+    }
+  } else if (migrated) {
+    // 迁移后体系注册换了位置：按磁盘重算一次，旧行随旧路径消失。
+    try { syncGlobalRefs(ws); } catch { /* 总注册写失败不影响迁移结果 */ }
+  }
   const meId = env.selfId(exec) || '（未知）';
-  // 交接路径按**新会话自身的角色**取用：项目读项目交接、杂项读任务交接，都不退回全局交接。
-  // cfg.handoverPath 是「强制全局交接路径」的演练开关，只对全局角色生效。
-  const hp = handoverPathFor(ws, finalRole === 'project' && project ? { role: 'project', project }
-    : finalRole === 'misc' && task ? { role: 'misc', task } : { role: 'global' });
+  // 交接路径按**新会话自身的布局**取用：类别换了而布局未迁时，交接仍在旧布局。
+  const hp = handoverPathFor(ws, { role: finalRole, project, task, layout, layoutName });
   const handover = (finalRole === 'global' ? env.cfg.handoverPath : '') || hp.path
     || (finalRole === 'misc' ? path.join(ws, '_Control_Center', 'rules', 'Misc_Task_Standard.md') : '');
+  const pendingLines = pending ? [
+    '身份已独立，文件体系未动：体系仍在 ' + (hp.path ? path.dirname(hp.path) : '原布局') + '。',
+    '首轮只问不搬：先问当前用户一句「是否迁移文件体系」，答复前不得移动任何文件。',
+    '报数：库内写死绝对路径的命中数由插件在角色设定消息里给出；逐条核对后再动手。',
+    '答复后用 ho_sessions(action="migration-choice", migrate=true 或 false) 了结，不要自行搬移。',
+    '迁移后向当前用户列出文件体系，含目录结构与规范文件。请其选择：一键建成，或先修改。',
+  ] : [];
+  const bootstrap = finalRole === 'project' || finalRole === 'misc' ? [
+    '若交接为空、本会话是新任务的起点：先问清当前用户要做的事：目标、范围与保留要求。',
+    '理解后列出任务大纲或解析，请当前用户确认理解是否正确。',
+    '确认后给出初步文件体系，请其选择：一键建成，或先修改。',
+  ] : [];
   const text = args.message || [
+    ...pendingLines,
     '先读交接：' + handover + '。',
     '读毕先向当前用户报告，不得自行开展作业。报告 3 项：一、当前停在哪一步；二、交接列有哪些待办；三、建议先做哪一条。',
+    ...bootstrap,
     '待当前用户指派后再开始作业。交接无待办时如实说明，不得编造任务。',
     '本会话 id：' + sessionId,
     (finalRole === 'project' ? '全局会话 id：' : '创建者会话 id：') + meId,

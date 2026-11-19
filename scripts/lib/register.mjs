@@ -2,9 +2,11 @@
  * 用户可见文案的语体扫描：词表、符号与时间格式。
  * 词表只收「脱离上下文即不可解」与「书面语中不出现」两类；新增豁免须在注释里写明理由。
  * 抽取器只取含中文的字符串字面量（跳过注释行），因此工具 description 与错误消息同样覆盖。
+ * 行级例外 [@example]：设置页话术示例保留口语，标记行只放行、不丢弃，由调用方逐条打印。
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { EXAMPLE_MARK } from './example-mark.mjs';
 
 /** 命中即违规：口语、俚语、生造缩略。 */
 const BAD_WORDS = [
@@ -34,7 +36,7 @@ const TIME_RULE = { id: '时间缺时区', test: (s) => /\d{4}-\d{2}-\d{2}\s+\d{
 
 const CJK = /[\u3400-\u9fff]/;
 
-/** 从源码或文档里抽用户可见的中文字符串。返回 [{ line, text }]。 */
+/** 从源码或文档里抽用户可见的中文字符串。返回 [{ line, text, exempt }]。 */
 function extractStrings(file) {
   const src = fs.readFileSync(file, 'utf8');
   const out = [];
@@ -45,7 +47,7 @@ function extractStrings(file) {
       const t = line.trim();
       if (t.startsWith('```')) { fence = !fence; return; }
       if (fence || !CJK.test(t)) return;
-      out.push({ line: i + 1, text: t });
+      out.push({ line: i + 1, text: t, exempt: t.indexOf(EXAMPLE_MARK) !== -1 });
     });
     return out;
   }
@@ -53,34 +55,44 @@ function extractStrings(file) {
   src.split(/\r?\n/).forEach((line, i) => {
     const t = line.trim();
     offset = i + 1;
-    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.indexOf('语体豁免') !== -1) return;
+    const exempt = t.indexOf(EXAMPLE_MARK) !== -1;
+    if ((t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) && !exempt) return;
     // 单双引号与反引号里的单行字符串；转义引号不参与抽取。
     const re = /'([^'\\]|\\.)*'|"([^"\\]|\\.)*"|`([^`\\]|\\.)*`/g;
     let m;
     while ((m = re.exec(line)) !== null) {
       const lit = m[0];
       if (!CJK.test(lit) && !/[✅❌⚠✗]/.test(lit)) continue;
-      out.push({ line: offset, text: lit });
+      out.push({ line: offset, text: lit, exempt });
     }
   });
   return out;
 }
 
-/** 扫描一组文件：{ file, line, text, rules }。 */
-export function scanFiles(files, opts) {
+/** 扫描一组文件：{ file, line, text, rules }；标记行另计，不混入违规。 */
+export function scanFilesDetailed(files, opts) {
   const o = opts || {};
   const rules = SYMBOL_RULES.concat(o.ui ? UI_RULES : []).concat([TIME_RULE]);
   const hits = [];
+  const exempt = [];
   for (const file of files) {
     const strings = extractStrings(file);
     for (const s of strings) {
       const found = [];
       for (const w of BAD_WORDS) if (s.text.indexOf(w) !== -1) found.push('口语词「' + w + '」');
       for (const r of rules) if (r.test(s.text)) found.push(r.id);
-      if (found.length) hits.push({ file, line: s.line, text: s.text, rules: found });
+      if (!found.length) continue;
+      const item = { file, line: s.line, text: s.text, rules: found };
+      if (s.exempt) exempt.push(item);
+      else hits.push(item);
     }
   }
-  return hits;
+  return { hits, exempt };
+}
+
+/** 只要违规项时的入口；豁免行由 scanFilesDetailed 单取。 */
+export function scanFiles(files, opts) {
+  return scanFilesDetailed(files, opts).hits;
 }
 
 /** 列出目录下的指定扩展名文件。 */

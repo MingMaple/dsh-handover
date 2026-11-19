@@ -11,14 +11,16 @@
  * 不扫描 fenced code block 与行内代码段。
  *
  * 唯一例外 E-01：对外仓库 README.md「为什么需要」一节的指定正文豁免 W-01；按节绑定，由 check-docs 逐字比对；不得扩充。
+ * 行级例外 [@example]：设置页话术示例保留口语，只豁免标记所在的物理行（仅 W-01），逐条打印，不整文件、不整目录豁免。
  *
  * 用法：node scripts/style-gate.mjs
  * 只读，不写任何文件；只用 node:fs 与 node:path，无第三方依赖。
  *
- * 输出：全部通过时一行 OK；否则逐条列出「文件:行 条款 命中内容」。
+ * 输出：全部通过时一行 OK；否则逐条列出「文件:行 条款 命中内容」。豁免行随后逐条打印。
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { readMarkedLines, EXAMPLE_MARK } from './lib/example-mark.mjs';
 
 /* ============================== 常量表 ============================== */
 
@@ -397,12 +399,14 @@ function wordHits(text, words) {
 }
 
 /** 逐段判定阻断级条款（W-01、W-02、W-04、W-05、W-07、W-08）。 */
-function scanBlockRules(rel, seg, add) {
+function scanBlockRules(rel, seg, add, allowW01) {
   // E-01：README.md「为什么需要」一节的指定句豁免 W-01（按节绑定，不按行号；该节正文由 check-docs 逐字比对）。
   const e01 = rel === 'README.md' && (String(seg.raw || '').indexOf(E01_TEXT) !== -1 || String(seg.raw || '').indexOf(E01_LEAD) !== -1);
   if (!e01) {
     for (const h of wordHits(seg.text, W01_WORDS)) {
       if (!isW01Word(seg.text, h.at, h.word)) continue;
+      // 行级例外：标记行由调用方判定是否放行，放行时记录豁免，不静默跳过。
+      if (allowW01 && !allowW01(h.word)) continue;
       add('W-01', '「' + h.word + '」');
     }
   }
@@ -517,6 +521,7 @@ function main() {
   const root = repoRoot();
   const files = collectFiles(root);
   const findings = [];
+  const exempt = [];
   const order = new Map(files.map((f, i) => [f.rel, i]));
 
   for (const { abs, rel } of files) {
@@ -526,10 +531,16 @@ function main() {
       findings.push({ rel, line: lineOverride || segLine, rule, content });
     };
     let segLine = 1;
+    const marked = readMarkedLines(abs);
+    const allowW01 = (word) => {
+      if (!marked.has(segLine)) return true;
+      exempt.push({ rel, line: segLine, word, text: marked.get(segLine) });
+      return false;
+    };
 
     for (const seg of segs) {
       segLine = seg.line;
-      scanBlockRules(rel, seg, add);
+      scanBlockRules(rel, seg, add, allowW01);
       scanW09(seg, add, rel);
       scanW26(seg, add, rel);
     }
@@ -560,8 +571,32 @@ function main() {
     return (RULE_INDEX.get(a.rule) || 0) - (RULE_INDEX.get(b.rule) || 0);
   });
 
+  // 豁免表按「文件、行」去重后逐条打印，供每次发版核对。
+  const exemptSeen = new Set();
+  const exemptList = [];
+  for (const e of exempt) {
+    const key = e.rel + '\u0000' + e.line;
+    if (exemptSeen.has(key)) continue;
+    exemptSeen.add(key);
+    exemptList.push(e);
+  }
+  exemptList.sort((a, b) => {
+    const fa = order.get(a.rel) || 0;
+    const fb = order.get(b.rel) || 0;
+    if (fa !== fb) return fa - fb;
+    return a.line - b.line;
+  });
+  const printExempt = () => {
+    if (exemptList.length === 0) return;
+    console.log(EXAMPLE_MARK + ' 豁免 ' + exemptList.length + ' 行（仅 W-01，逐条核对）：');
+    for (const e of exemptList) {
+      console.log('  ' + e.rel + ':' + e.line + ' W-01 「' + e.word + '」｜' + clip(e.text, 90));
+    }
+  };
+
   if (list.length === 0) {
-    console.log('STYLE-GATE OK（' + files.length + ' 份文件，' + RULES.length + ' 条规则）');
+    console.log('STYLE-GATE OK（' + files.length + ' 份文件，' + RULES.length + ' 条规则，' + EXAMPLE_MARK + ' 豁免 ' + exemptList.length + ' 行）');
+    printExempt();
     return;
   }
 
@@ -572,6 +607,7 @@ function main() {
   // 只有警告时判通过与退出码 0，但逐条列出，供评审与后续清理。
   console.log((blocking > 0 ? 'STYLE-GATE FAIL ' : 'STYLE-GATE PASS（无阻断，') + (blocking > 0 ? list.length + ' 项：' : list.length + ' 项警告）：'));
   for (const f of list) console.log(f.rel + ':' + f.line + ' ' + f.rule + ' ' + f.content);
+  printExempt();
   process.exitCode = blocking > 0 ? 1 : 0;
 }
 

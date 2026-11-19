@@ -9,7 +9,7 @@
 ## 1. 使用方式
 
 - 按节取回：`ho_docmap(action="rules-read", doc="runtime", section="体系注册")`。不传 `section` 时只返回节标题清单，便于先看目录、再取正文。
-- 规则文件取回：`ho_docmap(action="rules-read", doc="handover_rules" | "migration_rules" | "misc_standard" | "delegation_rules" | "writing_rules")`；`doc="charter"` 取工作区 Charter。
+- 规则文件取回：`ho_docmap(action="rules-read", doc="handover_rules" | "migration_rules" | "misc_standard" | "delegation_rules" | "external_takeover_rules" | "writing_rules")`；`doc="charter"` 取工作区 Charter。
 - 内置兜底：工作区没有对应规则文件时，工具返回插件内置版本并注明来源。空白机器上同样可用。
 - 未接入工作区时（读不到 `_Control_Center`），插件本体仍可用；闸门、交接体检与会话水位 3 项无数据。
 - 插件服务端为纯 Node 实现，Windows、macOS 与 Linux 使用同一套代码。路径比较按平台折叠大小写；归档优先使用 7-Zip，未安装时使用内置 tar.gz。
@@ -29,6 +29,8 @@
 - 设定入口：设置页「会话角色」；或由全局调用 `ho_sessions(action="role")`。
 - 全局选项限制：本机已有全局在任时，设置页不提供「全局」选项，`ho_sessions(action="role")` 亦拒绝将其他会话设为全局。同一会话不受此限。
 - 名称注册：会话首次用 `ho_sessions(action="office-register")` 注册自身名称，此后不得自行更改。全局可沿用旧名。本机尚无全局时，才允许将当前会话设为全局。
+- 两轴：角色（类别）决定权限与登记，布局（`layout`，取 `project`、`misc`、`global-task`）决定文件落点。布局缺省与类别相同。类别已换而布局未迁时两轴不同，交接、快照、归档、体系注册、计划与骨架一律按布局解析。
+- 迁移可选：身份互转缺省为 `ask`。先改身份与登记，文件零移动。接手会话在首轮问当前用户是否迁移文件体系，选不迁移则体系留在原布局继续用。
 
 ## 3. 工具清单
 
@@ -41,13 +43,13 @@
 
 ### 3.2 会话
 
-- `ho_sessions`：`action` 取 `list`（缺省；会话清点）、`role`（设定角色）、`new`（建立会话）、`task-init`、`order`、`place`、`prompt`、`archive | unarchive`、`office-read`（查在任）、`office-register`（注册本会话名称）、`succeed`（换任）。项目与杂项会话仅可用 `succeed`。
-- `peer`：`action` 取 `send`、`wait`、`collect`、`status`、`list`、`peek`、`rename`、`new`。`list`、`peek`、`rename` 仅全局可用；`new` 全局可用，杂项可建到杂项目录下。
+- `ho_sessions`：`action` 取 `list`（缺省；会话清点）、`role`（设定角色）、`new`（建立会话）、`task-init`、`order`、`place`、`prompt`、`archive | unarchive`、`office-read`（查在任）、`office-register`（注册本会话名称）、`migration-choice`（了结待确认的迁移）、`succeed`（换任）。项目与杂项会话仅可用 `succeed` 与 `migration-choice`。
+- `peer`：`action` 取 `send`、`wait`、`collect`、`collab`、`status`、`list`、`peek`、`rename`、`new`。`collab` 注册或解除协作；`list`、`peek`、`rename` 仅全局可用；`new` 全局可用，杂项可建到杂项目录下。
 
 ### 3.3 写入与迁移
 
 - `ho_handover`：`action` 取 `read`、`write`（仅首次创建）、`rotate`（归档旧交接、写入新正文与体检）、`archive`、`compact`（轮内压缩；前置校验通过才执行，零可见消息）。
-- `ho_workspace`：`action` 取 `init`、`scaffold`、`list`、`create`、`delete`、`move-probe | move | move-switch | move-cleanup`，以及 `backup-snapshot`、`backup-check`、`backup-pack`、`backup-verify`、`backup-restore`。备份默认预演，覆盖前先备份，从不删除目标文件。
+- `ho_workspace`：`action` 取 `init`、`scaffold`、`list`、`create`、`delete`、`move-probe | move | move-switch | move-status | move-retarget | move-repair | move-cleanup`，以及 `backup-snapshot`、`backup-check`、`backup-pack`、`backup-verify`、`backup-restore`。`move-status` 查迁移阶段，`move-retarget` 改登记，`move-repair` 重建链接。备份默认预演，覆盖前先备份，从不删除目标文件。
 
 ### 3.4 ho_sessions 的动作
 
@@ -55,7 +57,8 @@
 |---|---|---|
 | `list`（缺省） | 会话清点 | `limit`、`include_subagents` |
 | `role` | 设定会话角色（写角色表、即时收窄工具、可选投递归位指令） | `session_id`、`role`、`project`、`task`、`notify`、`migrate` |
-| `role`＋`migrate` | 身份互转方式：`auto`（缺省）先快照再移动；`direct` 不搬旧文件，按模板新建体系 | 同上 |
+| `role`＋`migrate` | 迁移方式：`ask`（缺省）先问后迁，文件零移动并留待确认；`auto` 先快照再移动；`direct` 不搬旧文件，按模板新建体系。设置页固定走 `ask`，改名也先问 | 同上 |
+| `migration-choice` | 了结本会话的待确认迁移：`migrate=true` 执行迁移并回清单，`false` 清标记、原地保留。仅限本会话，仅待确认存在时可用 | `migrate` |
 | `new` | 建立下一代会话并唤醒，自动投递启动提示词 | `title`、`workspace`、`cwd`、`message`、`project`、`force` |
 | `order` | 远程下达指令：`order=handover` 令其写交接后换任；`order=compact` 只回告改由目标会话自身在轮内压缩 | `session_id`、`order`、`extra`、`confirm` |
 | `prompt` | 按 `_Control_Center/templates/Prompt_Templates.md` 渲染可直接粘贴的启动提示词 | `kind`、`project`、`task`、`title`、`sessionId`、`globalSessionId` |
@@ -167,9 +170,10 @@
 
 - 交出前先刷新交接。交出方仍为该任务的在任者，暂任不改变交接归属。
 - 交出方把暂任提示词写入 `Delegation_Prompt.md`。回复中用代码块给出一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」，不粘贴提示词全文，由用户转交暂任方。
+- 索引只在交出当轮给一次。用户尚未交出、只是补充或修改口径时，先讨论敲定；敲定后重写提示词，再给一次索引。此后问答直接回答问题本身，不重复索引。
 - 暂任不是换任：不申请换任授权、不建接任会话、在任登记不变，交出方仍是在任者。
 - 归还时再次刷新交接，交接的身份字段填暂任者，回复中同样给出可复制文本。
-- 暂任方只写本任务库，不得写 `_Control_Center`、其他项目与其他任务。
+- 暂任方只写委派件指定的写域；整项目暂任时写域为整个项目。它没有 `ho_*` 与 `peer`，通知经当前用户转达。
 
 ### 7.3 协作
 
@@ -178,17 +182,38 @@
 - 多会话由全局统筹：全局按任务分派、查询在任、协调时序；各会话默认沉默，不每轮回执。
 - 协作提示词模板见 `_Control_Center/templates/Prompt_Templates.md` §8 与 §9。
 
+### 7.4 触发索引
+
+用户说出下列 5 个词时，先读对应规范，再按规范动作。提示段只放指针，本节给出读法与落点。
+
+| 用户说 | 先读 | 读法与判据 |
+|---|---|---|
+| 暂任、交给外部会话 | `_Control_Center/rules/Delegation_Rules.md` 与 `_Control_Center/rules/External_Takeover_Rules.md` | 同一机制：承接方是不在 DSH 内的外部会话，没有 `ho_*` 与 `peer`；按 §3 交出流程办理，暂任不是换任 |
+| 归还 | `_Control_Center/rules/Delegation_Rules.md` §4 | 归还三法任选其一；交接的身份字段填暂任者，并给出回执话术 |
+| 团队协作 | `_Control_Center/standards/团队协作规范/README.md` | 协作只适用于插件会话之间，用 `peer`（`action="collab"` → `collect`）；外部暂任会话不用 |
+| 切换身份 | `_Control_Center/rules/Workspace_Charter.md` 第七章 | 设置页改角色；或由全局调用 `ho_sessions(action="role", session_id=…, role=…)` |
+
+- 上表 5 个词的规范文件均在工作区内，按所列路径读；工作区缺该文件时，`doc="external_takeover_rules"` 取内置版本。
+- 交出前先判断任务难度，再决定是否引入子智能体；判据与 2 种分支写法见 `Delegation_Rules.md` §3.1。
+
 ## 8. 身份、名称与首轮
 
 - 冻结名：会话自行注册一次，此后不得自行更改。全局可沿用旧名。本机无全局时，才允许将当前会话设为全局。
 - 名称注册：`ho_sessions(action="office-register")`，已有同类在任他人时拒绝；同名重复注册直接拒绝。
-- 首轮指令：普通会话被设为项目或杂项后，插件投递一次性消息。该指令要求先了解既有产出与任务，读取体系模板并初拟体系。随后在 2 种方式中择一：由本会话直接建成并注册，或先讨论定稿再建成并注册。名称须经用户认可，注册后不得自行更改。
-- 身份互转：`ho_sessions(action="role", migrate=auto | direct)`。`auto` 先快照再移动；`direct` 不搬旧文件，按模板新建体系。
+- 首轮指令：普通会话被设为项目或杂项后，插件投递一次性消息。该指令要求先问清当前用户要做的事：目标、范围与保留要求。理解后列出任务大纲或解析，请用户确认理解是否正确。确认后给出初步文件体系，请其选择一键建成或先修改。名称须经用户认可，注册后不得自行更改。
+- 身份互转：`ho_sessions(action="role", migrate=ask | auto | direct)`，缺省 `ask`。
+  - `ask`：只写新身份、旧布局与待确认标记，文件零移动。接手会话首轮先问当前用户「是否迁移文件体系」，并给出库内写死绝对路径的文件数与行数。设置页固定走 `ask`，不提供其他选项；改名同样先问。确认后不点唤醒，首个轮次同样会问。答复后用 `ho_sessions(action="migration-choice", migrate=true | false)` 了结。
+  - 迁移后向用户列出文件体系，含目录结构与规范文件，并询问一键建成或先修改。
+  - 选不迁移：文件零移动，只改身份与登记，体系按原位置继续使用。此后类别与布局不同，6 处路径仍按旧布局解析。
+  - `auto`：先快照再移动，行为与 1.0.2 一致，不问。
+  - `direct`：不搬旧文件，旧体系移入备份目录，新位置按模板新建。
   - 快照：源库全库打包（无 7-Zip 时用 tar.gz），存放于 `_Archives/_Global/Backups/身份迁移_<YYYYMMDD_HHMMSS>/`。
   - 项目转杂项：`Projects/<名>/`（含子库）移入 `_Misc/tasks/<名>/`；交接、骨架档案、注册随之改位置。
   - 杂项转项目：`_Misc/tasks/<名>/` 移入 `Projects/<名>/<名库>/`；注册与交接改位置，`Registry.md` 增行。
+  - 迁移只回清单，不机械改写 `System.md` 正文。清单逐项列出移动、新建目录、跳过与残留，并点明须由会话重写身份字段的文件。
+  - 须重写处：`System.md` 标题与描述、交接 §0、`Project_Overview.md` 中涉及类别与路径的句子。`.bak` 备份不随迁，逐条列入清单。
+  - `_Temp/<范围>` 与 `_Archives/<范围>` 随布局改名，新布局另建空目录。
   - `Office.json` 的类别键改为新类别，旧条目保留在历史中；写前备份 `Office.json`。
-  - 互转首轮指令给出 2 种方式：迁移，或直接建立。
 
 ## 9. 迁移与恢复
 
@@ -281,7 +306,7 @@
 - 授权生效后，目标会话的提示段即增加一行：「用户已授权上下文重置，至 <时刻>（一次性，用后失效）」。该行在过期或使用后消失，不占位。
 - 换任授权与旧的压缩授权可并存，各占一行。压缩不需要授权，旧条目只作历史保留。
 - `ho_status(view="phase")` 与 `view="brief"` 都有一行「授权」，写明剩余分钟与到期时刻；向用户索要授权后，先查该项，再等待回复。
-- 到线提示：轮首追加一行压力画像。水位到整理线或建议线时注入提示。建议线要求先把任务收到安全断点。胶囊按标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。写完再调用 `ho_handover(action="compact", capsule=…)`。提示追加在末尾，不改系统提示词、不拆回合、不另起聊天消息。同一会话同一档位只注入一次，压缩成功后重置。水位到强制线时，插件注入提示并立即由机制兜底压缩。提示状态存于会话目录内 `<sid>\dsh-handover\state.json`。
+- 到线提示：轮首追加一行压力画像。水位到整理线或建议线时注入提示：请将当前任务做到合适断点处后进行上下文压缩流程。胶囊按标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。写完再调用 `ho_handover(action="compact", capsule=…)`。提示追加在末尾，不改系统提示词、不拆回合、不另起聊天消息。同一会话同一档位只注入一次，压缩成功后重置。水位到强制线时，插件注入提示并立即执行压缩，强制线不要求助手先到断点。提示状态存于会话目录内 `<sid>\dsh-handover\state.json`。
 - 压缩后的第一次判定跳过：此时投影缓存仍为压缩前的旧水位，以免据虚高读数重复提示。
 - 不向会话日志写入 developer/message 通知。原因：宿主强校验这类事件，须恰好匹配已打开的轮与步。写入会使会话落入 SessionFormatError 状态。
 

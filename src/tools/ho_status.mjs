@@ -324,6 +324,13 @@ function diagText(env, exec) {
       const info = env.roleOf(exec);
       const ts = typeof env.toolsetOf === 'function' ? env.toolsetOf(info.role) : null;
       out.push('角色      ' + info.role + (info.project ? '（项目 ' + info.project + '）' : info.task ? '（任务 ' + info.task + '）' : '') + ' · 依据 ' + info.source + (ts ? ' · 可见工具 ' + ts.allow.length + '/' + (ts.allow.length + ts.deny.length) : ''));
+      // 两轴不同时单独报一行：类别换了而布局未迁，文件仍在旧布局。
+      if (info.layout && info.layout !== info.role) {
+        out.push('布局      ' + info.layout + (info.layoutName ? '「' + info.layoutName + '」' : '') + '（与类别不同）'
+          + (info.pending ? ' · 待确认迁移' : ''));
+      } else if (info.pending) {
+        out.push('布局      待确认迁移');
+      }
       if (typeof env.roleState === 'function') {
         const rs = env.roleState();
         const cnt = typeof rs.count === 'number' ? ' · 已装配 ' + rs.count + ' 个会话' : '';

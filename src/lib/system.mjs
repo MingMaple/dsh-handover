@@ -2,11 +2,11 @@
  * 体系注册与文档定位（1.0）：每个任务一份注册文件，写目录结构、规范文件与计划；
  * 全局总注册只列各任务体系文件的路径，不承载正文。
  *
- * 路径约定：
+ * 路径约定（按布局取，不按类别取：类别换了而布局未迁时，注册仍在旧布局）：
  * - 全局总注册：_Control_Center/records/systems.md
- * - 项目：_Project_Meta/<项目>/System.md
- * - 杂项：_Misc/tasks/<任务>/System.md
- * - 全局任务：_Control_Center/tasks/<任务>/System.md
+ * - 项目布局：_Project_Meta/<项目>/System.md
+ * - 杂项布局：_Misc/tasks/<任务>/System.md
+ * - 全局任务布局：_Control_Center/tasks/<任务>/System.md
  *
  * 定位：注册只给路径与用途，是否读正文由会话判断；空注册不注入正文，只注入一句提示。
  */
@@ -14,9 +14,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NL, readUtf8, isFile, isDir, writeFileAtomic } from './text.mjs';
 import { readProfile } from './profile.mjs';
+import { layoutOf, layoutRootRel } from './role.mjs';
 
 export const GLOBAL_REGISTRY_REL = path.join('_Control_Center', 'records', 'systems.md');
 export const REGISTRY_NAME = 'System.md';
+/** 已独立但未迁的全局任务标记：存在时不再当全局任务登记。 */
+export const DETACHED_MARKER = '.detached.json';
 
 const TICK = String.fromCharCode(96);
 
@@ -40,30 +43,28 @@ export function lineageLabel(info) {
 
 /** 任务库根（相对工作区）。项目优先取骨架档案登记的根，其次 `<项目>库`，最后项目目录。 */
 function taskRoot(ws, info) {
-  const lin = lineageOf(info);
-  if (!lin) return '';
-  if (lin.kind === 'project') {
-    const p = lin.project;
+  const lay = layoutOf(info);
+  if (!lay.kind) return '';
+  if (lay.kind === 'project') {
     try {
-      const pf = readProfile(ws, { role: 'project', project: p });
+      const pf = readProfile(ws, info);
       if (pf && pf.exists && pf.profile && pf.profile.root) return String(pf.profile.root);
     } catch { /* 骨架读不到时按目录规则推断 */ }
-    const lib = path.join('Projects', p, p + '库');
-    return isDir(path.join(String(ws || ''), lib)) ? lib : path.join('Projects', p);
+    const lib = path.join('Projects', lay.name, lay.name + '库');
+    return isDir(path.join(String(ws || ''), lib)) ? lib : path.join('Projects', lay.name);
   }
-  if (lin.kind === 'misc') return path.join('_Misc', 'tasks', lin.task);
-  if (lin.kind === 'global-task') return path.join('_Control_Center', 'tasks', lin.task);
+  if (lay.kind === 'misc' || lay.kind === 'global-task') return layoutRootRel(lay);
   return '_Control_Center';
 }
 
 /** 注册文件相对路径。 */
 export function registryRelPath(info) {
-  const lin = lineageOf(info);
-  if (!lin) return null;
-  if (lin.kind === 'global') return GLOBAL_REGISTRY_REL;
-  if (lin.kind === 'project') return path.join('_Project_Meta', lin.project, REGISTRY_NAME);
-  if (lin.kind === 'misc') return path.join('_Misc', 'tasks', lin.task, REGISTRY_NAME);
-  if (lin.kind === 'global-task') return path.join('_Control_Center', 'tasks', lin.task, REGISTRY_NAME);
+  const lay = layoutOf(info);
+  if (!lay.kind) return null;
+  if (lay.kind === 'global') return GLOBAL_REGISTRY_REL;
+  if (lay.kind === 'project') return path.join('_Project_Meta', lay.name, REGISTRY_NAME);
+  if (lay.kind === 'misc') return path.join('_Misc', 'tasks', lay.name, REGISTRY_NAME);
+  if (lay.kind === 'global-task') return path.join('_Control_Center', 'tasks', lay.name, REGISTRY_NAME);
   return null;
 }
 
@@ -172,6 +173,8 @@ function scanGlobalRows(ws) {
     for (const name of names) {
       const dir = path.join(base, name);
       if (fs.existsSync(path.join(dir, '.deregistered.json'))) continue;
+      // 已独立但未迁的全局任务由它自己的会话登记，不再当全局任务列出。
+      if (kind === 'global-task' && fs.existsSync(path.join(dir, DETACHED_MARKER))) continue;
       const file = path.join(dir, REGISTRY_NAME);
       if (!isFile(file)) continue;
       rows.push({ task: nameOf(name), kind: KIND_LABEL[kind] || kind, path: path.join(base, name, REGISTRY_NAME), mtime: 0 });
@@ -267,6 +270,33 @@ export function syncGlobalRefs(ws) {
   return { rows, file, changed, body };
 }
 
+/** 全局任务库目录（绝对路径）。 */
+export function globalTaskDir(ws, task) {
+  return path.join(String(ws || ''), '_Control_Center', 'tasks', String(task || ''));
+}
+
+/** 独立标记：存在即视为已不再由全局登记。 */
+export function markDetached(ws, task) {
+  const dir = globalTaskDir(ws, task);
+  if (!isDir(dir)) return false;
+  try {
+    writeFileAtomic(path.join(dir, DETACHED_MARKER), JSON.stringify({ at: new Date().toISOString(), kind: 'detached' }, null, 2) + NL);
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * 全局任务独立且未迁：打标记并从全局总注册撤行。
+ * 只靠删行不够——同一目录仍在 _Control_Center/tasks 下，下次同步会被重新登记；
+ * 因此先打标记，再按磁盘重算。撤行后重复同步仍不会回来。
+ * @returns {{ marked: boolean, changed: boolean, file: string, rows: number }}
+ */
+export function detachGlobalTask(ws, task) {
+  const marked = markDetached(ws, task);
+  const r = syncGlobalRefs(ws);
+  return { marked, changed: r.changed, file: r.file, rows: r.rows.length };
+}
+
 /**
  * 全局总注册正文：只读文件，不触发任何写入。
  * 文件缺失或没有表格时按磁盘扫描给出数据（同样不落盘）；差异只在显式写路径同步。
@@ -345,6 +375,8 @@ export function checkRegistries(ws, info) {
         const dir = path.join(base, name);
         if (!isDir(dir)) continue;
         if (fs.existsSync(path.join(dir, '.deregistered.json'))) continue;
+        // 已独立的全局任务按它自己的布局检查，不并入全局任务一组。
+        if (fs.existsSync(path.join(dir, DETACHED_MARKER))) continue;
         targets.push(make(name));
       }
     };

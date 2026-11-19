@@ -1,4 +1,4 @@
-﻿/** ho_sessions —— 会话调度与在任登记：list 清点、role 设角色、new 建会话、prompt 出提示词、archive/unarchive 归档；office.read/register 管在任；succeed 换任。 */
+/** ho_sessions —— 会话调度与在任登记。list 清点、role 设角色、new 建会话、migration-choice 了结迁移待确认、prompt 出提示词、archive/unarchive 归档。office.read/register 管在任，succeed 换任。 */
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
@@ -8,11 +8,11 @@ import { stamp } from '../lib/brief.mjs';
 import { signalOf } from '../lib/abort.mjs';
 import { sessionNew, sessionPrompt, sessionArchive, sessionUnarchive, sessionOrder, sessionPlace } from '../lib/session-ops.mjs';
 import { createGlobalTask } from '../lib/global-task.mjs';
-import { readRoles, resolveRole, ROLE_LABEL, sessionMeta } from '../lib/role.mjs';
+import { readRoles, resolveRole, ROLE_LABEL, sessionMeta, layoutLabel, pendingOf } from '../lib/role.mjs';
 import { pmOfficeTool } from './office.mjs';
 import { pmSucceedTool } from './succeed.mjs';
 
-export const ACTIONS = ['list', 'role', 'new', 'task-init', 'order', 'place', 'prompt', 'archive', 'unarchive', 'office-read', 'office-register', 'succeed'];
+export const ACTIONS = ['list', 'role', 'new', 'task-init', 'order', 'place', 'prompt', 'archive', 'unarchive', 'office-read', 'office-register', 'succeed', 'migration-choice'];
 
 function list(env, args, exec) {
   const limit = typeof args.limit === "number" ? args.limit : 40;
@@ -36,7 +36,10 @@ function list(env, args, exec) {
     const lab = r.mtime >= scan.cutoffMs ? "活跃" : "沉默";
     const flag = scan.hot.includes(r.sid) ? "  【进入预警区】" : "";
     const info = roleOf(r);
-    out.push(r.kind + " " + r.sid + "  " + r.project + "  " + pct + "  " + r.state + "  角色 " + (ROLE_LABEL[info.role] || info.role) + "  最后活动 " + stamp(r.mtime) + "  【" + lab + "】" + flag);
+    const lay = layoutLabel(info);
+    const wait = pendingOf(store.sessions[r.sid]) ? '  待确认迁移' : '';
+    out.push(r.kind + " " + r.sid + "  " + r.project + "  " + pct + "  " + r.state + "  角色 " + (ROLE_LABEL[info.role] || info.role)
+      + (lay ? '（布局 ' + lay + '）' : '') + wait + "  最后活动 " + stamp(r.mtime) + "  【" + lab + "】" + flag);
   }
   const notifProjects = new Set(scan.notify.map((r) => r.project));
   const skipProjects = new Set(scan.skip.map((r) => r.project));
@@ -74,7 +77,7 @@ export function pmSessionsTool(env) {
   const succeed = pmSucceedTool(env);
   return {
     name: nameOf('sessions'),
-    description: '会话清点与调度；项目与杂项只用 succeed。',
+    description: '会话清点与调度；项目与杂项只用 succeed 与 migration-choice。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -86,7 +89,7 @@ export function pmSessionsTool(env) {
         session_id: { type: 'string', description: '目标会话 id，取自 `list` 输出的会话号。例：`session-3f2a9c`。' },
         role: { type: 'string', enum: ['global', 'project', 'misc', 'plain'], description: '`role` 设定的新角色。选 `project` 时须同时给 `project`。' },
         project: { type: 'string', description: '`role`、`prompt` 的项目名，角色为 `project` 时必填。例：`Demo`。' },
-        migrate: { type: 'string', enum: ['auto', 'direct'], description: '身份互转方式：`auto` 自动判断，`direct` 直接转换。缺省 `auto`。' },
+        migrate: { type: ['string', 'boolean'], description: '`role`、`new`：`ask` 先问后迁（缺省），`auto` 按清单搬移，`direct` 直接建。`migration-choice`：`true` 执行迁移，`false` 只清待确认。' },
         from_task: { type: 'string', description: '`new` 的来源任务名，由全局任务派生会话时填。例：`巡检`。' },
         task: { type: 'string', description: '任务名。`task-init` 必填；`role` 用于指定杂项任务。例：`巡检`。' },
         notify: { type: 'boolean', description: '`role` 是否唤醒目标会话一轮。缺省 `true`。' },
@@ -113,8 +116,8 @@ export function pmSessionsTool(env) {
       let info = null;
       try { info = env.roleOf(exec); } catch { info = null; }
       const role = info && info.role ? info.role : '';
-      if ((role === 'project' || role === 'misc') && action !== 'succeed') {
-        throw new Error('现象：当前会话不能执行 `' + action + '`。原因：该动作只对全局会话开放；项目与杂项会话仅可用 `succeed`。处置：改由全局会话执行。');
+      if ((role === 'project' || role === 'misc') && action !== 'succeed' && action !== 'migration-choice') {
+        throw new Error('现象：当前会话不能执行 `' + action + '`。原因：该动作只对全局会话开放；项目与杂项会话仅可用 `succeed` 与 `migration-choice`。处置：改由全局会话执行。');
       }
       if (action === 'office-read') return office.execute({ action: 'read', query: args.query, json: args.json }, exec);
       if (action === 'office-register') {
@@ -122,6 +125,39 @@ export function pmSessionsTool(env) {
         return office.execute({ action: 'register', name: args.name }, exec);
       }
       if (action === 'succeed') return succeed.execute({ note: args.note, force: args.force }, exec);
+      if (action === 'migration-choice') {
+        const asked = String(args.session_id || '').trim();
+        const me = env.selfId(exec);
+        if (asked && me && asked !== me) {
+          throw new Error('现象：不能代他人了结迁移。原因：migration-choice 只处理本会话的待确认迁移。处置：由该会话自行调用。');
+        }
+        if (typeof env.chooseMigration !== 'function') {
+          throw new Error('现象：无法了结迁移。原因：宿主侧没有装配 chooseMigration。处置：确认 DSH 版本与插件装配后重启。');
+        }
+        const apply = args.migrate === true || args.migrate === 'true';
+        const r = env.chooseMigration({ sessionId: me, apply });
+        if (!r || r.ok !== true) {
+          throw new Error('现象：迁移未了结。原因：' + ((r && r.error) || '未知原因') + '。处置：先 ho_status(view="diag") 看角色与布局，再重试。');
+        }
+        const out = [];
+        out.push(r.migrated ? '已迁移：' + r.summary : '不迁移：' + r.summary);
+        const ch = Array.isArray(r.changes) ? r.changes : [];
+        if (r.migrated) {
+          const n = (op) => ch.filter((c) => c.op === op).length;
+          out.push('清单 ' + ch.length + ' 项：移动 ' + n('move') + '，新建目录 ' + n('mkdir') + '，改写 ' + n('rewrite')
+            + '，登记 ' + n('registry') + '，跳过 ' + n('skip') + '，残留 ' + n('residue') + '。');
+          const opLabel = { move: '移动', mkdir: '新建', rewrite: '改写', registry: '登记', skip: '跳过', residue: '残留', remove: '移除', manual: '待改写' };
+          for (const c of ch.slice(0, 40)) {
+            out.push('  ' + (opLabel[c.op] || c.op) + '  ' + c.from + (c.to ? ' → ' + c.to : '') + (c.note ? '（' + c.note + '）' : ''));
+          }
+          if (ch.length > 40) out.push('  其余 ' + (ch.length - 40) + ' 项略；完整清单以磁盘为准。');
+          if (Array.isArray(r.manual) && r.manual.length) out.push('须由本会话改写身份字段：' + r.manual.join('、'));
+        }
+        out.push('布局：' + (r.layout || '按类别') + (r.layoutName ? '「' + r.layoutName + '」' : ''));
+        if (r.migrated) out.push('下一步：向当前用户列出文件体系，含目录结构与规范文件。请其选择：一键建成，或先修改。');
+        else out.push('下一步：文件零移动，体系按原位置继续使用。按新身份核对注册与身份字段。');
+        return { text: out.join(NL) };
+      }
       if (action === 'task-init' && !String(args.task || '').trim()) throw new Error('现象：`task-init` 缺少 `task`。原因：建立全局任务库须给出任务名。处置：传入 `task` 后重试。');
       if (action === 'role' && (!String(args.session_id || '').trim() || !String(args.role || '').trim())) throw new Error('现象：role 缺少 session_id 或 role。原因：设定角色须指明目标会话与新角色。处置：补齐后重试。');
       if (['order', 'place', 'archive', 'unarchive'].indexOf(action) !== -1 && !String(args.session_id || '').trim()) throw new Error('现象：' + action + ' 需要 session_id。原因：该动作须指明目标会话。处置：补齐 `session_id` 后重试。');
@@ -137,6 +173,7 @@ export function pmSessionsTool(env) {
         out.push('交接：`_Control_Center/tasks/' + String(args.task) + '/Handover.md`；用 `ho_handover(action=…, task="' + String(args.task) + '")` 读写。');
         out.push('体系注册已登记进 `_Control_Center/records/systems.md`；计划用 `ho_docmap(action="plan-write", task="' + String(args.task) + '")`。');
         out.push('独立为项目或杂项会话：`ho_sessions(action="new", role="project"|"misc", from_task="' + String(args.task) + '", …)`，须当前用户确认。');
+        out.push('缺省先建会话与登记，迁移待新会话首轮确认；要照旧整体迁移，传 `migrate="auto"`。');
         return { text: out.join(NL) };
       }
       if (action === 'new') return { text: await sessionNew(env, args, exec, signalOf(exec)) };
@@ -156,6 +193,10 @@ export function pmSessionsTool(env) {
         if (r.ok) {
           out.push('  存活会话当场生效：' + (r.live ? '是（工具集与提示段已更换）' : '否（下次开轮时生效）'));
           if (r.migrated) out.push('  身份互转：' + r.migrated + '。' + r.migrationSummary);
+          if (r.pending) {
+            out.push('  迁移待确认：文件体系仍在原布局' + (r.pendingPath ? '（' + r.pendingPath + '）' : '') + (r.delivered ? '，问句已投递。' : '，该会话首个轮次会问是否迁移。'));
+            out.push('  了结：该会话回答后调用 ho_sessions(action="migration-choice", migrate=true 或 false)。');
+          }
           out.push('  首轮指令：' + (r.delivered ? '已投递，将唤醒该会话一轮' : (r.error ? '投递失败。原因：' + r.error + '。' : '未投递')));
           out.push('  注册名：' + (r.registeredName || '尚未注册。处置：由该会话首轮与当前用户确认后，执行 `ho_sessions(action="office-register")`。'));
         }

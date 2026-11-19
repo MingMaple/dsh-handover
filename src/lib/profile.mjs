@@ -1,11 +1,12 @@
 /**
  * 项目与杂项的骨架档案：由本会话自行判断、写入、注册；插件只校验与引用。
- * 项目：_Project_Meta/<项目>/project.profile.json
- * 杂项：_Misc/tasks/<任务>/task.profile.json
+ * 落点由布局决定：项目布局 _Project_Meta/<名>/project.profile.json，
+ * 杂项与全局任务布局 _Misc/tasks/<名>/task.profile.json、_Control_Center/tasks/<名>/task.profile.json。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { isFile } from './text.mjs';
+import { layoutOf } from './role.mjs';
 
 const PROFILE_SCHEMA = 1;
 export const PROFILE_KINDS = ['application', 'animation', 'library', 'general'];
@@ -53,13 +54,24 @@ export function presets() {
 
 export function profilePathFor(ws, info) {
   if (!ws || !info) return null;
-  if (info.role === 'project' && info.project) return path.join(ws, '_Project_Meta', info.project, PROJECT_FILE);
-  if (info.role === 'misc' && info.task) return path.join(ws, '_Misc', 'tasks', info.task, TASK_FILE);
+  const lay = layoutOf(info);
+  if (lay.kind === 'project' && lay.name) return path.join(ws, '_Project_Meta', lay.name, PROJECT_FILE);
+  if (lay.kind === 'misc' && lay.name) return path.join(ws, '_Misc', 'tasks', lay.name, TASK_FILE);
+  if (lay.kind === 'global-task' && lay.name) return path.join(ws, '_Control_Center', 'tasks', lay.name, TASK_FILE);
   return null;
+}
+
+/** 布局侧的默认库根；骨架未注册时按它推断。 */
+function layoutRootOf(lay) {
+  if (lay.kind === 'project') return 'Projects/' + lay.name;
+  if (lay.kind === 'misc') return '_Misc/tasks/' + lay.name;
+  if (lay.kind === 'global-task') return '_Control_Center/tasks/' + lay.name;
+  return '';
 }
 
 /** 未注册时的默认骨架：沿用现有目录约定，24 行约束条默认启用（向后兼容）。 */
 function defaultProfile(info) {
+  const lay = layoutOf(info);
   const base = {
     schema: PROFILE_SCHEMA,
     kind: 'general',
@@ -72,14 +84,14 @@ function defaultProfile(info) {
     handover: { extraSections: [] },
     notes: '未注册：按默认骨架运行。',
   };
-  if (info && info.role === 'project' && info.project) {
-    base.root = 'Projects/' + info.project;
+  if (lay.kind === 'project' && lay.name) {
+    base.root = layoutRootOf(lay);
     base.required = [];
     base.optional = ['SKILL.md'];
     base.meta = [];
     base.notes = '未注册：按默认骨架运行，请由本项目会话补注册。';
-  } else if (info && info.role === 'misc' && info.task) {
-    base.root = '_Misc/tasks/' + info.task;
+  } else if ((lay.kind === 'misc' || lay.kind === 'global-task') && lay.name) {
+    base.root = layoutRootOf(lay);
     base.required = [];
     base.notes = '未注册：按默认骨架运行，请由本任务会话补注册。';
   }
@@ -107,9 +119,7 @@ export function normalizeProfile(raw, info) {
   const errors = [];
   const src = raw && typeof raw === 'object' ? raw : {};
   const kind = PROFILE_KINDS.indexOf(String(src.kind || '')) !== -1 ? String(src.kind) : 'general';
-  const rootDefault = info && info.role === 'project' && info.project
-    ? 'Projects/' + info.project
-    : (info && info.role === 'misc' && info.task ? '_Misc/tasks/' + info.task : '');
+  const rootDefault = layoutRootOf(layoutOf(info));
   const root = String(src.root || rootDefault).trim().replace(/\\/g, '/');
   if (path.isAbsolute(root) || /^[A-Za-z]:/.test(root) || root.split('/').indexOf('..') !== -1) {
     errors.push('root 不得使用绝对路径或 ..');
@@ -165,14 +175,17 @@ export function validateProfile(ws, info, profile) {
     const f = path.join(root, rel);
     if (!fs.existsSync(f)) missing.push(rel);
   }
-  const metaRoot = info && info.role === 'project' && info.project
-    ? path.join(ws, '_Project_Meta', info.project)
-    : (info && info.role === 'misc' && info.task ? path.join(ws, '_Misc', 'tasks', info.task) : null);
+  const lay = layoutOf(info);
+  const metaRoot = lay.kind === 'project' && lay.name
+    ? path.join(ws, '_Project_Meta', lay.name)
+    : (lay.kind === 'misc' && lay.name ? path.join(ws, '_Misc', 'tasks', lay.name)
+      : (lay.kind === 'global-task' && lay.name ? path.join(ws, '_Control_Center', 'tasks', lay.name) : null));
   // meta 条目相对档案目录（_Project_Meta/<项目>/ 或 _Misc/tasks/<任务>/），不是库内路径；
   // 报缺时给全路径，避免被读成库内或某个 _meta/ 子目录。
-  const metaLabel = info && info.role === 'project' && info.project
-    ? '_Project_Meta/' + info.project + '/'
-    : (info && info.task ? '_Misc/tasks/' + info.task + '/' : '');
+  const metaLabel = lay.kind === 'project' && lay.name
+    ? '_Project_Meta/' + lay.name + '/'
+    : (lay.kind === 'misc' && lay.name ? '_Misc/tasks/' + lay.name + '/'
+      : (lay.kind === 'global-task' && lay.name ? '_Control_Center/tasks/' + lay.name + '/' : ''));
   if (metaRoot) {
     for (const rel of p.meta || []) {
       if (!fs.existsSync(path.join(metaRoot, rel))) missing.push(metaLabel + rel);

@@ -213,7 +213,8 @@ export function createApi(env, info) {
           project: p.project,
           task: p.task,
           wake: p.wake !== false,
-          migrate: p.migrate === 'direct' ? 'direct' : 'auto',
+          // 设置页 3 个选项都要原样透传：缺省 ask（先问后迁），不能把 ask 折成 auto。
+          migrate: p.migrate === 'direct' ? 'direct' : p.migrate === 'auto' ? 'auto' : 'ask',
         });
         env.log('会话角色：' + (r.ok ? (r.role + ' · 存活=' + r.live + ' · 已投递=' + r.delivered) : ('失败 ' + r.error)));
         invalidateStatus(env);

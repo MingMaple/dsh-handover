@@ -97,23 +97,45 @@ export function lowRoiStreakOf(history, floor) {
   return streak;
 }
 
+/** 校准重试上限：宿主投影始终不刷新时放弃记录，不拿滞后读数结算。 */
+const SETTLE_RETRIES = 8;
+
 /**
  * 压缩后读数校准（D-171）：压缩返回瞬间的测量是中间态，改由下一个步骤边界用宿主投影水位补写。
- * 待校准记录只消费一次：无论本次读到的水位是否可用，调用后都删掉 pendingAfter；
- * 读不到可信值时只清空记录并留空，不填假数，也不追加 roiHistory。
+ * 宿主投影按请求结算：压缩刚返回时读到的仍是压缩前的水位；
+ * 因此读数不足遮蔽量一半时视为未刷新，保留 pendingAfter 待下一处步骤边界重读。
+ * 重试 SETTLE_RETRIES 次仍不刷新则放弃记录，不拿滞后读数结算。
+ * 待校准记录只消费一次：读数不可用或重试超限时清空记录，不填假数，也不追加 roiHistory。
  * @param {object} st 会话状态
  * @param {number|null} used 宿主投影水位
  * @param {number} floor 收益下限
- * @returns {{consumed:boolean, measured:boolean, roi:number|null, streak:number}}
+ * @returns {{consumed:boolean, measured:boolean, roi:number|null, streak:number, retained?:boolean}}
  */
 export function settlePendingAfter(st, used, floor) {
   const state = st && typeof st === 'object' ? st : {};
   const pending = state.pendingAfter && typeof state.pendingAfter === 'object' ? state.pendingAfter : null;
   const streak = Number(state.lowRoiStreak) || 0;
   if (!pending) return { consumed: false, measured: false, roi: null, streak };
-  delete state.pendingAfter;
   const after = num(used);
-  if (after === null || after <= 0) return { consumed: true, measured: false, roi: null, streak };
+  if (after === null || after <= 0) {
+    delete state.pendingAfter;
+    return { consumed: true, measured: false, roi: null, streak };
+  }
+  const before = num(pending.before);
+  const shadowed = num(pending.shadowed);
+  const stale = before !== null && after >= before
+    ? true
+    : (before !== null && shadowed !== null && shadowed > 0 && before - after < shadowed / 2);
+  if (stale) {
+    const retries = (Number(pending.retries) || 0) + 1;
+    if (retries > SETTLE_RETRIES) {
+      delete state.pendingAfter;
+      return { consumed: true, measured: false, roi: null, streak };
+    }
+    pending.retries = retries;
+    return { consumed: false, measured: false, roi: null, streak, retained: true };
+  }
+  delete state.pendingAfter;
   const roi = roiOf(pending.before, after);
   state.tokensAfter = after;
   state.roi = roi;

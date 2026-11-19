@@ -8,7 +8,7 @@ import path from 'node:path';
 import { pick } from './text.mjs';
 import { projCacheFileOf } from './sessions.mjs';
 import {
-  ROLES, resolveRole, sessionMeta, handoverPathFor, toolsetFor,
+  ROLES, PENDING_MIGRATION, resolveRole, sessionMeta, handoverPathFor, toolsetFor, layoutOf, layoutRootRel, layoutMetaRel,
   readRoles, writeRole as writeRoleStore, assertProjectName, assertTaskName,
 } from './role.mjs';
 import { manualFor, firstRoundMessageFor } from './manual.mjs';
@@ -16,9 +16,10 @@ import { sendPrompt } from './prompt.mjs';
 import { routeWorkspace } from './workspace.mjs';
 import { stampTz } from './brief.mjs';
 import { activeConsentsFor } from './consent.mjs';
-import { systemBlock, registrySignature } from './system.mjs';
-import { migrateIdentity, removeRegistryProject } from './identity.mjs';
-import { loadOffice, lineageKeyOf, syncHolderKind, removeHolder, registerHolder, nextName } from './office.mjs';
+import { systemBlock, registrySignature, syncGlobalRefs } from './system.mjs';
+import { migrateIdentity } from './identity.mjs';
+import { scanRoots } from './path-scan.mjs';
+import { loadOffice, lineageKeyOf, syncHolderKind, removeHoldersBySession, registerHolder, nextName } from './office.mjs';
 
 /** 创建角色装配。runtime 提供 ctx、cfg、env、perStep、registered、initErrors、walkUpToWorkspace。 */
 export function createRoleAssembly(runtime) {
@@ -275,32 +276,77 @@ export function createRoleAssembly(runtime) {
     }
     const before = readRoles(cfg).sessions[sid] || {};
     const prevRole = String(before.role || '');
+    const prevProject = String(before.project || '');
+    const prevTask = String(before.task || '');
+    const prevPending = before.pending && before.pending.kind === PENDING_MIGRATION ? before.pending : null;
+    // 迁移方式：缺省 ask（先问后迁）。显式 auto 与 direct 保持 1.0.2 语义，不问也不留 pending。
+    const mode = i.migrate === 'direct' ? 'direct' : i.migrate === 'auto' ? 'auto' : 'ask';
+    const sameIdentity = prevRole === role && prevProject === project && prevTask === task;
     let migration = null;
-    // 项目与杂项互转：先做快照再移动，或按用户选择直接新建。
-    if ((prevRole === 'project' || prevRole === 'misc') && (role === 'project' || role === 'misc') && prevRole !== role) {
-      try {
-        migration = migrateIdentity({
-          ws,
-          prev: { role: prevRole, project: String(before.project || ''), task: String(before.task || '') },
-          next: { role, project, task },
-          mode: i.migrate === 'direct' ? 'direct' : 'auto',
-        });
-      } catch (e) {
-        return { ok: false, error: '身份互转未完成：' + msgOf(e) };
+    let pending = null;
+    let inPlace = false;
+    let layout = '';
+    let layoutName = '';
+    const interConvert = (prevRole === 'project' || prevRole === 'misc') && (role === 'project' || role === 'misc') && prevRole !== role;
+    if (prevPending && sameIdentity) {
+      // 重复设定同一身份：沿用未处理的迁移，不把布局当成已迁。
+      layout = String(before.layout || '');
+      layoutName = String(before.layoutName || '');
+      pending = prevPending;
+    } else if (interConvert) {
+      const newName = role === 'project' ? project : task;
+      const lay = layoutOf({ role: prevRole, project: prevProject, task: prevTask, layout: before.layout, layoutName: before.layoutName });
+      const layKind = lay.kind === 'global' ? '' : lay.kind;
+      const layName = lay.name;
+      if (layKind === role && layName === newName) {
+        // 目标类别与当前布局同类同名：文件已经在位，不迁移，也不留待确认。
+        layout = layKind;
+        layoutName = layName;
+        inPlace = true;
+      } else if (mode === 'ask') {
+        // 先问后迁：文件零移动，只把新身份与旧布局分别记下。改名同样先问，不直接搬移。
+        layout = layKind;
+        layoutName = layName;
+        pending = {
+          kind: PENDING_MIGRATION,
+          // from 记布局侧的身份：迁移按它取源目录，与类别无关。
+          from: { role: layKind, project: layKind === 'project' ? layName : '', task: layKind === 'project' ? '' : layName },
+          to: { role, project, task },
+          at: stampTz(Date.now()),
+        };
+      } else {
+        try {
+          migration = migrateIdentity({
+            ws,
+            prev: { role: prevRole, project: prevProject, task: prevTask },
+            next: { role, project, task },
+            mode: mode === 'direct' ? 'direct' : 'auto',
+          });
+        } catch (e) {
+          return { ok: false, error: '身份互转未完成：' + msgOf(e) };
+        }
+        layout = role;
+        layoutName = newName;
       }
+    } else {
+      layout = role === 'project' || role === 'misc' ? role : '';
+      layoutName = role === 'project' ? project : (role === 'misc' ? task : '');
     }
-    try { writeRoleStore(cfg, sid, { role, project, task, source: 'user' }); }
+    try { writeRoleStore(cfg, sid, { role, project, task, source: 'user', layout, layoutName, pending }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
     // 注册同步：项目、杂项、全局角色更新名册类别；普通角色只清除注册，文件与目录原位保留。
+    // 类别与布局不同（先不迁）时不动新布局的目录：那里还没有本任务的任何文件。
+    const localProject = layout === 'project';
+    const localMisc = layout === 'misc';
     try {
-      const oldProjectDir = prevRole === 'project' && before.project ? path.join(ws, '_Project_Meta', String(before.project)) : '';
-      const oldTaskDir = prevRole === 'misc' && before.task ? path.join(ws, '_Misc', 'tasks', String(before.task)) : '';
+      const oldProjectDir = prevRole === 'project' && prevProject ? path.join(ws, '_Project_Meta', prevProject) : '';
+      const oldTaskDir = prevRole === 'misc' && prevTask ? path.join(ws, '_Misc', 'tasks', prevTask) : '';
       const markerOf = (dir) => path.join(dir, '.deregistered.json');
-      if (role === 'project') {
+      if (role === 'project' && localProject) {
         fs.mkdirSync(path.join(ws, '_Project_Meta', project), { recursive: true });
         try { fs.rmSync(markerOf(path.join(ws, '_Project_Meta', project)), { force: true }); } catch { /* ignore */ }
       }
-      if (role === 'misc') {
+      if (role === 'misc' && localMisc) {
         fs.mkdirSync(path.join(ws, '_Misc', 'tasks', task), { recursive: true });
         try { fs.rmSync(markerOf(path.join(ws, '_Misc', 'tasks', task)), { force: true }); } catch { /* ignore */ }
       }
@@ -309,11 +355,11 @@ export function createRoleAssembly(runtime) {
           if (!dir || !fs.existsSync(dir)) continue;
           try { fs.writeFileSync(markerOf(dir), JSON.stringify({ at: new Date().toISOString(), sessionId: sid }), 'utf8'); } catch { /* ignore */ }
         }
-        if (prevRole === 'project' && before.project) { try { removeRegistryProject(ws, String(before.project)); } catch { /* ignore */ } }
-        if (prevRole === 'project' || prevRole === 'misc' || prevRole === 'global') {
-          try { removeHolder(ws, { kind: prevRole, project: String(before.project || ''), task: String(before.task || ''), sessionId: sid }); } catch { /* ignore */ }
-        }
-      } else if (role === 'project' || role === 'misc' || role === 'global') {
+        // 按会话全表扫描清除：角色表可能被手工改过，prevRole 不可信，注册残留须一并清掉。
+        // 文件与目录原位保留；Registry.md 对应行的「在役会话」格随即清空。
+        try { removeHoldersBySession(ws, sid); } catch { /* ignore */ }
+      } else if (!pending && (role === 'project' || role === 'misc' || role === 'global')) {
+        // 待确认迁移时不登记新身份：文件仍在旧布局，登记留给迁移或了结时更新。
         const okKind = syncHolderKind(ws, { kind: role, project, task, sessionId: sid });
         if (!okKind) {
           // 全局名不采信会话标题：按登记表历史最大号自动命名（无在任为「全局1」，已有则最大号 +1）（D-104）。
@@ -330,7 +376,8 @@ export function createRoleAssembly(runtime) {
       initErrors.push(m);
     }
     roleCache.delete(sid);
-    const info = { role, project, task, source: 'store', sessionId: sid };
+    const info = { role, project, task, layout, layoutName, source: 'store', sessionId: sid };
+    if (pending) info.pending = pending;
     let live = false;
     try {
       const a = agentOf(sid);
@@ -344,10 +391,25 @@ export function createRoleAssembly(runtime) {
       const cur = loadOffice(ws).lineages[lineageKeyOf(lin.kind, lin.project, lin.task)];
       if (cur && cur.current && String(cur.current.sessionId) === sid) registeredName = String(cur.current.name || '');
     } catch { /* 无法读取登记表时不写名字 */ }
+    // 待确认迁移时先报数：只扫「这次要搬的那处体系」——库根加元数据目录，
+    // 不扫整个工作区，否则数字里混进别的项目，用户据此判断会失真。
+    let scan = null;
+    if (pending) {
+      try {
+        const lay = layoutOf(info);
+        const rels = [layoutRootRel(lay), layoutMetaRel(lay)].filter(Boolean);
+        scan = scanRoots(Array.from(new Set(rels.map((r) => path.join(ws, r)))));
+      } catch { scan = null; }
+    }
     const msg = firstRoundMessageFor(info, {
       previousRole: prevRole,
-      migrate: i.migrate === 'direct' ? 'direct' : 'auto',
+      migrate: mode,
+      inPlace,
       moveNote: migration ? migration.summary : '',
+      changes: migration ? migration.changes : null,
+      pending,
+      pendingPath: pending ? handoverPathFor(ws, info).path : '',
+      scan,
       name: registeredName,
     });
     if (i.wake !== false && msg) {
@@ -359,10 +421,76 @@ export function createRoleAssembly(runtime) {
       }
     }
     return {
-      ok: true, role, project, task, live, delivered, error,
+      ok: true, role, project, task, layout, layoutName, live, delivered, error,
       migrated: migration ? migration.mode : '',
       migrationSummary: migration ? migration.summary : '',
+      changes: migration ? (migration.changes || []) : [],
+      pending: !!pending,
+      pendingPath: pending ? handoverPathFor(ws, info).path : '',
       registeredName,
+    };
+  }
+
+  /**
+   * 了结待确认的迁移：migrate=true 搬移并回清单，false 只清 pending、文件零移动。
+   * 仅限本会话：sessionId 由工具取自身 id，不接受代他人调用。
+   * @param {{ sessionId?: string, apply?: boolean }} input
+   */
+  function chooseMigration(input) {
+    const i = input || {};
+    const sid = String(i.sessionId || '').trim();
+    if (!sid) return { ok: false, error: '缺少会话 id' };
+    const entry = readRoles(cfg).sessions[sid] || {};
+    const pending = entry.pending && entry.pending.kind === PENDING_MIGRATION ? entry.pending : null;
+    if (!pending) return { ok: false, error: '本会话没有待确认的迁移：pending 不存在，可能已经处理过' };
+    const role = String(entry.role || '');
+    const project = String(entry.project || '');
+    const task = String(entry.task || '');
+    const ws = workspaceForSid(sid);
+    if (!ws) return { ok: false, error: '解析不到工作区根：未改动文件，pending 保留' };
+    if (i.apply !== true) {
+      try { writeRoleStore(cfg, sid, { pending: null }); }
+      catch (e) { return { ok: false, error: '清 pending 失败：' + msgOf(e) }; }
+      // 不迁移：身份按新口径生效，登记跟到新身份；新身份已有同名在任时不动登记。
+      let regNote = '';
+      try {
+        if (role === 'project' || role === 'misc') {
+          const key = lineageKeyOf(role, project, task);
+          const store = loadOffice(ws);
+          const cur = store.lineages[key] && store.lineages[key].current;
+          if (cur && cur.sessionId && String(cur.sessionId) !== sid) {
+            regNote = '；名册里已有同名在任，登记未改';
+          } else {
+            const name = titleOf(sid) || (role === 'project' ? project : task);
+            registerHolder(ws, { kind: role, project, task, name, sessionId: sid });
+          }
+        }
+      } catch (e) { regNote = '；登记未改：' + msgOf(e); }
+      roleCache.delete(sid);
+      refreshPromptFor(sid);
+      return {
+        ok: true, migrated: false, changes: [],
+        layout: String(entry.layout || ''), layoutName: String(entry.layoutName || ''),
+        summary: '不迁移：文件零移动，身份改为新类别，体系仍在原布局。' + regNote,
+      };
+    }
+    let m = null;
+    try {
+      m = migrateIdentity({ ws, prev: pending.from, next: { role, project, task }, mode: 'auto' });
+    } catch (e) {
+      return { ok: false, error: '迁移未完成：' + msgOf(e) + '。文件未移动，pending 保留' };
+    }
+    const layout = role === 'project' || role === 'misc' ? role : '';
+    try { writeRoleStore(cfg, sid, { layout, layoutName: '', pending: null }); }
+    catch (e) { return { ok: false, error: '迁移已完成，但写角色表失败：' + msgOf(e) }; }
+    roleCache.delete(sid);
+    // 体系注册跟着新布局重算：旧行由磁盘扫描自然消失，新行按新位置登记。
+    try { syncGlobalRefs(ws); } catch { /* 总注册写失败不影响迁移结果 */ }
+    refreshPromptFor(sid);
+    return {
+      ok: true, migrated: true, layout, layoutName: '',
+      changes: m.changes || [], summary: m.summary,
+      manual: (m.changes || []).filter((c) => c.op === 'manual').map((c) => c.from),
     };
   }
 
@@ -409,6 +537,6 @@ export function createRoleAssembly(runtime) {
     sectionDispose, appliedText, systemSig, consentSig, legacyRestrict, appliedRole, roleCache, roleState,
     titleOf, agentOf, isChildSession, infoFor, roleMode, handoverInfoFor,
     workspaceForSid, workspaceForAgent, applySection, applyLegacyRestrict, applyRoleTo,
-    applyRole, applyScopedLive, refreshPromptFor, scopedMetaOf, disposeSession,
+    applyRole, chooseMigration, applyScopedLive, refreshPromptFor, scopedMetaOf, disposeSession,
   };
 }

@@ -22,6 +22,7 @@ const DIRS = [
   '_Control_Center/records',
   '_Control_Center/rules',
   '_Control_Center/standards',
+  '_Control_Center/standards/团队协作规范',
   '_Control_Center/templates',
   '_Control_Center/tools',
   '_Control_Center/tasks',
@@ -47,12 +48,14 @@ const FILES = [
   ['_Control_Center/standards/README.md', 'standards/README.md'],
   ['_Control_Center/standards/写作规范/README.md', 'standards/写作规范/README.md'],
   ['_Control_Center/standards/写作规范/依据_论文.md', 'standards/写作规范/依据_论文.md'],
+  ['_Control_Center/standards/团队协作规范/README.md', 'standards/团队协作规范/README.md'],
   // 规则类：工作区没有这份文件时，ho_docmap 的 rules-read 退回同名内置版本。
   // 这里先铺一份可修改的默认口径，便于用户按自己的习惯调整。
   ['_Control_Center/rules/Handover_Rules.md', 'rules/Handover_Rules.md'],
   ['_Control_Center/rules/Migration_Rules.md', 'rules/Migration_Rules.md'],
   ['_Control_Center/rules/Misc_Task_Standard.md', 'rules/Misc_Task_Standard.md'],
   ['_Control_Center/rules/Delegation_Rules.md', 'rules/Delegation_Rules.md'],
+  ['_Control_Center/rules/External_Takeover_Rules.md', 'rules/External_Takeover_Rules.md'],
   ['_Control_Center/user/Writing_Rules.md', 'rules/Writing_Rules.md'],
 ];
 

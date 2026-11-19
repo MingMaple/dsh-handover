@@ -17,15 +17,6 @@ export function bandsText(cfg) {
     + '%，不设绝对上限，预留输出只用于余量展示、不参与分档。窗口读不到时不判定。';
 }
 
-/** 设置页使用说明里的紧写形式。 */
-export function compactSummaryText(cfg) {
-  const c = cfg || {};
-  const max = Number(c.maxCompactionsPerSession) || 4;
-  const cap = Number(c.maxCompactionsHardCap) || 6;
-  return bandsText(c) + '前两档只提示，强制线兜底；助手入口在 '
-    + max + ' 次后关闭，强制线兜底至 ' + cap + ' 次';
-}
-
 /** 提示段与工具描述的加权 token 估算：CJK 与全角标点每字符 1 token，其余每 4 字符 1 token。 */
 export function estimateTokens(text) {
   const s = String(text === null || text === undefined ? '' : text);

@@ -60,18 +60,18 @@ export function tierPromptText(level, profile) {
   const head = '上下文 ' + kText(p.used) + '/' + kText(p.win) + '（' + pct(p.ratio) + '）。';
   const bands = '3 档 ' + bandText(p.bands) + '。';
   const call = level === 'advise'
-    ? '已过建议线，建议尽快择机压缩。先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。'
-    : '已过整理线，可择机压缩。先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。';
+    ? '已过建议线，建议尽快择机压缩。请将当前任务做到合适断点处后进行上下文压缩流程。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。'
+    : '已过整理线，可择机压缩。请将当前任务做到合适断点处后进行上下文压缩流程。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。';
   const summary = '可压：边界已到；缓压：推导未落盘或有错在追。';
   return head + bands + call + summary;
 }
 
-/** 强制线提示：在强制压缩之前注入，含实际用量。 */
+/** 强制线提示：在强制压缩之前注入，含实际用量；强制线不要求助手先到断点。 */
 export function hardPromptText(profile) {
   const p = profile || {};
   const bands = p.bands || {};
   return '上下文 ' + kText(p.used) + '/' + kText(p.win) + '（' + pct(p.ratio) + '），已到强制线 '
-    + kText(bands.hard) + '。插件立即执行压缩。';
+    + kText(bands.hard) + '。插件将立即执行压缩。';
 }
 
 /** 静态 rubric：fire 4 条、suppress 4 条，各一行，总长不超过 220 字。 */
@@ -90,36 +90,41 @@ export function rubricText() {
   ].join(NL);
 }
 
-/** 换任提示：助手压缩次数达上限时注入。 */
+/**
+ * 换任提示：助手压缩次数刚达上限时注入。
+ * 此时不再写断点句，改为预告下次到线执行换任流程。
+ */
 export function successionPromptText(count, max, cfg) {
   const hardCap = Number(cfg && cfg.maxCompactionsHardCap) || 6;
   return '压缩计数已达 ' + count + '/' + max + '，助手入口与到线提示不再请求压缩。'
     + '强制线仍由插件兜底压缩至 ' + hardCap + ' 次。'
-    + '请准备换任：ho_handover(action="rotate", text=…) 一步完成，'
+    + '下次到线将不再压缩，而是执行换任流程：'
+    + 'ho_handover(action="rotate", text=…) 一步完成，'
     + '再请用户授权并调用 ho_sessions(action="succeed")'
     + '（授权方式：聊天框发送 /allow-reset，或在设置页点击「授权重置」）。';
 }
 
-/** 到线文本：压缩计数达助手上限后替换「请压缩」提示。 */
+/** 到线文本：压缩计数达助手上限后替换「请压缩」提示，要求先到断点再办换任。 */
 export function successionBlockText(count, max, cfg) {
   const hardCap = Number(cfg && cfg.maxCompactionsHardCap) || 6;
-  return '上下文已达分档线，压缩计数 ' + count + '/' + max + '：助手入口与提示不再请求压缩。'
-    + '强制线仍由插件兜底压缩，至 ' + hardCap + ' 次为止。'
-    + '请准备换任：ho_handover(action="rotate", text=…) 一步完成，'
-    + '再请用户授权并调用 ho_sessions(action="succeed")'
-    + '（授权方式：聊天框发送 /allow-reset，或在设置页点击「授权重置」）。';
+  return '上下文已达分档线，压缩计数 ' + count + '/' + max + '：助手入口与提示不再请求压缩，'
+    + '强制线仍兜底至 ' + hardCap + ' 次。'
+    + '请将当前任务做到合适断点处后进行换任流程：'
+    + 'ho_handover(action="rotate", text=…) 一步完成，'
+    + '再请用户授权并调用 ho_sessions(action="succeed")（授权方式同上）。';
 }
 
-/** 到线文本：压缩计数达硬上限后注入，此后不再压缩。 */
+/** 到线文本：压缩计数达硬上限后注入，此后不再压缩；命令式，措辞最重。 */
 export function successionCeilingText(count, hardCap) {
-  return '压缩计数已达硬上限 ' + count + '/' + hardCap + '，不再压缩。'
-    + '按换任处理：ho_handover(action="rotate", text=…) 一步完成，'
-    + '再请用户授权并调用 ho_sessions(action="succeed")'
-    + '（授权方式：聊天框发送 /allow-reset，或在设置页点击「授权重置」）。';
+  return '压缩计数已达硬上限 ' + count + '/' + hardCap + '，此后不再压缩，强制线也不再兜底。'
+    + '你必须立即把断点设在当前工作附近，尽快办理换任：'
+    + 'ho_handover(action="rotate", text=…) 一步完成，'
+    + '再请用户授权并调用 ho_sessions(action="succeed")（授权方式同上）。'
+    + '继续推进只会让上下文继续上涨，且无法再压缩。';
 }
 
-/** 收益偏低提示：连续 2 次低于下限时追加，只建议不强制。 */
+/** 收益偏低提示：连续 2 次低于下限时追加，要求立即换任。 */
 export function roiAdviceText(roi, floor, streak) {
   return '连续 ' + streak + ' 次压缩缩减低于 ' + pct(floor) + '（最近 ' + pct(roi) + '）：'
-    + '建议准备换任，不要依靠反复压缩维持上下文。';
+    + '你必须尽快把断点设在当前工作附近，做到后立即进行换任流程，不要依靠反复压缩维持上下文。';
 }

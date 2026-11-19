@@ -15,6 +15,15 @@ export const ROLES = ['global', 'project', 'misc', 'plain'];
 export const ROLE_LABEL = { global: '全局', project: '项目', misc: '杂项', plain: '普通' };
 
 /**
+ * 两轴：类别（role）决定权限与登记，布局（layout）决定文件落点。
+ * 布局缺省与类别相同；类别切换时布局可留在原处，此时两轴不同。
+ */
+export const LAYOUTS = ['project', 'misc', 'global-task'];
+export const LAYOUT_LABEL = { project: '项目布局', misc: '杂项布局', 'global-task': '全局任务布局' };
+/** 待确认迁移的标记键：角色条目上的 pending.kind。 */
+export const PENDING_MIGRATION = 'migration';
+
+/**
  * 角色 → 可见工具（其余一律 deny）。改这张表就是改成本结构。
  * 合并后一个工具内含多个动作，动作级权限在工具内部再判一次（见 tools/peer.mjs）。
  */
@@ -75,10 +84,21 @@ export function writeRole(cfg, sessionId, patch) {
   // 复制一层再改：readRoles 的对象可能是缓存本体，直接改会污染缓存。
   const sessions = Object.assign({}, data.sessions);
   const prev = sessions[sid] || {};
-  const next = Object.assign({}, prev, patch || {});
+  const p = patch || {};
+  const next = Object.assign({}, prev, p);
   // 名字要落成目录：不合法就当场拒绝，别等拼路径时才 ENOENT。
   if (next.role === 'project') assertProjectName(next.project);
   if (next.role === 'misc') assertTaskName(next.task);
+  // 布局是第二条轴：只收 3 种落点。布局名同样要当目录名用。
+  const layout = String(next.layout || '');
+  if (layout && LAYOUTS.indexOf(layout) === -1) throw new Error('布局只接受 project、misc、global-task');
+  const layoutName = String(next.layoutName || '');
+  if (layout && layoutName) {
+    if (layout === 'project') assertProjectName(layoutName);
+    else assertTaskName(layoutName);
+  }
+  // 显式写 pending:null 表示清空，不留空键。
+  if (Object.prototype.hasOwnProperty.call(p, 'pending') && (p.pending === null || p.pending === undefined)) delete next.pending;
   next.setAt = stampTz(Date.now());
   sessions[sid] = next;
   writeRolesFile(cfg, { version: data.version, sessions });
@@ -124,6 +144,67 @@ export function assertProjectName(name) {
 
 export function assertTaskName(name) {
   return assertSafeName(name, '任务名', TASK_NAME_MAX);
+}
+
+// ---------------------------------------------------------------- 两轴（类别与布局）
+
+/** 布局名同样要当目录名用；长度按落点类别判。 */
+function layoutNameOk(kind, name) {
+  if (!name) return true;
+  return kind === 'project' ? isSafeName(name, PROJECT_NAME_MAX) : isSafeName(name, TASK_NAME_MAX);
+}
+
+/**
+ * 解析两轴：布局决定文件落点，缺省与类别相同。
+ * 角色表里的布局名缺失时只按布局那一侧的字段取，不跨轴借用——借错会静默落到别的目录。
+ * @returns {{ kind: string, name: string, role: string, differs: boolean }}
+ */
+export function layoutOf(info) {
+  const o = info || {};
+  const role = String(o.role || '');
+  const declared = LAYOUTS.indexOf(String(o.layout || '')) !== -1 ? String(o.layout) : '';
+  const fallback = role === 'project' || role === 'misc' || role === 'global-task' ? role : (role === 'global' ? 'global' : '');
+  const kind = declared || fallback;
+  let name = String(o.layoutName || '');
+  if (!name) {
+    if (kind === 'project') name = String(o.project || '');
+    else if (kind === 'misc' || kind === 'global-task') name = String(o.task || '');
+  }
+  const differs = !!(kind && kind !== 'global' && role && kind !== role);
+  return { kind, name, role, differs };
+}
+
+/** 布局根（相对工作区）：库内容所在目录。 */
+export function layoutRootRel(lay) {
+  const k = lay && lay.kind ? lay.kind : '';
+  if (k === 'project') return path.join('Projects', lay.name);
+  if (k === 'misc') return path.join('_Misc', 'tasks', lay.name);
+  if (k === 'global-task') return path.join('_Control_Center', 'tasks', lay.name);
+  if (k === 'global') return '_Control_Center';
+  return '';
+}
+
+/** 布局元数据目录（相对工作区）：交接与体系注册所在目录。 */
+export function layoutMetaRel(lay) {
+  const k = lay && lay.kind ? lay.kind : '';
+  if (k === 'project') return path.join('_Project_Meta', lay.name);
+  if (k === 'misc' || k === 'global-task') return layoutRootRel(lay);
+  return '';
+}
+
+/** 布局范围名：用于 _Temp/<范围> 与 _Archives/<范围>。 */
+export function layoutScopeOf(lay) {
+  const k = lay && lay.kind ? lay.kind : '';
+  if (k === 'project') return String(lay.name || '');
+  if (k === 'misc') return path.join('_Misc', String(lay.name || ''));
+  if (k === 'global-task') return path.join('_Global', 'tasks', String(lay.name || ''));
+  return '_Global';
+}
+
+/** 读角色条目上的待确认迁移；没有或不是迁移标记时返回 null。 */
+export function pendingOf(entry) {
+  const p = entry && entry.pending;
+  return p && p.kind === PENDING_MIGRATION ? p : null;
 }
 
 /** cwd 落在 Projects/<名>/ 或 _Misc/tasks/<任务>/ 里就据此判定；名字不合法一律不认。 */
@@ -188,7 +269,16 @@ export function resolveRole(opts) {
       const named = role === 'project' ? isSafeName(hit.project, PROJECT_NAME_MAX)
         : role === 'misc' ? isSafeName(hit.task, TASK_NAME_MAX) : true;
       if (named) {
-        return { role, project: String(hit.project || ''), task: String(hit.task || ''), source: 'store', sessionId: sid };
+        const lay = layoutOf(hit);
+        // 布局名不合法时退回按类别落点，不带着非法名字拼路径。
+        const ok = !lay.kind || lay.kind === 'global' || layoutNameOk(lay.kind, lay.name);
+        const layout = ok && lay.kind && lay.kind !== 'global' ? lay.kind : '';
+        const pending = pendingOf(hit);
+        return Object.assign({
+          role, project: String(hit.project || ''), task: String(hit.task || ''),
+          layout, layoutName: layout ? lay.name : '',
+          source: 'store', sessionId: sid,
+        }, pending ? { pending } : {});
       }
     }
     // 旧角色表的 unknown 是备用状态，按新口径并入普通。
@@ -223,26 +313,33 @@ export function resolveRole(opts) {
 // ---------------------------------------------------------------- 路径
 
 /**
- * 逐角色交接路径。
+ * 逐布局交接路径。落点取 layout，不取 role。类别换了而布局未迁时，交接仍在旧布局。
  * @returns {{ path: string|null, kind: string|null, scope: string, role: string, reason?: string }}
  */
 export function handoverPathFor(ws, info) {
   const role = info && info.role ? info.role : 'plain';
+  const lay = layoutOf(info);
   if (!ws) return { path: null, kind: null, scope: '', role, reason: '没有工作区根' };
-  if (role === 'global') {
+  if (lay.kind === 'global') {
     return { path: path.join(ws, '_Control_Center', 'records', 'Global_Handover.md'), kind: 'global', scope: '_Global', role };
   }
-  if (role === 'project') {
-    const project = String(info.project || '');
-    if (!project) return { path: null, kind: null, scope: '', role, reason: '项目名缺失' };
-    if (!isSafeName(project, PROJECT_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '项目名不合法（当目录名用）：' + JSON.stringify(project) };
-    return { path: path.join(ws, '_Project_Meta', project, 'Handover.md'), kind: 'project', scope: project, role, project };
-  }
-  if (role === 'misc') {
-    const task = String(info.task || '');
-    if (!task) return { path: null, kind: null, scope: '', role, reason: '任务名缺失' };
+  if (lay.kind === 'global-task') {
+    const task = lay.name;
+    if (!task) return { path: null, kind: null, scope: '', role, reason: '布局为全局任务但任务名缺失' };
     if (!isSafeName(task, TASK_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '任务名不合法（当目录名用）：' + JSON.stringify(task) };
-    return { path: path.join(ws, '_Misc', 'tasks', task, 'Handover.md'), kind: 'misc', scope: path.join('_Misc', task), role, task };
+    return { path: path.join(ws, '_Control_Center', 'tasks', task, 'Handover.md'), kind: 'global-task', scope: layoutScopeOf(lay), role, task };
+  }
+  if (lay.kind === 'project') {
+    const project = lay.name;
+    if (!project) return { path: null, kind: null, scope: '', role, reason: '布局为项目但项目名缺失' };
+    if (!isSafeName(project, PROJECT_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '项目名不合法（当目录名用）：' + JSON.stringify(project) };
+    return { path: path.join(ws, '_Project_Meta', project, 'Handover.md'), kind: 'project', scope: project, role, project, layoutName: project };
+  }
+  if (lay.kind === 'misc') {
+    const task = lay.name;
+    if (!task) return { path: null, kind: null, scope: '', role, reason: '布局为杂项但任务名缺失' };
+    if (!isSafeName(task, TASK_NAME_MAX)) return { path: null, kind: null, scope: '', role, reason: '任务名不合法（当目录名用）：' + JSON.stringify(task) };
+    return { path: path.join(ws, '_Misc', 'tasks', task, 'Handover.md'), kind: 'misc', scope: layoutScopeOf(lay), role, task, layoutName: task };
   }
   if (role === 'plain') return { path: null, kind: null, scope: '', role, reason: '普通会话不参与交接' };
   return { path: null, kind: null, scope: '', role, reason: '本会话未设定角色' };
@@ -255,9 +352,10 @@ export function snapshotDirFor(ws, info) {
 
 export function archiveDirFor(ws, info) {
   // 规范 §4.1：杂项归档自包含在任务目录里（`_Misc/tasks/<任务>/_archive/`），不进全局归档；
-  // 全局与项目归档在 `_Archives/<范围>/Handover/`。
-  if (info && info.role === 'misc' && isSafeName(info.task, TASK_NAME_MAX)) {
-    return path.join(ws, '_Misc', 'tasks', String(info.task), '_archive');
+  // 全局与项目归档在 `_Archives/<范围>/Handover/`。落点同样按布局判。
+  const lay = layoutOf(info);
+  if (lay.kind === 'misc' && isSafeName(lay.name, TASK_NAME_MAX)) {
+    return path.join(ws, '_Misc', 'tasks', String(lay.name), '_archive');
   }
   const t = handoverPathFor(ws, info);
   return path.join(ws, '_Archives', t.scope || '_Global', 'Handover');
@@ -265,7 +363,18 @@ export function archiveDirFor(ws, info) {
 
 export function scopeLabel(info) {
   const role = info && info.role ? info.role : 'plain';
+  const lay = layoutOf(info);
   if (role === 'project') return '项目「' + (info.project || '?') + '」';
-  if (role === 'misc') return '杂项任务「' + (info.task || '?') + '」';
+  if (role === 'misc') return '杂项任务「' + (lay.kind === 'misc' ? lay.name : info.task || '?') + '」';
+  if (role === 'global-task') return '全局任务「' + (info.task || '?') + '」';
+  if (role === 'global') return '全局';
   return ROLE_LABEL[role] || role;
+}
+
+/** 布局侧的名称标签：类别与布局不同时，用来说明文件停在哪里。 */
+export function layoutLabel(info) {
+  const lay = layoutOf(info);
+  if (!lay.kind || lay.kind === 'global') return '';
+  const k = LAYOUT_LABEL[lay.kind] || lay.kind;
+  return k + '「' + lay.name + '」';
 }

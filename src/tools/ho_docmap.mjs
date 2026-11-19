@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ho_docmap —— 体系注册、计划、骨架、台账与规则正文（1.2 合并入口）。
  *
  * 动作：registry-read / registry-write / registry-check / plan-read / plan-write / plan-archive /
@@ -7,7 +7,6 @@
  * 写入者必须是在任会话（以 Office.json 为准）；已交出的旧会话只读。
  * 写入后重装本会话提示段，实现热更新。
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
@@ -64,10 +63,6 @@ function targetInfoFor(info, task) {
     return { role: 'global-task', task: t };
   }
   return info;
-}
-
-function nodePath(ws, ...parts) {
-  return path.join(String(ws || ''), ...parts);
 }
 
 function baseDocmapTool(env) {

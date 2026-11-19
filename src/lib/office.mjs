@@ -64,12 +64,6 @@ function baseOf(name) {
   return m ? m[1] : '';
 }
 
-/** 名字里的代际号：全局11 → 11；没有数字返回 null。 */
-function generationOf(name) {
-  const m = GEN_RE.exec(String(name || '').trim());
-  return m ? Number(m[2]) : null;
-}
-
 /** 下一编号：该类别历史上出现过的最大号 + 1；没有历史就从 1 起算。 */
 export function nextName(store, key) {
   const lin = store && store.lineages ? store.lineages[key] : null;
@@ -180,6 +174,20 @@ export function registerHolder(ws, opts) {
   const key = lineageKeyOf(o.kind, o.project, o.task);
   if (!key) throw new Error('类别名缺失：全局传 kind=global，项目传 project，杂项传 task');
   const store = loadOffice(ws);
+  // 整份替换：一个会话只登记一次。换类别或换名时先清掉其它世系里的同一会话，
+  // 否则 office-read 会出现 2 个名字指向同一会话。
+  const sidText = String(o.sessionId || '');
+  const replaced = [];
+  if (sidText) {
+    for (const k of Object.keys(store.lineages)) {
+      if (k === key) continue;
+      const other = store.lineages[k];
+      if (other && other.current && String(other.current.sessionId) === sidText) {
+        delete store.lineages[k];
+        replaced.push(k);
+      }
+    }
+  }
   const lin = store.lineages[key] || (store.lineages[key] = {
     kind: o.kind, project: String(o.project || ''), task: String(o.task || ''),
     workspace: String(o.workspace || ''), current: null, history: [],
@@ -205,8 +213,8 @@ export function registerHolder(ws, opts) {
   if (!lin.current.name || !lin.current.sessionId) throw new Error('在任登记需要 name 与 sessionId');
   saveOffice(ws, store);
   let registry = { changed: [], error: '' };
-  try { registry = syncRegistry(ws, store); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
-  return { key, previous, current: lin.current, registry };
+  try { registry = syncRegistry(ws, store, replaced); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
+  return { key, previous, current: lin.current, replaced, registry };
 }
 
 /**
@@ -229,6 +237,7 @@ export function syncHolderKind(ws, opts) {
 
 /**
  * 注销登记：现任是该会话时删除整条世系（历史一并移除，文件体系不动）。
+ * 删除后同步 Registry.md：该类别行的「在役会话」格清空。
  * 返回是否删除。
  */
 export function removeHolder(ws, opts) {
@@ -241,7 +250,35 @@ export function removeHolder(ws, opts) {
   if (o.sessionId && lin.current && String(lin.current.sessionId) !== String(o.sessionId)) return false;
   delete store.lineages[key];
   saveOffice(ws, store);
+  try { syncRegistry(ws, store, [key]); } catch { /* 同步失败不撤销已完成的注销 */ }
   return true;
+}
+
+/**
+ * 按会话清注册：遍历全部世系，删除现任是该会话的条目。
+ * 角色表被手工改过、或同一会话残留在多个类别时，仍能清干净；文件与目录原位保留。
+ * @param {string} ws 工作区根
+ * @param {string} sessionId 会话 id
+ * @returns {{removed: string[], registry: object}} 被删的类别名与同步结果
+ */
+export function removeHoldersBySession(ws, sessionId) {
+  const sid = String(sessionId || '').trim();
+  const empty = { removed: [], registry: { changed: [], error: '' } };
+  if (!sid || !String(ws || '').trim()) return empty;
+  const store = loadOffice(ws);
+  const removed = [];
+  for (const key of Object.keys(store.lineages)) {
+    const lin = store.lineages[key];
+    if (lin && lin.current && String(lin.current.sessionId) === sid) {
+      delete store.lineages[key];
+      removed.push(key);
+    }
+  }
+  if (!removed.length) return empty;
+  saveOffice(ws, store);
+  let registry = { changed: [], error: '' };
+  try { registry = syncRegistry(ws, store, removed); } catch (e) { registry = { changed: [], error: String(e && e.message ? e.message : e) }; }
+  return { removed, registry };
 }
 
 /**
@@ -291,8 +328,10 @@ function currentCellFor(row, withName) {
 /**
  * 把 Registry.md 里的「在役会话」格改成登记表里的现任。
  * 只认项目清单与未登记任务这 2 张表，只换该格；其它文字一律不动。
+ * @param {string[]} [cleared] 本次注销的类别名：这些行没有现任时清空该格，其余行保持原样。
  */
-function syncRegistry(ws, store) {
+function syncRegistry(ws, store, cleared) {
+  const clearSet = new Set((Array.isArray(cleared) ? cleared : []).map((k) => String(k)));
   const file = path.join(String(ws || ''), '_Project_Meta', 'Registry.md');
   let text = '';
   try { text = readUtf8(file); } catch { return { changed: [], error: '读不到 Registry.md' }; }
@@ -316,10 +355,17 @@ function syncRegistry(ws, store) {
     const name = String(cells[1] || '').trim();
     if (!name || name === '项目名' || name === '任务短名' || /^-+$/.test(name)) continue;
     const row = rowsOf(store).find((r) => r.key === name);
-    if (!row) continue;
     if (mode === 'project') {
       if (cells.length < 9) continue; // 8 列 + 首尾空
       const old = String(cells[6] || '');
+      // 类别已注销：该格清空，行与其它列不动。
+      if (!row) {
+        if (!clearSet.has(name) || old.trim() === '') continue;
+        cells[6] = ' ';
+        lines[i] = cells.join('|');
+        changed.push(name);
+        continue;
+      }
       const next = currentCellFor(row, true);
       if (!next) continue;
       const want = ' ' + next + tailOf(old) + ' ';
@@ -327,10 +373,18 @@ function syncRegistry(ws, store) {
       cells[6] = want;
     } else {
       if (cells.length < 5) continue; // 4 列 + 首尾空
+      const old = String(cells[3] || '');
+      if (!row) {
+        if (!clearSet.has(name) || old.trim() === '') continue;
+        cells[3] = ' ';
+        lines[i] = cells.join('|');
+        changed.push(name);
+        continue;
+      }
       const next = currentCellFor(row, false);
       if (!next) continue;
-      const want = ' ' + next + tailOf(String(cells[3] || '')) + ' ';
-      if (String(cells[3] || '') === want) continue;
+      const want = ' ' + next + tailOf(old) + ' ';
+      if (old === want) continue;
       cells[3] = want;
     }
     lines[i] = cells.join('|');

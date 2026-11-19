@@ -190,6 +190,12 @@ export function createInlineEngine(runtime) {
   function calibrateAfter(sid, st, used) {
     const floor = Number(cfg.roiFloor) || 0.30;
     const r = settlePendingAfter(st, used, floor);
+    // 宿主投影尚未结算压缩结果：读数保留，下一处步骤边界重读。
+    if (r.retained) {
+      noteInline('inline compact after stale ' + sid
+        + ' retries=' + (Number(st.pendingAfter && st.pendingAfter.retries) || 0));
+      return r;
+    }
     if (!r.consumed) return null;
     if (!r.measured) {
       noteInline('inline compact after unmeasured ' + sid);

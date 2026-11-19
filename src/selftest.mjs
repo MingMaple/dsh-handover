@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveConfig } from './lib/config.mjs';
 import { projCacheDir, readPressure } from './lib/sessions.mjs';
 import { readJsonDir, readJsonFileLazy, isDir, isFile } from './lib/text.mjs';
@@ -18,7 +19,7 @@ import { createInlineEngine } from './lib/inline-engine.mjs';
 import { compactionStateOf } from './lib/events.mjs';
 import { deriveSegments, segmentStats, segmentForSeq, gainRatio } from './lib/segments.mjs';
 import { extractSnapshot, renderSnapshot, maybeSemanticSnapshot, bypassCount, resetBypassCount, writeSnapshot, listSnapshots } from './lib/checkpoint.mjs';
-import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionCeilingText, rubricText } from './lib/inject.mjs';
+import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionBlockText, successionCeilingText, roiAdviceText, rubricText } from './lib/inject.mjs';
 import { judgeAssistantCompact } from './lib/compact-gate.mjs';
 import { extractConstraints, probeConstraints } from './lib/constraints.mjs';
 import { mergeAnchor, readAnchor } from './lib/anchor.mjs';
@@ -28,7 +29,7 @@ import { adoptLegacyStore } from './lib/compat.mjs';
 import { search, regexIssue, aroundEvents } from './lib/recall.mjs';
 import { carryItemsOf, fileSha256 } from './lib/handover-io.mjs';
 import { judgeRotateGate } from './lib/succession.mjs';
-import { toolsetFor } from './lib/role.mjs';
+import { toolsetFor, layoutOf, handoverPathFor, snapshotDirFor, archiveDirFor, readRoles, resolveRole, writeRole } from './lib/role.mjs';
 import { ALL_TOOL_NAMES } from './lib/names.mjs';
 import { pmStatusTool } from './tools/ho_status.mjs';
 import { pmHandoverTool } from './tools/ho_handover.mjs';
@@ -37,15 +38,19 @@ import { pmSessionsTool } from './tools/ho_sessions.mjs';
 import { pmWorkspaceTool } from './tools/ho_workspace.mjs';
 import { pmPeerTool } from './tools/peer.mjs';
 import { newSessionIn } from './lib/session-create.mjs';
+import { sessionNew } from './lib/session-ops.mjs';
 import { abortableDelay, ABORTED_TEXT } from './lib/abort.mjs';
 import { createSkipLogger } from './lib/skip-log.mjs';
-import { nextName, registerHolder } from './lib/office.mjs';
-import { resolveShortSid } from './lib/api.mjs';
+import { nextName, registerHolder, loadOffice, saveOffice, removeHolder } from './lib/office.mjs';
+import { resolveShortSid, createApi } from './lib/api.mjs';
 import { decodeLogResult } from './lib/zstd-log.mjs';
 import { syncCheck } from './lib/gates.mjs';
-import { checkRegistries, syncGlobalRefs } from './lib/system.mjs';
-import { validateProfile } from './lib/profile.mjs';
+import { checkRegistries, syncGlobalRefs, registryRelPath, planRelPath, detachGlobalTask } from './lib/system.mjs';
+import { validateProfile, profilePathFor } from './lib/profile.mjs';
+import { scanAbsolutePaths, scanRoots, scanReportText } from './lib/path-scan.mjs';
 import { createInitErrors } from './index.mjs';
+import { createRoleAssembly } from './lib/role-assembly.mjs';
+import { manualFor } from './lib/manual.mjs';
 
 const argv = process.argv.slice(2);
 function argOf(flag, dflt) {
@@ -217,6 +222,28 @@ eq('最近一次达标归零', lowRoiStreakOf([0.20, 0.25, 0.40], 0.30), 0);
   const r = settlePendingAfter(st, 96000, 0.30);
   eq('低收益时累计连续次数', r.streak, 1);
   eq('低收益记录进入收益历史', st.roiHistory.length, 2);
+}
+{
+  // 宿主投影滞后：压缩刚返回时读到的是压缩前水位，不足遮蔽量一半就不结算，等到刷新再读。
+  const st = { tokensAfter: null, pendingAfter: { before: 414160, shadowed: 267139, at: 2 } };
+  const stale = settlePendingAfter(st, 410749, 0.30);
+  eq('滞后读数不结算', stale.retained, true);
+  eq('滞后读数不写收益', stale.measured, false);
+  eq('滞后读数不改写读数', st.tokensAfter, null);
+  eq('滞后读数保留待校准', !!st.pendingAfter, true);
+  eq('滞后读数记录重试次数', st.pendingAfter.retries, 1);
+  const fresh = settlePendingAfter(st, 53641, 0.30);
+  eq('刷新后按真实读数结算', Math.round(st.roi * 1000) / 1000, 0.87);
+  eq('刷新后清掉待校准', st.pendingAfter, undefined);
+  eq('刷新后收益达标清零连击', fresh.streak, 0);
+}
+{
+  // 宿主始终不刷新：重试到上限后放弃记录，不拿滞后读数写假收益。
+  const st = { tokensAfter: null, pendingAfter: { before: 100000, shadowed: 60000, retries: 8 } };
+  const r = settlePendingAfter(st, 99990, 0.30);
+  eq('重试超限后放弃校准', r.measured, false);
+  eq('放弃后不写读数', st.tokensAfter, null);
+  eq('放弃后清掉待校准', st.pendingAfter, undefined);
 }
 
 const indexSrc = fs.readFileSync(new URL('./index.mjs', import.meta.url), 'utf8');
@@ -492,9 +519,52 @@ eq('水位未知', D({ used: null }).action, 'unknown');
 
 /* ---------------- 注入文本 ---------------- */
 
-eq('整理线提示文案', tierPromptText('soft', prof), '上下文 92K/200K（46%）。3 档 70K/100K/130K。已过整理线，可择机压缩。先把任务收到安全断点。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。可压：边界已到；缓压：推导未落盘或有错在追。');
+eq('整理线提示文案', tierPromptText('soft', prof), '上下文 92K/200K（46%）。3 档 70K/100K/130K。已过整理线，可择机压缩。请将当前任务做到合适断点处后进行上下文压缩流程。按胶囊标准写：目标、已定方案、下一步、易错点、必须遵守的约束原文、需要保留的原文位置。再调用 ho_handover(action="compact", capsule=…)。可压：边界已到；缓压：推导未落盘或有错在追。');
 check('建议线提示写尽快', /尽快/.test(tierPromptText('advise', prof)), tierPromptText('advise', prof));
-eq('强制线文案含实际用量', hardPromptText(prof), '上下文 92K/200K（46%），已到强制线 130K。插件立即执行压缩。');
+eq('强制线文案含实际用量', hardPromptText(prof), '上下文 92K/200K（46%），已到强制线 130K。插件将立即执行压缩。');
+// 三类到线文案都写「请将当前任务做到合适断点处后进行…」：压缩两档接压缩流程，次数满接换任流程。
+{
+  const breakpointLine = /请将当前任务做到合适断点处后进行上下文压缩流程/;
+  const breakpointHead = /请将当前任务做到合适断点处后进行/;
+  check('整理线文案含断点句', breakpointLine.test(tierPromptText('soft', prof)));
+  check('建议线文案含断点句', breakpointLine.test(tierPromptText('advise', prof)));
+  check('次数已满且到线文案含断点句', breakpointHead.test(successionBlockText(4, 4, dflt)), successionBlockText(4, 4, dflt));
+  check('次数已满且到线接换任流程', /合适断点处后进行换任流程/.test(successionBlockText(4, 4, dflt)), successionBlockText(4, 4, dflt));
+  check('强制线文案不写断点句', !breakpointHead.test(hardPromptText(prof)), hardPromptText(prof));
+  check('硬顶文案改用命令式', /必须立即把断点设在当前工作附近/.test(successionCeilingText(6, 6)), successionCeilingText(6, 6));
+  check('低收益文案改用命令式', /你必须尽快把断点设在当前工作附近/.test(roiAdviceText(0.05, 0.12, 2)), roiAdviceText(0.05, 0.12, 2));
+}
+// 刚压满次数：不写断点句，改为预告下次到线执行换任流程。
+{
+  const t = successionPromptText(4, 4, dflt);
+  check('刚压满不写断点句', !/请将当前任务做到合适断点处后进行上下文压缩流程/.test(t), t);
+  check('刚压满预告换任流程', /下次到线将不再压缩，而是执行换任流程/.test(t), t);
+}
+// 设置页话术示例：语气词只出现在带 [@example] 的行，豁免不扩散到其他行。
+{
+  const guideAbs = fileURLToPath(new URL('./lib/guide.mjs', import.meta.url));
+  const lines = fs.readFileSync(guideAbs, 'utf8').split(/\r?\n/);
+  const toneRe = /[吧呢啦]/;
+  const marked = lines.filter((l) => l.indexOf('[@example]') !== -1);
+  const stray = lines.filter((l) => toneRe.test(l) && l.indexOf('[@example]') === -1);
+  check('示例标记行不少于 1 行', marked.length >= 1, String(marked.length));
+  check('语气词只出现在标记行', stray.length === 0, stray.join(' | '));
+  check('标记行都带语气词', marked.every((l) => toneRe.test(l)), marked.filter((l) => !toneRe.test(l)).join(' | '));
+  check('标记只标在示例行', marked.every((l) => l.indexOf('say:') !== -1), marked.filter((l) => l.indexOf('say:') === -1).join(' | '));
+}
+// 待确认迁移：提示段写明首轮询问，未点唤醒也会问；无待确认时不出现该行。
+{
+  const base = { role: 'misc', project: '', task: 'T', layout: 'misc', layoutName: 'T', source: 'store', sessionId: 'session-p' };
+  const pendingInfo = Object.assign({}, base, {
+    pending: { kind: 'migration', from: { role: 'project', project: 'T', task: '' }, to: { role: 'misc', project: '', task: 'T' }, at: '2026-11-19 00:00:00 +0800' },
+  });
+  const opts = { ws: 'E:/x', cfg: dflt, system: '', consents: [], guard: true };
+  const withPending = manualFor(pendingInfo, opts);
+  check('待确认迁移：提示段要求首轮先问', /首轮先问当前用户是否迁移文件体系/.test(withPending), withPending.slice(0, 400));
+  check('待确认迁移：提示段写明答复前不搬', /得到答复前不移动任何文件/.test(withPending));
+  const without = manualFor(base, opts);
+  check('无待确认：提示段不写询问行', !/首轮先问当前用户是否迁移文件体系/.test(without));
+}
 check('rubric 不超过 220 字', rubricText().length <= 220, String(rubricText().length));
 check('rubric 含 fire 四条', /子任务闭环/.test(rubricText()) && /即将切换阶段/.test(rubricText())
   && /噪声不少于 30%/.test(rubricText()) && /余量低于预计下一阶段增量/.test(rubricText()));
@@ -1012,7 +1082,7 @@ check('杂项转项目：库根不留档案', !isFile(path.join(pLib, 'task.prof
 const pProf = JSON.parse(fs.readFileSync(path.join(pMeta, 'project.profile.json'), 'utf8'));
 check('杂项转项目：档案根改为项目根', pProf.root === 'Projects/P', JSON.stringify(pProf));
 const pSys = fs.readFileSync(path.join(pMeta, 'System.md'), 'utf8');
-check('杂项转项目：体系旧根已改写', pSys.indexOf('Projects/P') !== -1 && pSys.indexOf('_Misc/tasks/T') === -1, pSys);
+check('杂项转项目：体系正文不机械改写', pSys.indexOf('_Misc/tasks/T') !== -1, pSys);
 migrateIdentity({ ws: idWs, prev: { role: 'project', project: 'P' }, next: { role: 'misc', task: 'T2' }, mode: 'auto' });
 const t2 = path.join(idWs, '_Misc', 'tasks', 'T2');
 check('项目转杂项：交接进任务目录', isFile(path.join(t2, 'Handover.md')));
@@ -1025,6 +1095,17 @@ migrateIdentity({ ws: idWs, prev: { role: 'misc', task: 'T2' }, next: { role: 'p
 const p2Lib = path.join(idWs, 'Projects', 'P2', 'P2库');
 check('来回转换：库内容只套一层', isFile(path.join(p2Lib, 'RULES.md')) && !isDir(path.join(p2Lib, 'P2库')));
 check('来回转换：档案回元数据目录', isFile(path.join(idMeta, 'P2', 'Handover.md')));
+
+// 目标目录只剩备份（*.bak）时不算被占用：跳过备份的往返转换后仍能迁回。
+fs.mkdirSync(path.join(idWs, '_Misc', 'tasks', 'T3'), { recursive: true });
+fs.writeFileSync(path.join(idWs, '_Misc', 'tasks', 'T3', 'System.md.bak'), 'old', 'utf8');
+let bakErr = '';
+try {
+  migrateIdentity({ ws: idWs, prev: { role: 'project', project: 'P2' }, next: { role: 'misc', task: 'T3' }, mode: 'auto' });
+} catch (e) { bakErr = String(e && e.message ? e.message : e); }
+check('目标仅有 .bak 时允许迁入', !bakErr, bakErr);
+check('仅有 .bak 的目标迁入后交接到位', isFile(path.join(idWs, '_Misc', 'tasks', 'T3', 'Handover.md')));
+check('目标里的 .bak 原样保留', isFile(path.join(idWs, '_Misc', 'tasks', 'T3', 'System.md.bak')));
 fs.rmSync(idWs, { recursive: true, force: true });
 
 /* ---------------- 身份互转：前置检查失败不动文件 ---------------- */
@@ -1055,6 +1136,94 @@ fs.rmSync(idWs, { recursive: true, force: true });
   check('互转失败不改登记表', fs.readFileSync(cfOffice, 'utf8') === cfOfficeText);
   check('互转失败不留快照', !isDir(path.join(cfWs, '_Archives')));
   fs.rmSync(cfWs, { recursive: true, force: true });
+}
+
+/* ---------------- 注册行为：转普通清注册、重注册整份替换 ---------------- */
+
+{
+  const regWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-reg-'));
+  fs.mkdirSync(path.join(regWs, '_Control_Center', 'records'), { recursive: true });
+  const regMeta = path.join(regWs, '_Project_Meta');
+  fs.mkdirSync(regMeta, { recursive: true });
+  const regFile = path.join(regMeta, 'Registry.md');
+  const regText0 = [
+    '# 注册表',
+    '',
+    '## 项目清单',
+    '',
+    '| 项目名 | 项目路径 | 当前版本 | 状态 | 依赖项目 | 在役会话 | 最近更新 | 形态 |',
+    '|---|---|---|---|---|---|---|---|',
+    '| Demo | `Projects/Demo/` | — | 进行中 | 无 |  | 2026-01-01 | general |',
+    '',
+    '## 未登记但存在的任务（杂项，供查阅，不是项目）',
+    '',
+    '| 任务短名 | 目录 | 在役会话 | 说明 |',
+    '|---|---|---|---|',
+    '| Stray | `_Misc/tasks/Stray/` |  | 同上 |',
+    '| Zeta | `_Misc/tasks/Zeta/` |  | 同上 |',
+    '',
+  ].join(NL2);
+  fs.writeFileSync(regFile, regText0, 'utf8');
+  const regCfg = { workspaceRoot: regWs, rolesPath: path.join(regWs, 'roles.json'), roleGating: 'off' };
+  const regAssembly = createRoleAssembly({
+    ctx: { agents: { get: () => null, list: () => [] } },
+    cfg: regCfg,
+    env: { log: () => {} },
+    perStep: false,
+    registered: new Set(),
+    initErrors: [],
+    walkUpToWorkspace: () => regWs,
+  });
+  // 取某行某一格（0 为表首，项目表 6 为在役会话，杂项表 3 为在役会话）。
+  const cellOf = (text, name, idx) => {
+    const line = text.split(NL2).find((x) => x.indexOf('| ' + name + ' |') === 0);
+    return line ? String(line.split('|')[idx] || '').trim() : '<无此行>';
+  };
+
+  const SID_A = 'session-reg-plain';
+  await regAssembly.applyRole({ sessionId: SID_A, role: 'project', project: 'Demo', wake: false });
+  check('注册：项目行写入在役会话', cellOf(fs.readFileSync(regFile, 'utf8'), 'Demo', 6).indexOf(SID_A) !== -1);
+  // 模拟残留：角色表被手工改过后，同一会话另有世系指向它。
+  {
+    const st = loadOffice(regWs);
+    st.lineages.Stray = {
+      kind: 'misc', task: 'Stray', workspace: '',
+      current: { name: 'Stray1', sessionId: SID_A, since: '2026-01-01 00:00 +0800', note: '' }, history: [],
+    };
+    saveOffice(regWs, st);
+  }
+  await regAssembly.applyRole({ sessionId: SID_A, role: 'plain', wake: false });
+  const st2 = loadOffice(regWs);
+  check('转普通：项目世系已清', !st2.lineages.Demo, JSON.stringify(Object.keys(st2.lineages)));
+  check('转普通：残留世系一并清', !st2.lineages.Stray);
+  const regText1 = fs.readFileSync(regFile, 'utf8');
+  check('转普通：登记表无该 sessionId', regText1.indexOf(SID_A) === -1);
+  check('转普通：项目行在役会话格清空', cellOf(regText1, 'Demo', 6) === '');
+  check('转普通：表格行数不变', regText1.split(NL2).length === regText0.split(NL2).length);
+
+  const SID_B = 'session-reg-move';
+  registerHolder(regWs, { kind: 'project', project: 'Demo', name: 'Demo2', sessionId: SID_B });
+  registerHolder(regWs, { kind: 'misc', task: 'Zeta', name: 'Zeta1', sessionId: SID_B });
+  const st3 = loadOffice(regWs);
+  const holds = Object.keys(st3.lineages)
+    .filter((k) => st3.lineages[k].current && String(st3.lineages[k].current.sessionId) === SID_B);
+  eq('重注册：同一 sessionId 只出现一次', holds, ['Zeta']);
+  const regEnv = {
+    cfg: regCfg,
+    resolveWs: () => regWs,
+    selfId: () => SID_B,
+    roleOf: () => ({ role: 'global', project: '', task: '', source: 'selftest' }),
+  };
+  const byOld = await pmSessionsTool(regEnv).execute({ action: 'office-read', query: 'Demo2' }, null);
+  check('重注册：旧名查询不再命中', /没有名为/.test(byOld.text), byOld.text);
+  const byNew = await pmSessionsTool(regEnv).execute({ action: 'office-read', query: 'Zeta1' }, null);
+  check('重注册：新名可查', byNew.text.indexOf('Zeta1') !== -1 && byNew.text.indexOf(SID_B) !== -1, byNew.text);
+  check('重注册：旧类别行在役会话格清空', cellOf(fs.readFileSync(regFile, 'utf8'), 'Demo', 6) === '');
+
+  removeHolder(regWs, { kind: 'misc', task: 'Zeta', sessionId: SID_B });
+  check('注销登记：在役会话格清空', cellOf(fs.readFileSync(regFile, 'utf8'), 'Zeta', 3) === '');
+  check('注销登记：世系已删', !loadOffice(regWs).lineages.Zeta);
+  fs.rmSync(regWs, { recursive: true, force: true });
 }
 
 /* ---------------- 工具只读冒烟 ---------------- */
@@ -1139,6 +1308,273 @@ for (const role of ['global', 'project', 'misc']) {
 check('项目不可见 ho_workspace', toolsetFor('project').allow.indexOf('ho_workspace') === -1);
 check('杂项不可见 ho_workspace', toolsetFor('misc').allow.indexOf('ho_workspace') === -1);
 check('项目可见 ho_sessions', toolsetFor('project').allow.indexOf('ho_sessions') !== -1);
+
+/* ---------------- 身份布局：两轴分离与迁移可选 ---------------- */
+
+// 布局缺省等于类别：旧角色表不必补字段，读出来仍是原落点。
+eq('布局缺省跟随类别', layoutOf({ role: 'misc', task: 'T' }).kind, 'misc');
+check('布局缺省时两轴相同', layoutOf({ role: 'project', project: 'P' }).differs === false);
+
+{
+  const lw = path.join(os.tmpdir(), 'dsh-handover-axis-nowhere');
+  // 类别为项目、布局为杂项：六处解析点全部落在旧布局上。
+  const twoA = { role: 'project', project: 'P', task: '', layout: 'misc', layoutName: 'T' };
+  check('两轴：交接落旧布局', handoverPathFor(lw, twoA).path === path.join(lw, '_Misc', 'tasks', 'T', 'Handover.md'), handoverPathFor(lw, twoA).path);
+  check('两轴：快照落旧布局', snapshotDirFor(lw, twoA) === path.join(lw, '_Temp', '_Misc', 'T', 'Snapshots'), snapshotDirFor(lw, twoA));
+  check('两轴：归档落旧布局', archiveDirFor(lw, twoA) === path.join(lw, '_Misc', 'tasks', 'T', '_archive'), archiveDirFor(lw, twoA));
+  check('两轴：体系注册落旧布局', registryRelPath(twoA) === path.join('_Misc', 'tasks', 'T', 'System.md'), registryRelPath(twoA));
+  check('两轴：计划落旧布局', planRelPath(lw, twoA) === path.join('_Misc', 'tasks', 'T', 'PLAN.md'), planRelPath(lw, twoA));
+  check('两轴：骨架落旧布局', profilePathFor(lw, twoA) === path.join(lw, '_Misc', 'tasks', 'T', 'task.profile.json'), profilePathFor(lw, twoA));
+
+  // 反向：类别为杂项、布局为项目。
+  const twoB = { role: 'misc', task: 'T2', layout: 'project', layoutName: 'P2' };
+  check('两轴反向：交接落项目布局', handoverPathFor(lw, twoB).path === path.join(lw, '_Project_Meta', 'P2', 'Handover.md'), handoverPathFor(lw, twoB).path);
+  check('两轴反向：快照落项目布局', snapshotDirFor(lw, twoB) === path.join(lw, '_Temp', 'P2', 'Snapshots'), snapshotDirFor(lw, twoB));
+  check('两轴反向：归档落项目布局', archiveDirFor(lw, twoB) === path.join(lw, '_Archives', 'P2', 'Handover'), archiveDirFor(lw, twoB));
+  check('两轴反向：体系注册落项目布局', registryRelPath(twoB) === path.join('_Project_Meta', 'P2', 'System.md'), registryRelPath(twoB));
+  check('两轴反向：计划落项目库', planRelPath(lw, twoB) === path.join('Projects', 'P2', 'PLAN.md'), planRelPath(lw, twoB));
+  check('两轴反向：骨架落项目布局', profilePathFor(lw, twoB) === path.join(lw, '_Project_Meta', 'P2', 'project.profile.json'), profilePathFor(lw, twoB));
+}
+
+{
+  const axWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-axis-'));
+  fs.mkdirSync(path.join(axWs, '_Control_Center', 'records'), { recursive: true });
+  fs.mkdirSync(path.join(axWs, '_Project_Meta'), { recursive: true });
+  fs.writeFileSync(path.join(axWs, '_Project_Meta', 'Registry.md'),
+    '# 项目清单' + NL2 + NL2 + '## 项目清单' + NL2 + NL2 + '| 项目 | 库根 | 元数据 | 状态 | 交接 | 备注 | 更新 | 类型 |' + NL2 + '|---|---|---|---|---|---|---|---|' + NL2, 'utf8');
+  const axCfg = { workspaceRoot: axWs, rolesPath: path.join(axWs, 'roles.json'), roleGating: 'off' };
+  const axAssembly = createRoleAssembly({
+    ctx: { agents: { get: () => null, list: () => [] } },
+    cfg: axCfg,
+    env: { log: () => {} },
+    perStep: false,
+    registered: new Set(),
+    initErrors: [],
+    walkUpToWorkspace: () => axWs,
+  });
+  const mkTask = (name) => {
+    const dir = path.join(axWs, '_Misc', 'tasks', name);
+    fs.mkdirSync(path.join(dir, 'Docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Handover.md'), '# 交接' + NL2, 'utf8');
+    fs.writeFileSync(path.join(dir, 'System.md'), '# 体系注册（杂项任务「' + name + '」）' + NL2 + NL2 + '- 目录 _Misc/tasks/' + name + NL2, 'utf8');
+    fs.writeFileSync(path.join(dir, 'Project_Overview.md'), '# 总览' + NL2, 'utf8');
+    fs.writeFileSync(path.join(dir, 'RULES.md'), '# 规则' + NL2, 'utf8');
+    fs.writeFileSync(path.join(dir, 'System.md.bak'), '# 旧体系' + NL2, 'utf8');
+    return dir;
+  };
+
+  // 一、ask 与 keep：同名互转不搬文件，选不迁移则原地注册。
+  const S_A = 'session-axis-keep';
+  const dirA = mkTask('SA');
+  await axAssembly.applyRole({ sessionId: S_A, role: 'misc', task: 'SA', wake: false });
+  const askA = await axAssembly.applyRole({ sessionId: S_A, role: 'project', project: 'SA', wake: false });
+  check('ask：返回待确认', askA.ok === true && askA.pending === true, JSON.stringify({ ok: askA.ok, p: askA.pending, e: askA.error }));
+  check('ask：文件零移动', isFile(path.join(dirA, 'Handover.md')) && !isFile(path.join(axWs, '_Project_Meta', 'SA', 'Handover.md')));
+  check('ask：不建新布局目录', !isDir(path.join(axWs, 'Projects', 'SA')));
+  const entA = readRoles(axCfg).sessions[S_A];
+  check('ask：角色表 role 为新、layout 为旧', entA.role === 'project' && entA.layout === 'misc' && entA.layoutName === 'SA', JSON.stringify(entA));
+  check('ask：pending 可读', !!entA.pending && entA.pending.kind === 'migration' && entA.pending.from.task === 'SA', JSON.stringify(entA.pending));
+  check('ask：解析出的角色带布局', resolveRole({ cfg: axCfg, sessionId: S_A }).layout === 'misc');
+  check('ask：交接仍在旧布局', handoverPathFor(axWs, resolveRole({ cfg: axCfg, sessionId: S_A })).path === path.join(dirA, 'Handover.md'));
+
+  const keepA = axAssembly.chooseMigration({ sessionId: S_A, apply: false });
+  check('keep：清掉 pending', keepA.ok === true && keepA.migrated === false, JSON.stringify(keepA));
+  check('keep：文件仍在原位', isFile(path.join(dirA, 'Handover.md')) && !isDir(path.join(axWs, 'Projects', 'SA')));
+  const entA2 = readRoles(axCfg).sessions[S_A];
+  check('keep：pending 消失', !entA2.pending, JSON.stringify(entA2));
+  check('keep：布局仍为旧', entA2.layout === 'misc');
+  check('keep：注册仍在旧布局', registryRelPath(resolveRole({ cfg: axCfg, sessionId: S_A })) === path.join('_Misc', 'tasks', 'SA', 'System.md'));
+  check('keep：重复了结被拒', axAssembly.chooseMigration({ sessionId: S_A, apply: true }).ok === false);
+  check('越权：无关会话了结被拒', axAssembly.chooseMigration({ sessionId: 'session-axis-nobody', apply: true }).ok === false);
+
+  // 二、migrate：清单与磁盘逐项一致，.bak 跳过并列出，残余不静默。
+  const S_B = 'session-axis-migrate';
+  const dirB = mkTask('SB');
+  await axAssembly.applyRole({ sessionId: S_B, role: 'misc', task: 'SB', wake: false });
+  const askB = await axAssembly.applyRole({ sessionId: S_B, role: 'project', project: 'SB', wake: false });
+  check('ask：第二例同样不搬', askB.pending === true && isFile(path.join(dirB, 'Handover.md')));
+  const migB = axAssembly.chooseMigration({ sessionId: S_B, apply: true });
+  check('migrate：返回清单', migB.ok === true && migB.migrated === true && migB.changes.length > 0, JSON.stringify({ ok: migB.ok, e: migB.error }));
+  const moves = (migB.changes || []).filter((c) => c.op === 'move');
+  check('migrate：清单与磁盘一致', moves.length > 0 && moves.every((c) => fs.existsSync(c.to) && !fs.existsSync(c.from)), '共 ' + moves.length + ' 项');
+  check('migrate：交接进元数据目录', isFile(path.join(axWs, '_Project_Meta', 'SB', 'Handover.md')));
+  check('migrate：体系正文不改写', fs.readFileSync(path.join(axWs, '_Project_Meta', 'SB', 'System.md'), 'utf8').indexOf('_Misc/tasks/SB') !== -1);
+  check('migrate：清单点明待改写文件', (migB.manual || []).some((f) => /System\.md$/.test(f)), JSON.stringify(migB.manual));
+  check('migrate：.bak 跳过并列入清单', (migB.changes || []).some((c) => c.op === 'skip' && /\.bak/.test(c.from)));
+  check('migrate：残留已列出', (migB.changes || []).some((c) => c.op === 'residue'), JSON.stringify((migB.changes || []).filter((c) => c.op === 'residue')));
+  const entB = readRoles(axCfg).sessions[S_B];
+  check('migrate：布局回到项目', entB.layout === 'project' && !entB.pending, JSON.stringify(entB));
+  check('migrate：临时目录建在新布局', isDir(path.join(axWs, '_Temp', 'SB', 'Snapshots')));
+
+  // 三、换名同样先问后迁：不直接搬，确认后才落到新名目录。
+  const S_C = 'session-axis-rename';
+  mkTask('SC');
+  await axAssembly.applyRole({ sessionId: S_C, role: 'misc', task: 'SC', wake: false });
+  const renC = await axAssembly.applyRole({ sessionId: S_C, role: 'project', project: 'PC', wake: false });
+  check('改名：先问后迁，不直接搬', renC.ok === true && renC.pending === true && renC.migrated === '', JSON.stringify({ p: renC.pending, m: renC.migrated, e: renC.error }));
+  check('改名：未确认前文件仍在旧名目录', isFile(path.join(axWs, '_Misc', 'tasks', 'SC', 'Handover.md')));
+  const renC2 = axAssembly.chooseMigration({ sessionId: S_C, apply: true });
+  check('改名：确认迁移后落到新名目录', renC2.ok === true && renC2.migrated === true && isFile(path.join(axWs, '_Project_Meta', 'PC', 'Handover.md')), JSON.stringify({ ok: renC2.ok, e: renC2.error }));
+  check('改名：迁移后布局回到项目且无待确认', (() => { const e = readRoles(axCfg).sessions[S_C]; return e.layout === 'project' && !e.pending; })());
+
+  // 四、显式 auto 与 direct：行为与 1.0.2 一致。
+  const S_D = 'session-axis-auto';
+  mkTask('SD');
+  await axAssembly.applyRole({ sessionId: S_D, role: 'misc', task: 'SD', wake: false });
+  const autoD = await axAssembly.applyRole({ sessionId: S_D, role: 'project', project: 'SD', migrate: 'auto', wake: false });
+  check('显式 auto：立刻迁移且不留待确认', autoD.migrated === 'auto' && autoD.pending === false && isFile(path.join(axWs, '_Project_Meta', 'SD', 'Handover.md')), JSON.stringify({ m: autoD.migrated, p: autoD.pending }));
+
+  const S_E = 'session-axis-direct';
+  mkTask('SE');
+  await axAssembly.applyRole({ sessionId: S_E, role: 'misc', task: 'SE', wake: false });
+  const dirE = await axAssembly.applyRole({ sessionId: S_E, role: 'project', project: 'SE', migrate: 'direct', wake: false });
+  check('显式 direct：旧体系进备份', dirE.migrated === 'direct' && !isFile(path.join(axWs, '_Misc', 'tasks', 'SE', 'Handover.md')), JSON.stringify({ m: dirE.migrated }));
+  check('显式 direct：新位置为空目录', isDir(path.join(axWs, '_Project_Meta', 'SE')) && !isFile(path.join(axWs, '_Project_Meta', 'SE', 'Handover.md')));
+
+  // 五、工具面：项目会话可了结；代他人调用被拒。
+  const axToolEnv = {
+    cfg: axCfg,
+    resolveWs: () => axWs,
+    selfId: () => S_A,
+    roleOf: () => ({ role: 'project', project: 'SA', task: '', layout: 'misc', layoutName: 'SA', source: 'selftest' }),
+    chooseMigration: (input) => ({ ok: true, migrated: input.apply === true, changes: [], layout: 'misc', layoutName: 'SA', summary: '桩' }),
+  };
+  const axTool = pmSessionsTool(axToolEnv);
+  const tOk = await axTool.execute({ action: 'migration-choice', migrate: false }, null);
+  check('工具：项目会话可了结迁移', /不迁移/.test(String(tOk.text)), String(tOk.text));
+  await throwsWith('工具：代他人调用被拒', () => axTool.execute({ action: 'migration-choice', session_id: 'session-axis-other', migrate: true }, null), /不能代他人/);
+
+  fs.rmSync(axWs, { recursive: true, force: true });
+}
+
+/* ---------------- 全局任务独立：撤行与再同步 ---------------- */
+
+{
+  const gtWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-gtask-'));
+  fs.mkdirSync(path.join(gtWs, '_Control_Center', 'records'), { recursive: true });
+  const tdir = path.join(gtWs, '_Control_Center', 'tasks', 'GT');
+  fs.mkdirSync(tdir, { recursive: true });
+  fs.writeFileSync(path.join(tdir, 'Handover.md'), '# 交接（全局任务）' + NL2, 'utf8');
+  fs.writeFileSync(path.join(tdir, 'System.md'), '# 体系注册（全局任务「GT」）' + NL2, 'utf8');
+  syncGlobalRefs(gtWs);
+  const sysFile = path.join(gtWs, '_Control_Center', 'records', 'systems.md');
+  check('独立前：总注册有该行', fs.readFileSync(sysFile, 'utf8').indexOf('GT') !== -1);
+
+  const d1 = detachGlobalTask(gtWs, 'GT');
+  check('独立：已撤行', d1.marked === true && fs.readFileSync(sysFile, 'utf8').indexOf('GT') === -1, JSON.stringify(d1));
+  syncGlobalRefs(gtWs);
+  syncGlobalRefs(gtWs);
+  check('独立：重复同步不再登记', fs.readFileSync(sysFile, 'utf8').indexOf('GT') === -1);
+  check('独立：文件仍在原处', isFile(path.join(tdir, 'Handover.md')));
+
+  migrateIdentity({ ws: gtWs, prev: { role: 'global-task', task: 'GT' }, next: { role: 'misc', task: 'GT' }, mode: 'auto' });
+  check('独立后迁移：文件到杂项', isFile(path.join(gtWs, '_Misc', 'tasks', 'GT', 'Handover.md')));
+  check('独立后迁移：标记不带过去', !isFile(path.join(gtWs, '_Misc', 'tasks', 'GT', '.detached.json')));
+  check('独立后迁移：旧目录已空', !isDir(tdir));
+  syncGlobalRefs(gtWs);
+  check('独立后迁移：总注册按新布局登记', fs.readFileSync(sysFile, 'utf8').indexOf('_Misc') !== -1);
+  fs.rmSync(gtWs, { recursive: true, force: true });
+}
+
+/* ---------------- 全局任务独立：from_task 的 ask 与 auto ---------------- */
+
+{
+  const homeBak2 = { u: process.env.USERPROFILE, h: process.env.HOME };
+  const tmpHome2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-ft-'));
+  const ftWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-ftws-'));
+  fs.mkdirSync(path.join(tmpHome2, '.dsh', 'storages'), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome2, '.dsh', 'storages', 'workspace.json'),
+    JSON.stringify({ tables: { workspaces: { ws1: { id: 'ws1', title: 'W', path: ftWs } } } }), 'utf8');
+  process.env.USERPROFILE = tmpHome2;
+  process.env.HOME = tmpHome2;
+  const ftCfg = { workspaceRoot: ftWs, rolesPath: path.join(ftWs, 'roles.json'), reuseCheck: false };
+  fs.mkdirSync(path.join(ftWs, '_Control_Center', 'records'), { recursive: true });
+  const mkGt = (name) => {
+    const d = path.join(ftWs, '_Control_Center', 'tasks', name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'Handover.md'), '# 交接（全局任务）' + NL2, 'utf8');
+    fs.writeFileSync(path.join(d, 'System.md'), '# 体系注册（全局任务「' + name + '」）' + NL2, 'utf8');
+    return d;
+  };
+  let seq = 0;
+  const ftEnv = {
+    cfg: ftCfg,
+    resolveWs: () => ftWs,
+    selfId: () => 'session-ft-global',
+    roleOf: () => ({ role: 'global', project: '', task: '' }),
+    controller: () => ({
+      create: async () => ({ sessionId: 'session-ft-new-' + (++seq) }),
+      rename: async () => {},
+      prompt: async () => ({ accepted: true }),
+    }),
+    writeRole: (sid, patch) => writeRole(ftCfg, sid, patch),
+    roleEntryOf: (sid) => readRoles(ftCfg).sessions[sid] || null,
+    applyScopedLive: () => {},
+    registry: () => ({ list: () => [{ id: 'ws1', title: 'W', path: ftWs }] }),
+    selfPressure: () => ({ used: null, win: null }),
+    log: () => {},
+  };
+  const sysFile = path.join(ftWs, '_Control_Center', 'records', 'systems.md');
+
+  // 缺省 ask：只建会话与登记，任务库原地不动，总注册撤行。
+  const gtA = mkGt('FTA');
+  syncGlobalRefs(ftWs);
+  check('from_task 前：总注册有该行', fs.readFileSync(sysFile, 'utf8').indexOf('FTA') !== -1);
+  const outA = await sessionNew(ftEnv, { confirm: true, role: 'misc', task: 'FTA', from_task: 'FTA', title: 'FTA 独立', workspace: 'ws1' }, null, null);
+  check('from_task ask：提示迁移待确认', /迁移待新会话首轮确认/.test(outA), outA.slice(0, 200));
+  const entFtA = readRoles(ftCfg).sessions['session-ft-new-1'] || {};
+  check('from_task ask：角色为 misc、布局为全局任务', entFtA.role === 'misc' && entFtA.layout === 'global-task' && entFtA.layoutName === 'FTA', JSON.stringify(entFtA));
+  check('from_task ask：pending 可读', !!entFtA.pending && entFtA.pending.from.role === 'global-task', JSON.stringify(entFtA.pending));
+  check('from_task ask：任务库原地不动', isFile(path.join(gtA, 'Handover.md')) && !isDir(path.join(ftWs, '_Misc', 'tasks', 'FTA')));
+  check('from_task ask：总注册已撤行', fs.readFileSync(sysFile, 'utf8').indexOf('FTA') === -1);
+  check('from_task ask：交接按布局解析', handoverPathFor(ftWs, { role: 'misc', task: 'FTA', layout: 'global-task', layoutName: 'FTA' }).path === path.join(gtA, 'Handover.md'));
+
+  // 显式 auto：照旧整体迁移。
+  mkGt('FTB');
+  syncGlobalRefs(ftWs);
+  const outB = await sessionNew(ftEnv, { confirm: true, role: 'misc', task: 'FTB', from_task: 'FTB', title: 'FTB 独立', workspace: 'ws1', migrate: 'auto' }, null, null);
+  check('from_task auto：已迁移', /全局任务已独立/.test(outB) && outB.indexOf('迁移待新会话') === -1, outB.slice(0, 200));
+  check('from_task auto：文件到杂项', isFile(path.join(ftWs, '_Misc', 'tasks', 'FTB', 'Handover.md')));
+  check('from_task auto：无待确认', !(readRoles(ftCfg).sessions['session-ft-new-2'] || {}).pending);
+
+  process.env.USERPROFILE = homeBak2.u || '';
+  process.env.HOME = homeBak2.h || '';
+  fs.rmSync(tmpHome2, { recursive: true, force: true });
+  fs.rmSync(ftWs, { recursive: true, force: true });
+}
+
+/* ---------------- 绝对路径扫描：报数与上限 ---------------- */
+
+{
+  const scWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-scan-'));
+  eq('空库扫描返回 0', scanAbsolutePaths(scWs).files, 0);
+  fs.mkdirSync(path.join(scWs, '_Misc', 'tasks', 'T'), { recursive: true });
+  fs.writeFileSync(path.join(scWs, '_Misc', 'tasks', 'T', 'A.md'),
+    '# A' + NL2 + NL2 + '路径 E:\\_Project_Mate\\_Workspace\\_Misc\\tasks\\T' + NL2 + '另一处 E:/_Project_Mate/x' + NL2 + '相对 _Misc/tasks/T' + NL2, 'utf8');
+  fs.writeFileSync(path.join(scWs, '_Misc', 'tasks', 'T', 'B.mjs'), "const p = 'C:/tmp/a';" + NL2 + "const q = 'c/d';" + NL2, 'utf8');
+  const sc = scanAbsolutePaths(scWs);
+  eq('扫描：命中文件数', sc.files, 2);
+  eq('扫描：命中行数', sc.lines, 3);
+  check('扫描：样例带文件与行号', sc.samples.length > 0 && sc.samples[0].line >= 1, JSON.stringify(sc.samples[0]));
+  check('扫描：报数句可读', /2 个文件、3 行/.test(scanReportText(sc)), scanReportText(sc));
+  fs.rmSync(scWs, { recursive: true, force: true });
+}
+
+{
+  // 多根合并：库根与元数据目录各命中一处，数值相加、样例按上限合并。
+  const mrWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-scan-roots-'));
+  fs.mkdirSync(path.join(mrWs, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(mrWs, 'meta'), { recursive: true });
+  fs.writeFileSync(path.join(mrWs, 'lib', 'A.md'), 'E:\\_Project_Mate\\x' + NL2, 'utf8');
+  fs.writeFileSync(path.join(mrWs, 'meta', 'B.md'), 'D:/data/y' + NL2 + 'D:/data/z' + NL2, 'utf8');
+  const mr = scanRoots([path.join(mrWs, 'lib'), path.join(mrWs, 'meta')]);
+  eq('多根扫描：文件数相加', mr.files, 2);
+  eq('多根扫描：行数相加', mr.lines, 3);
+  eq('多根扫描：样例合并', mr.samples.length, 3);
+  check('多根扫描：报数句', /2 个文件、3 行/.test(scanReportText(mr)), scanReportText(mr));
+  eq('多根扫描：不存在的根跳过', scanRoots([path.join(mrWs, 'nope')]).files, 0);
+  fs.rmSync(mrWs, { recursive: true, force: true });
+}
 
 await throwsWith('status 拒绝未知 view', () => pmStatusTool(envGlobal, stateStub()).execute({ view: 'nope' }, exec), /view/);
 await throwsWith('handover 拒绝未知 action', () => pmHandoverTool(envGlobal).execute({ action: 'nope' }, exec), /不在允许范围/);
@@ -1499,6 +1935,27 @@ eq('D-109 初始化错误上限 50', ie.length, 50);
 // D-111：严格模式下短号解析不到返回空串。
 eq('D-111 严格短号解析不到返回空串', resolveShortSid({ cacheDir: () => '' }, 'abc123', { strict: true }), '');
 eq('D-111 非严格模式保留原样', resolveShortSid({ cacheDir: () => '' }, 'abc123'), 'abc123');
+
+// 设置页角色互转：ask/auto/direct 必须原样透传。把 ask 折成 auto 会在未确认时搬移文件。
+{
+  const seen = [];
+  const api = createApi({
+    log: () => {},
+    applyRole: async (o) => {
+      seen.push(o.migrate);
+      return { ok: true, role: o.role, live: false, delivered: false };
+    },
+  }, { name: 'selftest', version: '0' });
+  const box = { session_id: 'session-api', role: 'project', project: 'P' };
+  await api.call('role', Object.assign({}, box));
+  await api.call('role', Object.assign({}, box, { migrate: 'ask' }));
+  await api.call('role', Object.assign({}, box, { migrate: 'auto' }));
+  await api.call('role', Object.assign({}, box, { migrate: 'direct' }));
+  eq('设置页角色互转：缺省为 ask', seen[0], 'ask');
+  eq('设置页角色互转：ask 原样透传', seen[1], 'ask');
+  eq('设置页角色互转：auto 原样透传', seen[2], 'auto');
+  eq('设置页角色互转：direct 原样透传', seen[3], 'direct');
+}
 
 // D-124：摘要静默期可配置。
 eq('D-124 摘要静默期默认 2 分钟', dflt.summaryQuietMs, 120000);

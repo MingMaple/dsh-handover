@@ -27,4 +27,4 @@
 
 ## 5 升级为项目
 
-任务转为长期项目时通过身份互转完成。先执行 `ho_sessions(action="role", migrate="auto")`，对源库做快照。再把 `_Misc/tasks/<名>/` 的内容移入 `Projects/<名>/<名库>/`。注册与交接随之改位置，`_Project_Meta/Registry.md` 增行。反向（项目转杂项）把库内容移入 `_Misc/tasks/<名>/` 本身，不保留 `<名库>` 包装层，来回转换不会层层嵌套。选择 `migrate="direct"` 时不移动旧文件，按模板新建体系。2 种方式均须将 `Office.json` 的类别键改为新类别，写前备份该文件。
+任务转为长期项目时通过身份互转完成，迁移可选。缺省 `ho_sessions(action="role")` 走 `ask`：只改身份与登记，文件零移动，接手会话首轮问当前用户是否迁移文件体系。选不迁移时体系仍在 `_Misc/tasks/<名>/`，此后类别为项目、布局为杂项（`layout=misc`），6 处路径按布局解析。选迁移或显式 `migrate="auto"` 时，先对源库做快照，再把 `_Misc/tasks/<名>/` 的内容移入 `Projects/<名>/<名库>/`；注册与交接随之改位置，`_Project_Meta/Registry.md` 增行。迁移只回清单，`System.md` 正文与交接 §0 的身份字段由会话重写。反向（项目转杂项）把库内容移入 `_Misc/tasks/<名>/` 本身，不保留 `<名库>` 包装层，来回转换不会层层嵌套。选择 `migrate="direct"` 时不移动旧文件，按模板新建体系。3 种方式均须将 `Office.json` 的类别键改为新类别，写前备份该文件。

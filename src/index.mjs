@@ -223,6 +223,7 @@ export function apply(ctx, config) {
   env.agentOfSid = (sid) => agentOf(String(sid || ''));
   env.compactionStateOfSid = (sid) => compactionStateOf(String(sid || ''), null);
   env.applyRole = roleOps.applyRole;
+  env.chooseMigration = roleOps.chooseMigration;
   env.applyScopedLive = roleOps.applyScopedLive;
   env.refreshPromptFor = roleOps.refreshPromptFor;
 

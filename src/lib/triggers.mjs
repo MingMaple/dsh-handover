@@ -138,7 +138,7 @@ export function decidePhase(input) {
   }
   const tier = judgeTier({ used, win: i.win, bands, cfg });
   if (tier.action === 'notifyAdvise' || tier.action === 'notifySoft') {
-    return { action: 'notify', reason: tier.reason + '：提示助手先停在安全断点、按标准写胶囊，再调用压缩，插件不压缩' };
+    return { action: 'notify', reason: tier.reason + '：提示助手先做到合适断点、按标准写胶囊，再调用压缩，插件不压缩' };
   }
   // 当前无调用方传入 snapshot，保留为扩展点：将来若增加事件级快照，在此接入。
   if (i.snapshot && i.snapshot.needed === true) {

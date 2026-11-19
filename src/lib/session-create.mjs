@@ -48,32 +48,37 @@ export async function newSessionIn(env, opts, signal) {
   const role = String(o.role || '') || 'plain';
   const project = String(o.project || '');
   const task = String(o.task || '');
+  // 布局与待确认迁移随建会话一并落表：新会话首轮据此知道自己该问什么。
+  const layout = String(o.layout || '');
+  const layoutName = String(o.layoutName || '');
   let roleError = '';
   if (typeof env.writeRole !== 'function') {
     roleError = 'writeRole 不可用';
   } else {
-    const patch = { role, project, task, source: 'create' };
+    const patch = { role, project, task, source: 'create', layout, layoutName };
+    if (o.pending) patch.pending = o.pending;
     let firstError = '';
+    const matches = (e) => !!e && String(e.role || '') === role && (!layout || String(e.layout || '') === layout);
     try {
       env.writeRole(sessionId, patch);
     } catch (e) {
       firstError = String(e && e.message ? e.message : e);
     }
     let entry = roleEntryOf(env, sessionId);
-    if (!entry || String(entry.role || '') !== role) {
+    if (!matches(entry)) {
       try {
         env.writeRole(sessionId, patch);
       } catch (e) {
         roleError = String(e && e.message ? e.message : e);
       }
       entry = roleEntryOf(env, sessionId);
-      if (!entry || String(entry.role || '') !== role) {
+      if (!matches(entry)) {
         roleError = roleError || firstError || '角色表里查不到该会话条目';
       }
     }
   }
   if (typeof env.applyScopedLive === 'function') {
-    try { env.applyScopedLive(sessionId, { role, project, task }); } catch { /* 下一轮的开轮核对会补齐 */ }
+    try { env.applyScopedLive(sessionId, { role, project, task, layout, layoutName }); } catch { /* 下一轮的开轮核对会补齐 */ }
   }
   if (roleError) {
     return { sessionId, workspaceId, error: '会话已建成，但角色登记失败：' + roleError + '。处置：用 ho_sessions(action="role") 补登角色，或归档该会话后重建' };

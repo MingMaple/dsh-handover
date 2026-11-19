@@ -45,6 +45,9 @@ window.__ModuleLoader__.load({
       ".dshh-warn{color:var(--dsw-alias-state-warning-primary,#b26a00)}",
       ".dshh-list{margin:0;padding-left:18px}",
       ".dshh-sub{margin:6px 0 2px;font-weight:600;color:var(--dsw-alias-label-primary)}",
+      ".dshh-item{margin:8px 0}",
+      ".dshh-itemT{font-weight:600;font-size:12px}",
+      ".dshh-say{margin:2px 0 0;font-size:12px;color:var(--dsw-alias-label-primary)}",
       ".dshh-sum{cursor:pointer;color:var(--dsw-alias-label-tertiary);font-size:12px}",
       ".dshh-wrap td{white-space:normal}",
       ".dshh-input{font:inherit;width:100%;box-sizing:border-box;padding:5px 8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:6px;background:0 0;color:var(--dsw-alias-label-primary)}",
@@ -401,7 +404,6 @@ window.__ModuleLoader__.load({
       // 会话角色
       const [roleSel, setRoleSel] = React.useState({});
       const [roleStage, setRoleStage] = React.useState({});
-      const [roleMigrate, setRoleMigrate] = React.useState({});
       const [roleMsg, setRoleMsg] = React.useState("");
       const [roleBad, setRoleBad] = React.useState(false);
 
@@ -420,17 +422,16 @@ window.__ModuleLoader__.load({
       }, []);
 
       const submitRole = React.useCallback((sid, role, project, task, wake) => {
-        const migrate = (roleMigrate && roleMigrate[sid]) || "auto";
         setWorking(true); setRoleBad(false); setRoleMsg("");
-        post("role", { session_id: sid, role: role, project: project, task: task, wake: wake, migrate: migrate }, 30000)
+        post("role", { session_id: sid, role: role, project: project, task: task, wake: wake }, 30000)
           .then((r) => {
             if (r && r.ok) {
               const liveText = r.live ? "已在当前会话生效" : "自下一轮起生效";
               const sendText = wake
                 ? (r.delivered ? "首轮指令已送达，该会话将被唤醒一轮" : ("首轮指令未送达，原因：" + (r.error || "未返回原因") + "，可手动发送首轮指令"))
                 : "";
-              const migrateText = r.migrated ? "；角色互转方式 " + r.migrated + "：" + (r.migrationSummary || "") : "";
-              setRoleMsg("角色已设为 " + (r.role || role) + "，" + liveText + migrateText + (sendText ? "；" + sendText : "") + "。");
+              const pendingText = r.pending ? "；迁移待确认，该会话首个轮次会问是否迁移文件体系" : "";
+              setRoleMsg("角色已设为 " + (r.role || role) + "，" + liveText + pendingText + (sendText ? "；" + sendText : "") + "。");
               setRoleStage((prev) => {
                 const next = Object.assign({}, prev || {});
                 next[sid] = wake ? "notified" : "set";
@@ -444,7 +445,7 @@ window.__ModuleLoader__.load({
           })
           .catch((e) => { setRoleBad(true); setRoleMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。请稍后重试。"); })
           .then(() => setWorking(false));
-      }, [load, roleMigrate]);
+      }, [load]);
 
       // 迁移：探针 → 复制并校验 → 状态 → 清旧备份
       const refreshMove = React.useCallback(() => {
@@ -598,7 +599,7 @@ window.__ModuleLoader__.load({
         const notes = Array.isArray(data.notes) ? data.notes : [];
         sections.push(card("首次安装",
           h("div", null,
-            h("div", { className: "dshh-muted" }, "本页与工具已可使用；接入工作区后显示闸门、交接体检与会话水位。"),
+            h("div", { className: "dshh-muted" }, "接入工作区有 2 条路，任选其一。路一在本卡片完成：填写目录后点击「一键部署」。路二在下方「会话角色」卡片完成：把已有会话设为「全局」。"),
             h("ol", { className: "dshh-list" }, steps.map((s, i) => h("li", { key: i }, s))),
             notes.length ? h("ul", { className: "dshh-list" }, notes.map((n, i) => h("li", { key: i }, n))) : null,
             h("input", {
@@ -802,11 +803,10 @@ window.__ModuleLoader__.load({
         const stage = (roleStage && roleStage[r.sid]) || "";
         // 已有在任全局会话时不再提供「全局」选项；当前即为全局的会话仍显示，避免看不出当前状态。
         const canGlobal = Number(data.globalSessions || 0) === 0 || r.role === "global";
-        const convert = (r.role === "project" || r.role === "misc") && wide && role !== r.role;
         const action = stage === "notified"
           ? h("button", { className: "dshh-btn", type: "button", disabled: true }, "已通知")
           : stage === "set"
-            ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, true) }, "通知该会话")
+            ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, true) }, "唤醒该会话")
             : stage === "confirm"
               ? h("button", { className: "dshh-btn", type: "button", disabled: working, onClick: () => submitRole(r.sid, role, project, task, false) }, "确认设置")
               : h("button", {
@@ -820,7 +820,7 @@ window.__ModuleLoader__.load({
                     return next;
                   });
                   setRoleBad(false);
-                  setRoleMsg("请确认角色与名称，再点击「确认设置」。项目与杂项互转时，默认先快照再移动。");
+                  setRoleMsg("请确认角色与名称，再点击「确认设置」。确认后按钮变为「唤醒该会话」；不唤醒也可以，该会话首轮会问是否迁移文件体系。");
                 },
               }, "设置角色");
         return h("tr", { key: i },
@@ -843,14 +843,7 @@ window.__ModuleLoader__.load({
               value: role === "project" ? project : task,
               placeholder: role === "project" ? "填写项目名" : "填写任务名",
               onChange: (e) => setRoleValue(r.sid, role === "project" ? { project: e.target.value } : { task: e.target.value }),
-            }),
-            convert ? h("select", {
-              className: "dshh-inputSm",
-              value: (roleMigrate && roleMigrate[r.sid]) || "auto",
-              onChange: (e) => setRoleMigrate((prev) => Object.assign({}, prev || {}, { [r.sid]: e.target.value })),
-            },
-              h("option", { value: "auto" }, "先快照再移动"),
-              h("option", { value: "direct" }, "直接建新体系")) : null) : h("span", { className: "dshh-muted" }, "无需填写")),
+            })) : h("span", { className: "dshh-muted" }, "无需填写")),
           h("td", null, h("div", { className: "dshh-pick" }, action)));
       };
       sections.push(card("会话角色",
@@ -975,13 +968,9 @@ window.__ModuleLoader__.load({
         ])));
       }
 
-      // 末、工具明细与使用说明：参考性质，放最后，默认折叠。
+      // 末、工具明细与使用说明：参考性质，放最后，默认折叠。使用说明随发版维护，同版本固定。
       const gd = data.guide;
       if (gd) {
-        const sit = (gd.situations || []).map((r, i) => h("tr", { key: i },
-          h("td", null, r.when),
-          h("td", null, r.say),
-          h("td", { className: "dshh-muted" }, r.what)));
         const groups = (gd.groups || []).map((gr, i) => h("div", { key: i },
           h("div", { className: "dshh-sub" }, gr.title),
           h("table", { className: "dshh-table" }, h("tbody", null, (gr.tools || []).map((t, j) => h("tr", { key: j },
@@ -994,15 +983,21 @@ window.__ModuleLoader__.load({
               h("summary", { className: "dshh-sum" }, "共 " + toolCount + " 个工具，点击展开"),
               h("div", { className: "dshh-wrap" }, groups))));
         }
+        // 使用说明：按阶段分组的单列条目。需要示例的地方带一行口语示意，其余只写操作步骤。
+        const secs = (gd.sections || []).map((sec, i) => h("div", { key: i },
+          h("div", { className: "dshh-sub" }, sec.title),
+          (sec.items || []).map((it, j) => h("div", { key: j, className: "dshh-item" },
+            h("div", { className: "dshh-itemT" }, it.title),
+            it.say ? h("div", { className: "dshh-say" }, (it.to ? "对" + it.to + "说：" : "") + "「" + it.say + "」") : null,
+            (it.steps || []).length
+              ? h("ol", { className: "dshh-list" }, it.steps.map((s, k) => h("li", { key: k }, s)))
+              : null))));
         sections.push(card("使用说明",
           h("details", null,
             h("summary", { className: "dshh-sum" }, "交互方式、常见请求与约定"),
             h("div", { className: "dshh-wrap" },
               (gd.intro || []).map((t, i) => h("div", { key: i }, t)),
-              h("div", { className: "dshh-sub" }, "常见请求与对应动作"),
-              h("table", { className: "dshh-table" },
-                h("thead", null, h("tr", null, h("th", null, "时机"), h("th", null, "可以这样说"), h("th", null, "插件会执行的动作"))),
-                h("tbody", null, sit)),
+              secs,
               h("div", { className: "dshh-sub" }, "约定"),
               h("ul", { className: "dshh-list" }, (gd.rules || []).map((t, i) => h("li", { key: i }, t)))))));
       }

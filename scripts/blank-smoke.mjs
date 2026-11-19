@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { listFiles, scanFiles } from './lib/register.mjs';
+import { listFiles, scanFilesDetailed } from './lib/register.mjs';
 import { makeReporter } from './lib/harness.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -168,7 +168,9 @@ if (payload) {
   ok(payload.plugin.tools === 6, 'payload 工具数应为 6', String(payload.plugin.tools));
   ok(payload.workspace && payload.workspace.found === false, '空白 HOME 下应判定为没找到工作区', JSON.stringify(payload.workspace));
   ok(Array.isArray(payload.notes) && payload.notes.length > 0, '没找到工作区时应给中文提示');
-  ok(payload.guide && Array.isArray(payload.guide.situations) && payload.guide.situations.length >= 8, 'payload 应带「怎么用」的时机表');
+  ok(payload.guide && Array.isArray(payload.guide.sections) && payload.guide.sections.length >= 6, 'payload 应带按阶段分组的使用说明');
+  ok(payload.guide && payload.guide.intro === undefined, '使用说明不应再带引言段');
+  ok(payload.guide && Array.isArray(payload.guide.rules) && payload.guide.rules.length > 0, 'payload 应带约定清单');
   ok(payload.guide && payload.guide.groups.reduce((a, g) => a + g.tools.length, 0) === 6, '工具明细里应列全 6 个入口', payload.guide && String(payload.guide.groups.reduce((a, g) => a + g.tools.length, 0)));
   ok(payload.plugin.initErrors && payload.plugin.initErrors.length === 0, '初始化错误应为空', JSON.stringify(payload.plugin.initErrors));
 }
@@ -702,11 +704,23 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
       .concat(listFiles(path.join(repo, 'src', 'templates'), ['.md']))
       // 写作规范正文与论文属规范性文本，条款本身会引用被禁词；Writing_Rules 是用户内容。
       .filter((f) => f.indexOf('Writing_Rules.md') === -1 && f.indexOf(path.join('templates', 'standards')) === -1);
-    const uiHits = scanFiles(uiFiles, { ui: true });
-    const docHits = scanFiles(docFiles, { ui: false });
+    const uiScan = scanFilesDetailed(uiFiles, { ui: true });
+    const docScan = scanFilesDetailed(docFiles, { ui: false });
+    const uiHits = uiScan.hits;
+    const docHits = docScan.hits;
     const fmt = (hs) => hs.slice(0, 6).map((h) => path.relative(repo, h.file) + ':' + h.line + ' ' + h.rules.join('、')).join(' | ');
     ok(uiHits.length === 0, '界面文案应一律使用标准书面语（词表与符号扫描）', fmt(uiHits));
     ok(docHits.length === 0, '文档文案应一律使用标准书面语（词表与符号扫描）', fmt(docHits));
+    // [@example] 标记行只放行不丢弃，逐条打印供发版核对；不为过门禁而删口语。
+    const exempt = uiScan.exempt.concat(docScan.exempt);
+    if (exempt.length === 0) {
+      console.log('[@example] 语体豁免 0 行');
+    } else {
+      console.log('[@example] 语体豁免 ' + exempt.length + ' 行（逐条核对）：');
+      for (const h of exempt) {
+        console.log('  ' + path.relative(repo, h.file) + ':' + h.line + ' ' + h.rules.join('、') + '｜' + h.text);
+      }
+    }
   }
   ok(opsSrc.indexOf('不得自行开展作业') !== -1 && opsSrc.indexOf('待当前用户指派') !== -1, '启动提示词应先报告再待指派');
 }
@@ -850,7 +864,7 @@ const FIXTURE = {
   workspace: { root: 'C:/ws', found: true },
   globalSessions: 1,
   guardLast: { allow: true, source: 'title', title: '全局1', sid: 'session-x' },
-  guide: payload ? payload.guide : { intro: ['说明'], situations: [{ when: 'w', say: 's', what: 'x' }], groups: [{ title: 'g', tools: [['ho_x', 'y']] }], rules: ['r'] },
+  guide: payload ? payload.guide : { sections: [{ title: '一、首次安装', items: [{ title: '一键部署', steps: ['点按钮'] }] }], groups: [{ title: 'g', tools: [['ho_x', 'y']] }], rules: ['r'] },
   extraPrompt: '',
   extraPromptEnabled: false,
   gate: { ok: true, verdict: '全部落位。', total: 1, bodyLines: 24, libraries: [{ name: 'Demo1', ok: true, titleOk: true, waterOk: true, missing: 0, lines: 24 }] },
@@ -936,10 +950,39 @@ for (const want of ['dsh-handover', '刷新', '读数', '授权', '会话角色'
 const sections = tree.kids.filter((k) => k && k.type === 'section');
 const cardTitles = sections.map((sec) => textOf(sec.kids[0]).join(''));
 const wantOrder = ['授权', '移动全局根目录', '会话角色', '全局前置提示词', '会话水位', '通用约束条闸门', '交接文档体检', '插件', '最近一次会话间通信判定', '工具明细', '使用说明'];
-ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、判定、说明', JSON.stringify(cardTitles));
+ok(JSON.stringify(cardTitles) === JSON.stringify(wantOrder), '分区应自上而下为授权、迁移、角色、提示词、只读数据、插件、判定、工具明细、使用说明', JSON.stringify(cardTitles));
 
 const folds = treeJson.split('"details"').length - 1;
 ok(folds === 6, '折叠项应为迁移、前置提示词、工具明细、使用说明与两个工作区组', String(folds));
+
+// 使用说明：默认折叠，按阶段分组；需要示例的条目带一行口语示意，其余只列操作步骤。
+const guideCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '使用说明');
+const guideJson = JSON.stringify(guideCard);
+const guideText = textOf(guideCard).join(' ');
+ok(guideJson.indexOf('"details"') !== -1, '使用说明应默认折叠');
+ok(guideText.indexOf('本卡按使用顺序列出各流程') === -1, '使用说明不应再带引言段');
+for (const head of ['一、首次安装', '二、建项目或杂项会话', '四、交接与协作', '五、身份']) {
+  ok(guideText.indexOf(head) !== -1, '使用说明应出现分组「' + head + '」');
+}
+ok(guideText.indexOf('可以这样说') === -1 && guideText.indexOf('时机') === -1, '使用说明不应再出现三栏表头');
+ok(guideText.indexOf('对全局说：「我需要新建一个项目，叫xxx」') !== -1, '示例应注明对谁说');
+ok(guideText.indexOf('「我需要把xxx交给外部会话去做，做完再交回来」') !== -1, '暂任条目应带口显示例');
+ok(guideText.indexOf('「走归还流程吧，项目/杂项要归还给在任会话」') !== -1, '归还条目应写明主体与去向');
+ok(guideText.indexOf('「将xxx项目/杂项身份改为杂项/项目」') !== -1, '切换身份应写明对象与迁移方向');
+ok(guideText.indexOf('「我记得这一点，我之前要求的是xxx，但是你并不是按照xxx这样做的，你查一下」') !== -1, '回读原文示例应写记忆中的要求');
+ok(guideText.indexOf('把第 3 段') === -1, '回读原文不应要求用户自己定位段落');
+ok(guideText.indexOf('我需要为xxx做一个宣传视频') !== -1, '团队协作应给场景化话术示例');
+ok(guideText.indexOf('向其讲清楚你的需求之后，各会话会自行组织沟通，进行产出。') !== -1, '团队协作应写场景与产出流程');
+ok(guideText.indexOf('法一') !== -1 && guideText.indexOf('法二') !== -1 && guideText.indexOf('法三') !== -1, '归还应列全三法');
+ok(guideText.indexOf('交出整个项目') !== -1, '暂任应写明整项目暂任');
+ok(guideText.indexOf('外部暂任会话不属于 DSH') !== -1, '约定应写明外部暂任会话不属于 DSH');
+ok(guideText.indexOf('无论是否点击，该会话首轮都会问是否迁移文件体系') !== -1, '身份切换应写明不唤醒也会首轮询问');
+ok(guideText.indexOf('理解后列出任务大纲，请你确认理解是否正确') !== -1, '建会话应先确认理解再给体系');
+ok(guideText.indexOf('迁移后给出一套文件体系，并问一键建成还是修改') !== -1, '身份切换迁移后应给体系并问建成方式');
+ok(guideText.indexOf('当你认为助手的实现和你与助手的讨论不符') !== -1, '回读原文应写明适用场景');
+ok(guideText.indexOf('一键部署') !== -1, '首次安装条目应写操作步骤');
+ok(!/建立文件体系|压缩|查在任|列出当前会话/.test((payload.guide.sections || []).map((s) => (s.items || []).map((i) => i.title).join('')).join('')), '自动流程与侧栏可见项不应单列成用户条目');
+ok(cardTitles.indexOf('工具明细') + 1 === cardTitles.indexOf('使用说明'), '使用说明应紧随工具明细');
 
 // 会话角色：按 DSH 工作区分组、默认折叠，已归档会话不列出。
 const roleCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '会话角色');
@@ -981,7 +1024,8 @@ ok(text.indexOf('当前角色') === -1, '角色不应占两列（当前角色与
 ok(text.indexOf('设置并通知') === -1, '操作列只保留一个按钮');
 const setBtns = text.split('设置角色').length - 1;
 ok(setBtns >= 5, '每行一个「设置角色」按钮', String(setBtns));
-ok(fs.readFileSync(path.join(dist, 'client.js'), 'utf8').indexOf('通知该会话') !== -1, '设置成功后按钮应变为通知动作');
+ok(fs.readFileSync(path.join(dist, 'client.js'), 'utf8').indexOf('唤醒该会话') !== -1, '设置成功后按钮应变为唤醒动作');
+ok(fs.readFileSync(path.join(dist, 'client.js'), 'utf8').indexOf('先问后迁（默认）') === -1, '设置页不应再提供迁移方式选项');
 
 // 移动全局根目录：默认折叠。
 const migrateCard = sections.find((sec) => textOf(sec.kids[0]).join('') === '移动全局根目录');
