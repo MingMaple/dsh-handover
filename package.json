@@ -28,12 +28,16 @@
   },
   "exports": {
     ".": "./src/index.mjs",
-    "./client": "./src/client.js"
+    "./client": "./src/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
     "scripts",
     "docs",
+    "locale",
+    "icon.svg",
     "README.md",
     "LICENSE"
   ],

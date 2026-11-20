@@ -19,7 +19,8 @@ const BAD_WORDS = [
 
 /** 符号与格式类规则；source 用于定位，test 返回是否命中。 */
 const SYMBOL_RULES = [
-  { id: '感叹号', test: (s) => /[!！]/.test(s) },
+  // Markdown 图片语法本身以 ! 开头，属结构符号而非感叹语气，判定前先移除。
+  { id: '感叹号', test: (s) => /[!！]/.test(s.replace(/!\[[^\]]*\]\([^)]*\)/g, '')) },
   { id: '图形结论符号', test: (s) => /[✅❌⚠✗]/.test(s) },
   { id: '全角斜杠', test: (s) => s.indexOf('／') !== -1 },
   { id: '半角箭头', test: (s) => s.indexOf('->') !== -1 || s.indexOf('=>') !== -1 },

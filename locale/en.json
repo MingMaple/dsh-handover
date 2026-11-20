@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Handover and water level (dsh-handover)",
+    "description": "Context water-level management for long sessions: prompts at 35%, 50% and 65%. Compaction or a new session continues through a handover document. Plans, session inventory and a task-system registry are included.",
+    "detail": "docs/DETAIL.md"
+  }
+}

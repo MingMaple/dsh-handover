@@ -36,6 +36,10 @@ fs.copyFileSync(path.join(repo, "src", "cordis.patch.yml"), path.join(dist, "cor
 fs.copyFileSync(path.join(repo, "src", "client.js"), path.join(dist, "client.js"));
 // 首次安装向导用的模板（Charter 骨架、交接骨架、台账骨架、提示词模板）。
 copyDir(path.join(repo, "src", "templates"), path.join(dist, "templates"));
+// 插件管理器的展示元数据：locale 提供标题与介绍，docs 提供详情页配图，icon 提供插件行图标。
+copyDir(path.join(repo, "locale"), path.join(dist, "locale"));
+copyDir(path.join(repo, "docs"), path.join(dist, "docs"));
+fs.copyFileSync(path.join(repo, "icon.svg"), path.join(dist, "icon.svg"));
 
 const distPkg = {
   name: rootPkg.name,
@@ -44,7 +48,12 @@ const distPkg = {
   type: "module",
   description: rootPkg.description,
   license: rootPkg.license,
-  exports: { ".": "./index.mjs", "./client": "./client.js" },
+  exports: {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+  },
   ...(rootPkg.engines ? { engines: rootPkg.engines } : {}),
   dsh: {
     bundle: { patch: "./cordis.patch.yml" },
