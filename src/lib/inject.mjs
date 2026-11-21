@@ -123,6 +123,18 @@ export function successionCeilingText(count, hardCap) {
     + '继续推进只会让上下文继续上涨，且无法再压缩。';
 }
 
+/**
+ * 全局换任通知：项目与杂项在发现全局换代时追加一行，带新任 session id。
+ * 旧提示段里的全局 id 已不可用，本行同时给出替代值。
+ */
+export function rotationNoticeText(holder) {
+  const h = holder || {};
+  const name = h.name || '新任全局';
+  const sid = h.sessionId ? '（' + h.sessionId + '）' : '';
+  const since = h.since ? '，自 ' + h.since : '';
+  return '全局已换任：' + name + sid + since + '。提示段里的全局 session id 作废，发消息按此 id。';
+}
+
 /** 收益偏低提示：连续 2 次低于下限时追加，要求立即换任。 */
 export function roiAdviceText(roi, floor, streak) {
   return '连续 ' + streak + ' 次压缩缩减低于 ' + pct(floor) + '（最近 ' + pct(roi) + '）：'

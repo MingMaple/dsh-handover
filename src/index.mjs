@@ -259,7 +259,7 @@ export function apply(ctx, config) {
   // engine 建立后再由 runtime.noteInline 回填，调用发生在建好之后。
   const runtime = {
     ctx, cfg, env, inline, roleCache,
-    readState, saveState, infoFor, scopedMetaOf, isChildSession,
+    readState, saveState, infoFor, scopedMetaOf, isChildSession, workspaceForSid,
     noteInline: null, anchorOps: null,
   };
   let engine = null;

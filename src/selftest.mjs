@@ -13,6 +13,8 @@ import { readJsonDir, readJsonFileLazy, isDir, isFile } from './lib/text.mjs';
 import { migrateIdentity } from './lib/identity.mjs';
 import { capText, HANDOVER_MAX_LINES, STATUS_MAX_LINES } from './lib/limit.mjs';
 import { judgeMacroReset, judgeHardCap, decidePhase, judgeTrigger, judgeTier } from './lib/triggers.mjs';
+import { judgeRotation } from './lib/rotation.mjs';
+import { rotationNoticeText } from './lib/inject.mjs';
 import { usableWindow, bandsFor, judgeLevel, growthOf, pressureOf, roiOf, lowRoiStreakOf, settlePendingAfter } from './lib/pressure.mjs';
 import { selectCompactionRange, selectFullRange, compactInTurn, INLINE_UNAVAILABLE } from './lib/engine.mjs';
 import { createInlineEngine } from './lib/inline-engine.mjs';
@@ -2069,6 +2071,26 @@ check('D-141 docmap 动作名为 registry-* 与 plan-*',
 check('D-155 协作不自带解码器', /decodeLog/.test(peerSrc) && peerSrc.indexOf('inflateRawSync') === -1);
 check('D-156 协作注册 12 小时 TTL', /COLLAB_TTL_MS = 12 \* 60 \* 60 \* 1000/.test(peerSrc));
 check('D-157 不可达成员立即终结', /不可达（已解除其协作限制）/.test(peerSrc));
+
+/* ---------------- 全局换任通知：基线、换代与空缺 ---------------- */
+const RG = (seen, cur) => judgeRotation(seen, cur);
+eq('换任：首次只记基线', RG(null, { name: '全局1', sessionId: 's1' }).action, 'baseline');
+eq('换任：未换代不提示', RG({ sessionId: 's1' }, { name: '全局1', sessionId: 's1' }).action, 'none');
+eq('换任：换代提示一次', RG({ sessionId: 's1' }, { name: '全局2', sessionId: 's2' }).action, 'notice');
+eq('换任：现任空缺不判定', RG({ sessionId: 's1' }, null).action, 'none');
+eq('换任：提示后基线换成新任', RG({ sessionId: 's1' }, { name: '全局2', sessionId: 's2' }).next.sessionId, 's2');
+const RSINCE = '2026-11-21 02:57 +0800';
+const T_OLD = Date.parse('2026-11-20T00:00:00+08:00');
+const T_NEW = Date.parse('2026-11-21T10:00:00+08:00');
+eq('换任：休眠会话唤醒即提示',
+  judgeRotation(null, { name: '全局20', sessionId: 's20', since: RSINCE }, T_OLD).action, 'notice');
+eq('换任：新会话只记基线',
+  judgeRotation(null, { name: '全局20', sessionId: 's20', since: RSINCE }, T_NEW).action, 'baseline');
+eq('换任：接任时刻不可解析时只记基线',
+  judgeRotation(null, { name: '全局20', sessionId: 's20' }, T_OLD).action, 'baseline');
+check('换任通知含新任名字与 id',
+  rotationNoticeText({ name: '全局2', sessionId: 's2', since: '2026-11-21 04:00 +0800' }).indexOf('全局2') !== -1
+  && rotationNoticeText({ name: '全局2', sessionId: 's2' }).indexOf('s2') !== -1);
 
 const cases = [
   { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "brief" }, flag: "status" },

@@ -15,7 +15,8 @@ import { createSkipLogger } from './skip-log.mjs';
 import { compactInTurn, INLINE_UNAVAILABLE, INLINE_NO_METER } from './engine.mjs';
 import { compactionStateOf, logRecordsOf } from './events.mjs';
 import { judgeTrigger } from './triggers.mjs';
-import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionBlockText, successionCeilingText, roiAdviceText } from './inject.mjs';
+import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionBlockText, successionCeilingText, rotationNoticeText, roiAdviceText } from './inject.mjs';
+import { globalHolder, judgeRotation } from './rotation.mjs';
 import { pressureOf, roiOf, normWater, settlePendingAfter } from './pressure.mjs';
 import { renderCapsule, extractKeywordSentences, CAPSULE_RENDER_MAX_CHARS } from './capsule.mjs';
 import { probeConstraints } from './constraints.mjs';
@@ -29,7 +30,7 @@ import { sendPrompt } from './prompt.mjs';
 export function createInlineEngine(runtime) {
   const {
     ctx, cfg, env, inline, roleCache,
-    readState, saveState, infoFor, scopedMetaOf, isChildSession,
+    readState, saveState, infoFor, scopedMetaOf, isChildSession, workspaceForSid,
     anchorOps,
   } = runtime;
   const { autoSnapshotFor, writeAnchorFor, surfaceTextsOf } = anchorOps;
@@ -260,6 +261,28 @@ export function createInlineEngine(runtime) {
   }
 
   /**
+   * 全局换任通知：项目与杂项不与全局同步换任，只在此处补一条。
+   * 首次看到全局只记基线不提示，避免新会话一开口就收到换任消息；
+   * sessionId 变化时注入一行并更新基线，此后不再重复。
+   */
+  function maybeGlobalRotation(sid, st, info, out) {
+    const role = info && info.role;
+    if (role !== 'project' && role !== 'misc') return false;
+    let ws = '';
+    try { ws = workspaceForSid(sid) || ''; } catch { ws = ''; }
+    const cur = globalHolder(ws);
+    if (!cur) return false;
+    const judged = judgeRotation(st.globalSeen, cur, st.createdAt);
+    if (judged.action === 'none') return false;
+    st.globalSeen = judged.next;
+    saveState(sid, st);
+    if (judged.action !== 'notice') return false;
+    out.push(contextMessage(rotationNoticeText(cur), 'rotation'));
+    noteInline('全局换任通知 ' + sid + ' 新任=' + cur.name);
+    return true;
+  }
+
+  /**
    * 单个会话的步骤边界判定：轮次起点只注入水位行；到线判定与强制压缩只在轮内步骤分隔时做。
    * 待注入消息可在任意步骤取走。返回要追加到本步骤末尾的上下文消息。
    */
@@ -303,6 +326,7 @@ export function createInlineEngine(runtime) {
     const signal = payload ? payload.signal : undefined;
     const st = readState(sid);
     if (!st) return out;
+    maybeGlobalRotation(sid, st, info, out);
     const self = readSelfPressure(projCacheDir(), sid);
     const { used, win } = normWater(self);
     // D-171：压缩后读数在压缩返回瞬间不可信，在此步骤边界用宿主投影水位补写一次。
