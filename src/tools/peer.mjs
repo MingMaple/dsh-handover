@@ -10,6 +10,7 @@
  * 动作级权限在这里再判一次：角色矩阵只决定「这个工具可不可见」，不细分动作。
  */
 import { randomUUID } from 'node:crypto';
+import { sendPrompt } from '../lib/prompt.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -338,6 +339,16 @@ async function sendText(env, args, exec, info, signal) {
   }
   const target = String(args.session_id || '').trim();
   if (!target) throw new Error('现象：`peer(action="send")` 缺少 `session_id`。原因：投递消息须指定目标会话。处置：传入目标会话 id 后重试。');
+  // 归档会话被宿主的归档闸门拦住：投递会被接受，轮次却立即以 blocked 结束。
+  // 现象上是「发出去了但没反应」，所以在这里先拦一次，并给出解除归档的处置。
+  let archived = null;
+  try {
+    const reg = typeof env.registry === 'function' ? env.registry() : null;
+    archived = reg && Array.isArray(reg.archivedSessionIds) ? reg.archivedSessionIds : null;
+  } catch { archived = null; }
+  if (archived && archived.indexOf(target) !== -1) {
+    throw new Error('现象：目标会话已归档：`' + target + '`。原因：归档会话被宿主的 archived-session-gate 拦住。投递会被接受，轮次却立即以 blocked 结束，不会产生回复。处置：先解除归档 `ho_sessions(action="unarchive", session_id="' + target + '")`，再重新投递。');
+  }
   const message = typeof args.message === 'string' ? args.message : '';
   if (message.trim() === '') throw new Error('现象：`peer(action="send")` 的 `message` 为空。原因：投递内容不得为空。处置：传入非空的 `message` 后重试。');
   const mode = args.mode === 'steer' ? 'steer' : 'queue';
@@ -352,10 +363,8 @@ async function sendText(env, args, exec, info, signal) {
   const since = Date.now();
   let receipt = null;
   try {
-    receipt = await controller.prompt(
-      { requestId: randomUUID(), sessionId: target, mode, content: [{ type: 'text', text: body }] },
-      signal || new AbortController().signal,
-    );
+    // 走统一投递入口：冷会话先 resume 再 prompt，否则消息进队列但不会启动轮次。
+    receipt = await sendPrompt(controller, target, body, mode, signal || new AbortController().signal);
   } catch (e) {
     // 投递已发出后被终止：消息不撤回，按中止返回，不当作投递失败。
     if (aborted(signal)) return ABORTED_TEXT;

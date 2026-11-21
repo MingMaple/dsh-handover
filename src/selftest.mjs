@@ -13,8 +13,9 @@ import { readJsonDir, readJsonFileLazy, isDir, isFile } from './lib/text.mjs';
 import { migrateIdentity } from './lib/identity.mjs';
 import { capText, HANDOVER_MAX_LINES, STATUS_MAX_LINES } from './lib/limit.mjs';
 import { judgeMacroReset, judgeHardCap, decidePhase, judgeTrigger, judgeTier } from './lib/triggers.mjs';
-import { judgeRotation } from './lib/rotation.mjs';
+import { judgeRotation, sessionStartOf } from './lib/rotation.mjs';
 import { rotationNoticeText } from './lib/inject.mjs';
+import { sendPrompt } from './lib/prompt.mjs';
 import { usableWindow, bandsFor, judgeLevel, growthOf, pressureOf, roiOf, lowRoiStreakOf, settlePendingAfter } from './lib/pressure.mjs';
 import { selectCompactionRange, selectFullRange, compactInTurn, INLINE_UNAVAILABLE } from './lib/engine.mjs';
 import { createInlineEngine } from './lib/inline-engine.mjs';
@@ -1859,6 +1860,26 @@ const midSend = await pmPeerTool(sendEnv(async () => {
 })).execute({ action: 'send', session_id: 'sid-target', message: 'hi' }, Object.assign({}, sendExec, { signal: sendMid.signal }));
 check('投递途中中止只投一次且不重试', /已中止/.test(midSend.text) && prompts === 1, prompts + ' 次 / ' + midSend.text);
 
+/* ---------------- 归档会话投递前拦下 ---------------- */
+{
+  const archEnv = Object.assign({}, env, {
+    controller: () => ({ prompt: async () => { throw new Error('不该走到投递'); } }),
+    registry: () => ({ archivedSessionIds: ['session-archived'] }),
+  });
+  let thrown = '';
+  try {
+    await pmPeerTool(archEnv).execute({ action: 'send', session_id: 'session-archived', message: 'hi' }, sendExec);
+  } catch (e) { thrown = String(e && e.message ? e.message : e); }
+  check('投递前拦下已归档会话', /已归档/.test(thrown) && /unarchive/.test(thrown), thrown || '(未抛出)');
+  let past = 0;
+  const liveEnv = Object.assign({}, env, {
+    controller: () => ({ prompt: async () => { past += 1; return { accepted: true }; } }),
+    registry: () => ({ archivedSessionIds: ['session-other'] }),
+  });
+  const live = await pmPeerTool(liveEnv).execute({ action: 'send', session_id: 'session-target', message: 'hi' }, sendExec);
+  check('未归档会话照常投递', past === 1 && /accepted=true/.test(live.text), live.text);
+}
+
 /* ---------------- 早退留痕：每原因一条、去重生效 ---------------- */
 
 const skipLines = [];
@@ -2088,9 +2109,36 @@ eq('换任：新会话只记基线',
   judgeRotation(null, { name: '全局20', sessionId: 's20', since: RSINCE }, T_NEW).action, 'baseline');
 eq('换任：接任时刻不可解析时只记基线',
   judgeRotation(null, { name: '全局20', sessionId: 's20' }, T_OLD).action, 'baseline');
+eq('换任：起始时刻取 header 与状态的较早者', sessionStartOf(T_OLD, T_NEW), T_OLD);
+eq('换任：状态更早时取状态', sessionStartOf(T_NEW, T_OLD), T_OLD);
+eq('换任：两者都缺失为 0', sessionStartOf(undefined, 0), 0);
+eq('换任：插件从未落状态的旧会话唤醒即提示',
+  judgeRotation(null, { name: '全局20', sessionId: 's20', since: RSINCE }, sessionStartOf(T_OLD, T_NEW)).action, 'notice');
 check('换任通知含新任名字与 id',
   rotationNoticeText({ name: '全局2', sessionId: 's2', since: '2026-11-21 04:00 +0800' }).indexOf('全局2') !== -1
   && rotationNoticeText({ name: '全局2', sessionId: 's2' }).indexOf('s2') !== -1);
+
+/* ---------------- 投递唤醒：resume 先于 prompt，失败不阻断 ---------------- */
+{
+  const calls = [];
+  const fake = {
+    resume: async (id) => { calls.push('resume:' + id); },
+    prompt: async (req) => { calls.push('prompt:' + req.sessionId); return { accepted: true }; },
+  };
+  await sendPrompt(fake, 's9', 'hi', 'queue');
+  check('投递前先唤醒冷会话', calls.length === 2 && calls[0] === 'resume:s9' && calls[1] === 'prompt:s9', calls.join(','));
+
+  const noResume = [];
+  await sendPrompt({ prompt: async () => { noResume.push('prompt'); return { accepted: true }; } }, 's9', 'hi', 'queue');
+  check('控制器无 resume 时照常投递', noResume.length === 1);
+
+  const badResume = [];
+  await sendPrompt({
+    resume: async () => { throw new Error('already resumed'); },
+    prompt: async () => { badResume.push('prompt'); return { accepted: true }; },
+  }, 's9', 'hi', 'queue');
+  check('resume 失败不阻断投递', badResume.length === 1);
+}
 
 const cases = [
   { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "brief" }, flag: "status" },

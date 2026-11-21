@@ -16,7 +16,7 @@ import { compactInTurn, INLINE_UNAVAILABLE, INLINE_NO_METER } from './engine.mjs
 import { compactionStateOf, logRecordsOf } from './events.mjs';
 import { judgeTrigger } from './triggers.mjs';
 import { pressureLineText, tierPromptText, hardPromptText, successionPromptText, successionBlockText, successionCeilingText, rotationNoticeText, roiAdviceText } from './inject.mjs';
-import { globalHolder, judgeRotation } from './rotation.mjs';
+import { globalHolder, judgeRotation, sessionStartOf } from './rotation.mjs';
 import { pressureOf, roiOf, normWater, settlePendingAfter } from './pressure.mjs';
 import { renderCapsule, extractKeywordSentences, CAPSULE_RENDER_MAX_CHARS } from './capsule.mjs';
 import { probeConstraints } from './constraints.mjs';
@@ -264,15 +264,16 @@ export function createInlineEngine(runtime) {
    * 全局换任通知：项目与杂项不与全局同步换任，只在此处补一条。
    * 首次看到全局只记基线不提示，避免新会话一开口就收到换任消息；
    * sessionId 变化时注入一行并更新基线，此后不再重复。
+   * @param {number} startedAt 会话真正的起始时刻：从未落过状态的旧会话靠它判成「休眠后唤醒」
    */
-  function maybeGlobalRotation(sid, st, info, out) {
+  function maybeGlobalRotation(sid, st, info, out, startedAt) {
     const role = info && info.role;
     if (role !== 'project' && role !== 'misc') return false;
     let ws = '';
     try { ws = workspaceForSid(sid) || ''; } catch { ws = ''; }
     const cur = globalHolder(ws);
     if (!cur) return false;
-    const judged = judgeRotation(st.globalSeen, cur, st.createdAt);
+    const judged = judgeRotation(st.globalSeen, cur, startedAt || st.createdAt);
     if (judged.action === 'none') return false;
     st.globalSeen = judged.next;
     saveState(sid, st);
@@ -326,7 +327,7 @@ export function createInlineEngine(runtime) {
     const signal = payload ? payload.signal : undefined;
     const st = readState(sid);
     if (!st) return out;
-    maybeGlobalRotation(sid, st, info, out);
+    maybeGlobalRotation(sid, st, info, out, sessionStartOf(h && h.createdAt, st.createdAt));
     const self = readSelfPressure(projCacheDir(), sid);
     const { used, win } = normWater(self);
     // D-171：压缩后读数在压缩返回瞬间不可信，在此步骤边界用宿主投影水位补写一次。

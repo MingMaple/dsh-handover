@@ -61,7 +61,7 @@ function sinceMsOf(since) {
  * 判定是否需要提示。
  * @param {object|null} seen 会话已见基线（{sessionId,name}）
  * @param {object|null} cur 全局现任
- * @param {number} sessionStartedAt 本会话首次落盘的时刻（state.createdAt）
+ * @param {number} sessionStartedAt 本会话真正的起始时刻，用 sessionStartOf 取得
  * @returns {{action:'none'|'baseline'|'notice', next:object|null}}
  *   baseline：会话出生于现任全局之后，只记基线不提示；
  *   notice：换代，或会话早于现任全局（休眠后唤醒），提示一次；
@@ -80,6 +80,22 @@ export function judgeRotation(seen, cur, sessionStartedAt) {
   const startedMs = Number(sessionStartedAt) || 0;
   if (sinceMs > 0 && startedMs > 0 && startedMs < sinceMs) return { action: 'notice', next };
   return { action: 'baseline', next };
+}
+
+/**
+ * 会话真正的起始时刻：宿主 header 的 createdAt 与插件状态的 createdAt 取较早者。
+ * 插件未写过状态的旧会话只能靠 header；缺了这一步，休眠多日的会话会被当成刚出生的新会话。
+ * @param {number} headerCreatedAt 会话 header 的创建时刻
+ * @param {number} stateCreatedAt 插件状态里记的创建时刻
+ * @returns {number} 毫秒；两者都不可用时为 0
+ */
+export function sessionStartOf(headerCreatedAt, stateCreatedAt) {
+  const ok = (x) => Number.isFinite(x) && x > 0;
+  const a = Number(headerCreatedAt);
+  const b = Number(stateCreatedAt);
+  if (ok(a) && ok(b)) return Math.min(a, b);
+  if (ok(a)) return a;
+  return ok(b) ? b : 0;
 }
 
 /** 供自测使用：清空进程内缓存。 */
