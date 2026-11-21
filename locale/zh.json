@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "交接与水位 (dsh-handover)",
-    "description": "长会话的上下文水位管理：在 35%、50%、65% 三档给出提示。压缩或更换会话时，用交接文档接续任务。另提供行动计划、会话清点与体系注册。",
+    "title": "上下文治理 (dsh-handover)",
+    "description": "功能完善的工作流：上下文将满时写好要点再压缩，必要时换任；较重任务先写计划再执行。任务可交给 DeepSeek Harness（DSH）之外的会话完成并交回。整个项目也可临时移交。",
     "detail": "docs/DETAIL.md"
   }
 }
