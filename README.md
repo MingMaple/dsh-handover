@@ -152,7 +152,7 @@ dsh plugin --profile web add @mingmaple/dsh-handover
 - `ho_docmap`：`action` 取 `registry-*`、`plan-*`、`profile-*`、`changelog-append`、`rules-read`。
 - `ho_sessions`：`action` 取 `list`、`role`、`new`、`task-init`、`order`、`place`、`prompt`、`archive`、`unarchive`、`office-read`、`office-register`、`succeed`、`migration-choice`。
 - `ho_workspace`：`action` 取 `init`、`scaffold`、`list`、`create`、`delete`、`move-*`、`backup-*`。
-- `peer`：平级会话通信。
+- `peer`：平级会话通信；投递前先唤醒目标会话，已归档的会话会被拦下，须先解除归档。
 
 项目与杂项看不到 `ho_workspace`；`ho_sessions` 对其仅开放 `succeed`。旧工具名不再注册，调用会得到未知工具提示。
 

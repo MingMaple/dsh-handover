@@ -476,7 +476,7 @@ async function newText(env, args, info, signal) {
 export function pmPeerTool(env) {
   return {
     name: PEER_NAME,
-    description: '平级会话通信；列举、历史、改名与新建仅全局。',
+    description: '平级会话通信；投递前先唤醒目标会话，已归档的会话会被拦下，须先解归档。列举、历史、改名与新建仅全局。',
     parameters: {
       type: 'object',
       additionalProperties: false,

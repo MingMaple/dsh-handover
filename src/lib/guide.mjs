@@ -89,7 +89,7 @@ export function buildGuide() {
       {
         title: '平级会话工具',
         tools: [
-          ['peer', 'action：list 会话一览、status 单会话详情、send 投递消息。wait=true 时同轮等待回复。wait 等待单个回复、collect 收取先完成的最终回复。peek 读近期会话历史、rename 修改标题、new 新建'],
+          ['peer', 'action：list 会话一览、status 单会话详情、send 投递消息。send 前先唤醒冷会话。归档会话会被拦下，须先解归档。wait=true 时同轮等待回复。wait 等待单个回复、collect 收取先完成的最终回复。peek 读近期会话历史、rename 修改标题、new 新建'],
         ],
       },
     ],
