@@ -2,6 +2,7 @@
  * 工具注册与会话守卫：按角色计算每步可见性，注册 5 个 ho_* 与 peer，并挂载 2 类工具守卫。
  * 依赖通过 runtime 注入；角色缓存与角色判定来自 lib/role-assembly.mjs，二者共用同一份状态。
  */
+import { hasPathSegment } from './text.mjs';
 import { pmStatusTool } from '../tools/ho_status.mjs';
 import { pmSessionsTool } from '../tools/ho_sessions.mjs';
 import { pmHandoverTool } from '../tools/ho_handover.mjs';
@@ -119,8 +120,8 @@ export function createToolRegistry(runtime) {
           return mk(false, 'directPeer=off：仅允许向全局报告（' + info.role + ' 至 ' + tRole + '）');
         }
         // action=new：只有杂项会话可以建在 Misc 下
-        const target = String(args.workspace || args.cwd || '').toLowerCase();
-        if (info.role === 'misc' && target.indexOf('misc') !== -1) return mk(true, '杂项会话新建于 Misc');
+        const target = String(args.workspace || args.cwd || '');
+        if (info.role === 'misc' && hasPathSegment(target, '_Misc')) return mk(true, '杂项会话新建于 Misc');
         return mk(false, '非全局角色不得新建平级会话（' + info.role + '）');
       });
     } catch { /* 旧版本无 guard：退化为规则约束 */ }

@@ -1,4 +1,4 @@
-﻿/** ho_handover —— 读/写/换任重写/归档本会话交接，并登记压缩。（路径按角色解析；rotate 先归档旧交接，写后按角色体检。） */
+/** ho_handover —— 读/写/换任重写/归档本会话交接，并登记压缩。（路径按角色解析；rotate 先归档旧交接，写后按角色体检。） */
 import { textOutput } from '../lib/output.mjs';
 import { nameOf } from '../lib/names.mjs';
 import { NL } from '../lib/text.mjs';
@@ -8,7 +8,17 @@ import {
   readHandover, writeHandover, rewriteHandover, archiveHandover, handoverMtimeMs, fileSha256, carryItemsOf,
 } from '../lib/handover-io.mjs';
 import { assertTaskName } from '../lib/role.mjs';
+import { loadOffice, lineageKeyOf } from '../lib/office.mjs';
 import { assistantCompact } from './compact.mjs';
+
+/** 本会话是否就是这个类别/项目/任务的在任者（登记表为准）。 */
+function isHolderOf(ws, info) {
+  try {
+    const key = lineageKeyOf(info.role, info.project, info.task);
+    const lin = loadOffice(ws).lineages[key];
+    return !!(lin && lin.current && String(lin.current.sessionId) === String(info.sessionId || ''));
+  } catch { return false; }
+}
 
 export const ACTIONS = ['read', 'write', 'rotate', 'archive', 'compact'];
 
@@ -63,6 +73,11 @@ export function pmHandoverTool(env) {
       }
       const ws = env.resolveWs(exec);
       const info = env.roleOf(exec);
+      // 并行分叉只读交接：同家族副本共用一份交接，多份同时写会互相覆盖。
+      // 承接在任之后（登记表在任改记本会话）才允许落笔。
+      if (info && info.fork && ['write', 'rotate', 'archive'].indexOf(action) !== -1 && !isHolderOf(ws, info)) {
+        throw new Error('现象：本会话是分叉副本，不写交接。原因：同家族的交接只由在任者落笔，并行候选同时写会互相覆盖。处置：交接只读；要承接在任，请当前用户先在设置页把在任改记到本会话。');
+      }
       const taskName = String(args.task || '').trim();
       let target = null;
       if (taskName) {

@@ -9,7 +9,8 @@ import { visibleTextOf, collectSignals } from './events.mjs';
 import { stampTz } from './brief.mjs';
 import { storeDirFor } from './store.mjs';
 import { serviceOf } from './engine.mjs';
-import { writeFileAtomic } from './text.mjs';
+import { writeFileAtomic, pathsInText } from './text.mjs';
+import { pathKey } from './pathkey.mjs';
 
 const UNVERIFIED = '未核，待确认';
 /** 微快照保留上限：同目录只留最近 8 份。 */
@@ -49,17 +50,6 @@ function clean(text) {
 function clip(text, n) {
   const t = clean(text);
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
-}
-
-function pathsInText(text) {
-  const out = [];
-  const re = /[A-Za-z]:\\[^\s"',;）)]+|(?:\.{0,2}\/)?(?:[\w.\-\u4e00-\u9fa5]+[\/]){1,}[\w.\-\u4e00-\u9fa5]+/g;
-  let m;
-  while ((m = re.exec(String(text || ''))) !== null) {
-    if (m[0].length >= 4 && m[0].length <= 260) out.push(m[0]);
-    if (out.length >= 30) break;
-  }
-  return out;
 }
 
 function linesOf(text) {
@@ -137,18 +127,22 @@ export function extractSnapshot(records, opts) {
   }
 
   const pointers = [];
-  const ws = String(o.ws || '').replace(/\\/g, '/').toLowerCase();
+  // 工作区根：原样保留大小写用于拼路径；另按平台折算比较键（Windows/macOS 折叠，Linux 保留）。
+  const wsRaw = String(o.ws || '').trim();
+  const wsBase = wsRaw.replace(/\\/g, '/').replace(/\/+$/, '');
+  const wsKey = pathKey(wsRaw);
   const add = (p) => {
     let t = String(p || '').trim().replace(/[；，。、）)]+.*$/, '').trim();
     if (!t || t.length < 4) return;
-    const isAbs = /^[A-Za-z]:[\\/]/.test(t);
-    if (!isAbs && ws && t.indexOf('/') !== -1) t = ws.replace(/\/$/, '') + '/' + t.replace(/^\.?\//, '');
-    if (ws && !t.replace(/\\/g, '/').toLowerCase().startsWith(ws)) return;
+    // 绝对路径按平台识别：Windows 盘符/UNC 与 POSIX 根路径都不拼到工作区根上。
+    const isAbs = /^[A-Za-z]:[\\/]/.test(t) || /^[\\/]/.test(t);
+    if (!isAbs && wsKey && t.indexOf('/') !== -1) t = wsBase + '/' + t.replace(/^\.?\//, '');
+    if (wsKey && !pathKey(t).startsWith(wsKey)) return;
     if (pointers.indexOf(t) !== -1) return;
     pointers.push(t);
   };
   for (const f of signals.fileWrites) add(f.path);
-  for (const u of users.slice(-5)) for (const p of pathsInText(u.text)) add(p);
+  for (const u of users.slice(-5)) for (const p of pathsInText(u.text, 30)) add(p);
   if (pointers.length > 20) pointers.length = 20;
 
   const last = list.length ? list[list.length - 1] : null;

@@ -11,6 +11,7 @@ const CANDIDATES = [
   '/opt/homebrew/bin/7z',
   '/usr/bin/7za',
   '/usr/local/bin/7za',
+  '/usr/bin/7zz',
   '/opt/homebrew/bin/7zz',
 ];
 const BARE = new Set(['7z', '7zz', '7za']);

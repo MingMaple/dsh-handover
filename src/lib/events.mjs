@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { findLog, decodeLog, readLogAppend, zstdAvailable, isZstdLog } from './zstd-log.mjs';
 import { projCacheDir } from './sessions.mjs';
+import { pathsInText } from './text.mjs';
+import { pathKey } from './pathkey.mjs';
 
 /** 取本会话事件数组；无法获取返回 []。宿主对象可能缺少 agent 或 session，取不到时按空事件处理。 */
 export function eventsOf(exec) {
@@ -137,18 +139,6 @@ function pathOfArgs(args) {
   return out;
 }
 
-/** 从原始事件串里粗提路径，供「同文件重复」统计。 */
-function pathsInText(text) {
-  const out = [];
-  const re = /[A-Za-z]:\\[^\s"',;）)]+|(?:\.{0,2}\/)?(?:[\w.\-\u4e00-\u9fa5]+[\/]){1,}[\w.\-\u4e00-\u9fa5]+/g;
-  let m;
-  while ((m = re.exec(String(text || ''))) !== null) {
-    if (m[0].length >= 4 && m[0].length <= 260) out.push(m[0]);
-    if (out.length >= 40) break;
-  }
-  return out;
-}
-
 /**
  * 汇总事件信号：失败工具结果、文件写入、里程碑、用户消息。
  * @returns {{failures:Array, fileWrites:Array, milestones:Array, userMessages:Array, toolCalls:Map}}
@@ -215,7 +205,8 @@ export function repeatStats(signals) {
   }
   const fileCount = new Map();
   for (const f of (s.fileReads || [])) {
-    const key = String(f.path || '').toLowerCase();
+    // 同一文件的等价键按平台折算大小写：Windows/macOS 折叠，Linux 区分。
+    const key = pathKey(f.path);
     if (!key) continue;
     fileCount.set(key, (fileCount.get(key) || 0) + 1);
   }

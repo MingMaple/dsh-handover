@@ -116,6 +116,39 @@ for (const h of hits) {
   }
 }
 
+// 8. 对齐检查：标准文件的版本名额与清单列数、当前版本说明的刷新口径、README 的按钮说明。
+// 维护纪律靠断言而非记性：超限或不写口径即失败。
+{
+  const std = path.join(root, 'src', 'templates', 'Align_Check.md');
+  if (!fs.existsSync(std)) problems.push('缺少内置标准文件 src/templates/Align_Check.md');
+  else {
+    const text = fs.readFileSync(std, 'utf8');
+    for (const sec of ['§0', '§2', '§3', '§5', '§6']) {
+      if (text.indexOf('## ' + sec) === -1) problems.push('Align_Check.md 缺节 ' + sec);
+    }
+    const vers = new Set();
+    const reVer = /自 (\d+\.\d+\.\d+)/g;
+    let mv;
+    while ((mv = reVer.exec(text)) !== null) vers.add(mv[1]);
+    if (vers.size === 0) problems.push('Align_Check.md 的须补清单未标注「自 X.Y.Z」版本');
+    else if (vers.size > 3) problems.push('Align_Check.md 收着 ' + vers.size + ' 个行为版本（上限 3）：' + [...vers].join('、'));
+    const seg = text.split(/^## §3/m)[1] || '';
+    const body = seg.split(/^## /m)[0];
+    const rows = body.split(/\r?\n/).filter((l) => l.trim().startsWith('|'));
+    const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').length;
+    for (const row of rows) {
+      if (cells(row) !== 6) problems.push('Align_Check.md §3 表列数不是 6：' + row.trim().slice(0, 40));
+    }
+  }
+  const pkgNow = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const cur = path.join(releasesDir, pkgNow.version + '.md');
+  if (fs.existsSync(cur)) {
+    const t = fs.readFileSync(cur, 'utf8');
+    if (!/\*\*状态刷新\*\*：(建议|无需)/.test(t)) problems.push(path.relative(root, cur) + ' 缺「**状态刷新**：建议 / 无需」一行');
+  }
+  if (fs.readFileSync(readme, 'utf8').indexOf('对齐检查') === -1) problems.push('README 未写「对齐检查」按钮');
+}
+
 if (problems.length) {
   console.log('CHECK-DOCS FAIL ' + problems.length + ' 项：');
   for (const p of problems) console.log('  - ' + p);

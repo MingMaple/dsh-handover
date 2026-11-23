@@ -5,11 +5,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { pick } from './text.mjs';
+import { pick, NL } from './text.mjs';
 import { projCacheFileOf } from './sessions.mjs';
 import {
   ROLES, PENDING_MIGRATION, resolveRole, sessionMeta, handoverPathFor, toolsetFor, layoutOf, layoutRootRel, layoutMetaRel,
-  readRoles, writeRole as writeRoleStore, assertProjectName, assertTaskName,
+  readRoles, writeRole as writeRoleStore, assertProjectName, assertTaskName, roleFromPath,
 } from './role.mjs';
 import { manualFor, firstRoundMessageFor } from './manual.mjs';
 import { sendPrompt } from './prompt.mjs';
@@ -20,7 +20,7 @@ import { systemBlock, registrySignature, syncGlobalRefs } from './system.mjs';
 import { migrateIdentity } from './identity.mjs';
 import { scanRoots } from './path-scan.mjs';
 import { loadOffice, lineageKeyOf, syncHolderKind, removeHoldersBySession, registerHolder, nextName } from './office.mjs';
-
+import { placeSession, placeNotice, workspaceTargetFor } from './place.mjs';
 /** 创建角色装配。runtime 提供 ctx、cfg、env、perStep、registered、initErrors、walkUpToWorkspace。 */
 export function createRoleAssembly(runtime) {
   const { ctx, cfg, env, perStep, registered, initErrors, walkUpToWorkspace } = runtime;
@@ -222,12 +222,44 @@ export function createRoleAssembly(runtime) {
   }
 
   /** 使一个活体会话的提示段与本会话当前角色对齐。info 可传入已解析的角色，省去一次判定。 */
+  /**
+   * 分叉继承：宿主分叉只复制历史，不复制角色条目（header 的 isSeeded 为真即分叉，新会话为假）。
+   * 注册是家族属性，可沿用；在任是唯一属性，绝不随分叉复制，故此处不碰登记表。
+   * 角色按会话工作目录推断（项目库、杂项任务目录）；推不出或落在全局根时不动，留给用户显式设定。
+   * @returns {object|null} 新写入的条目；未处理时返回 null
+   */
+  function inheritForkRole(sid, agent) {
+    const h = agent && agent.session ? agent.session.header : null;
+    if (!h || h.isSeeded !== true) return null;
+    try {
+      if (readRoles(cfg).sessions[sid]) return null;
+    } catch { return null; }
+    let byPath = null;
+    try { byPath = roleFromPath(String(h.cwd || '')); } catch { byPath = null; }
+    if (!byPath || (byPath.role !== 'project' && byPath.role !== 'misc')) return null;
+    const name = byPath.role === 'project' ? byPath.project : byPath.task;
+    try {
+      const entry = writeRoleStore(cfg, sid, {
+        role: byPath.role, project: byPath.project || '', task: byPath.task || '',
+        source: 'fork', layout: byPath.role, layoutName: name,
+      });
+      env.log('分叉继承注册：' + sid + ' → ' + (byPath.role === 'project' ? '项目「' + name + '」' : '杂项「' + name + '」') + '（在任未变）');
+      // 分叉的目录通常就是角色目录，顺手挂进对应工作区，侧栏才归到同一组；挂不上不影响角色。
+      try { placeSession(env, sid, { role: byPath.role, project: byPath.project || '', task: byPath.task || '' }, workspaceForAgent(agent)).catch(() => { }); } catch { /* 无注册表时跳过 */ }
+      return entry;
+    } catch (e) {
+      env.log('分叉继承失败：' + msgOf(e));
+      return null;
+    }
+  }
+
   function applyRoleTo(agent, infoOpt, wsOpt) {
     const h = agent && agent.session ? agent.session.header : null;
     const sid = String((h && h.id) || (agent && agent.id) || '');
     if (!sid) return;
     // 子会话一律不装配：即使标题含「全局」或角色表里有条目，也不注册提示段（D-105）。
     if (isChildSession(agent)) return;
+    inheritForkRole(sid, agent);
     let info = infoOpt || null;
     if (!info) {
       try { info = infoFor(sid, scopedMetaOf(h, sid)); } catch { return; }
@@ -282,6 +314,35 @@ export function createRoleAssembly(runtime) {
     // 迁移方式：缺省 ask（先问后迁）。显式 auto 与 direct 保持 1.0.2 语义，不问也不留 pending。
     const mode = i.migrate === 'direct' ? 'direct' : i.migrate === 'auto' ? 'auto' : 'ask';
     const sameIdentity = prevRole === role && prevProject === project && prevTask === task;
+    // 同一身份：不写盘、不登记。要唤醒时只补投首轮流程消息，避免「确认设置」与「唤醒」2 步
+    // 因为第二次点击被判成重复设置而丢掉首轮流程。
+    if (sameIdentity && !prevPending) {
+      if (i.wake === false) {
+        return { ok: true, unchanged: true, role, project, task, live: false, delivered: false, error: '' };
+      }
+      let delivered = false;
+      let error = '';
+      let regName = '';
+      try {
+        const cur = loadOffice(ws).lineages[lineageKeyOf(role, project, task)];
+        if (cur && cur.current && String(cur.current.sessionId) === sid) regName = String(cur.current.name || '');
+      } catch { /* 读不到登记表时不写名字 */ }
+      try {
+        const msg = firstRoundMessageFor({ role, project, task, layout: String(before.layout || ''), layoutName: String(before.layoutName || '') }, {
+          previousRole: prevRole,
+          migrate: mode,
+          freshLayout: !String(before.layout || ''),
+          name: regName,
+        });
+        if (msg) {
+          const r = await sendPrompt(env.controller(), sid, msg, 'queue');
+          delivered = !!(r && r.accepted);
+        }
+      } catch (e) {
+        error = msgOf(e);
+      }
+      return { ok: true, unchanged: true, role, project, task, live: false, delivered, error };
+    }
     let migration = null;
     let pending = null;
     let inPlace = false;
@@ -332,7 +393,9 @@ export function createRoleAssembly(runtime) {
       layout = role === 'project' || role === 'misc' ? role : '';
       layoutName = role === 'project' ? project : (role === 'misc' ? task : '');
     }
-    try { writeRoleStore(cfg, sid, { role, project, task, source: 'user', layout, layoutName, pending }); }
+    // 设为普通时不再保留项目名或任务名：名字留着会让设置页仍显示旧身份，像是没注销。
+    const keepName = role === 'project' || role === 'misc';
+    try { writeRoleStore(cfg, sid, { role, project: keepName ? project : '', task: keepName ? task : '', source: 'user', layout, layoutName, pending }); }
     catch (e) { return { ok: false, error: '写角色表失败：' + msgOf(e) }; }
     // 注册同步：项目、杂项、全局角色更新名册类别；普通角色只清除注册，文件与目录原位保留。
     // 类别与布局不同（先不迁）时不动新布局的目录：那里还没有本任务的任何文件。
@@ -378,6 +441,17 @@ export function createRoleAssembly(runtime) {
     roleCache.delete(sid);
     const info = { role, project, task, layout, layoutName, source: 'store', sessionId: sid };
     if (pending) info.pending = pending;
+    // 落位：角色生效后把会话移入对应工作区（项目→本项目库，杂项→_Misc，全局→工作区根）。
+    // 缺工作区时按约定建目录并注册；失败只记录并回报，不推翻已写入的角色。
+    let placed = null;
+    let placeError = '';
+    if (!pending && (role === 'project' || role === 'misc' || role === 'global')) {
+      try { placed = await placeSession(env, sid, { role, project, task }, ws); }
+      catch (e) {
+        placeError = msgOf(e);
+        env.log('角色落位：' + placeError);
+      }
+    }
     let live = false;
     try {
       const a = agentOf(sid);
@@ -401,7 +475,7 @@ export function createRoleAssembly(runtime) {
         scan = scanRoots(Array.from(new Set(rels.map((r) => path.join(ws, r)))));
       } catch { scan = null; }
     }
-    const msg = firstRoundMessageFor(info, {
+    const msgBody = firstRoundMessageFor(info, {
       previousRole: prevRole,
       migrate: mode,
       inPlace,
@@ -412,6 +486,8 @@ export function createRoleAssembly(runtime) {
       scan,
       name: registeredName,
     });
+    let placeLine = placeNotice(workspaceTargetFor(ws, { role, project, task }), placed, placeError);
+    const msg = placeLine ? (msgBody + (msgBody ? NL : '') + placeLine) : msgBody;
     if (i.wake !== false && msg) {
       try {
         const r = await sendPrompt(env.controller(), sid, msg, 'queue');
@@ -422,6 +498,7 @@ export function createRoleAssembly(runtime) {
     }
     return {
       ok: true, role, project, task, layout, layoutName, live, delivered, error,
+      placed, placeError,
       migrated: migration ? migration.mode : '',
       migrationSummary: migration ? migration.summary : '',
       changes: migration ? (migration.changes || []) : [],

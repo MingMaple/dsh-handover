@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { textOutput } from '../lib/output.mjs';
 import { PEER_NAME } from '../lib/names.mjs';
-import { NL, writeFileAtomic } from '../lib/text.mjs';
+import { NL, writeFileAtomic, hasPathSegment } from '../lib/text.mjs';
 import { bandsFor } from '../lib/pressure.mjs';
 import { findLog, decodeLog } from '../lib/zstd-log.mjs';
 import { readPressure } from '../lib/sessions.mjs';
@@ -424,8 +424,8 @@ async function newText(env, args, info, signal) {
   if (wantsWorkspace && args.cwd !== undefined) {
     throw new Error('现象：同时传入了 `workspace` 与 `cwd`。原因：`session.create` 只接受其中之一，传 `workspace` 时 `cwd` 自动取该工作区路径。处置：删除 `cwd` 后重试。');
   }
-  const targetText = String(args.workspace || args.cwd || '').toLowerCase();
-  const allowed = info.role === 'global' || (info.role === 'misc' && targetText.indexOf('misc') !== -1);
+  const targetText = String(args.workspace || args.cwd || '');
+  const allowed = info.role === 'global' || (info.role === 'misc' && hasPathSegment(targetText, '_Misc'));
   denyUnless(allowed, 'new', '会话创建仅属全局（杂项可建到 Misc 下）');
   let request = {};
   if (wantsWorkspace) {

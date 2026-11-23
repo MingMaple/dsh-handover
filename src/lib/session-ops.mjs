@@ -80,11 +80,21 @@ export function resolveWorkspaceFor(env, exec, kind, project, task, opts) {
   }
   if (project) {
     // 项目会话：按项目名找同名工作区，或路径落在 Projects/<项目>、_Project_Meta/<项目> 下的工作区。
-    const want = String(project).toLowerCase();
+    // 路径比较按平台折算大小写：Windows/macOS 折叠，Linux 区分；目录段必须整段相等，
+    // 避免「Demo」误匹配「Demo2」的工作区。此前固定用小写 `/projects/` 与 pathKey 比较，
+    // Linux 上 pathKey 保留 `Projects` 原样，项目工作区反而匹配不到。
+    const folded = process.platform === 'win32' || process.platform === 'darwin';
+    const wantSeg = folded ? String(project).toLowerCase() : String(project);
+    const projDir = folded ? 'projects' : 'Projects';
+    const metaDir = folded ? '_project_meta' : '_Project_Meta';
     const hit = rows.find((r) => {
       if (String(r.title || '') === String(project)) return true;
-      const p = pathKey(r.path);
-      return p.indexOf('/projects/' + want) !== -1 || p.indexOf('/_project_meta/' + want) !== -1;
+      const segs = pathKey(r.path).split('/');
+      for (let i = 0; i < segs.length - 1; i++) {
+        if (segs[i + 1] !== wantSeg) continue;
+        if (segs[i] === projDir || segs[i] === metaDir) return true;
+      }
+      return false;
     });
     if (!hit) {
       // 全局任务独立且暂不迁移时，目标项目目录尚不存在，回落到调用者所在工作区。

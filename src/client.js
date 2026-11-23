@@ -285,6 +285,10 @@ window.__ModuleLoader__.load({
       const [mvStatus, setMvStatus] = React.useState(null);
       // 删除旧备份的确认词。
       const [delWord, setDelWord] = React.useState("");
+      // 对齐检查：唤醒全局在任会话去核对各项目与杂项的文件体系。
+      const [alignBusy, setAlignBusy] = React.useState(false);
+      const [alignMsg, setAlignMsg] = React.useState("");
+      const [alignBad, setAlignBad] = React.useState(false);
 
       const load = React.useCallback(() => {
         if (state.last) setData(state.last);
@@ -317,6 +321,28 @@ window.__ModuleLoader__.load({
           setBusy(false);
         })();
       }, []);
+
+      /** 对齐检查：唤醒全局在任会话；不建会话，没在任时把原因显示出来。 */
+      const wakeAlign = React.useCallback(() => {
+        if (alignBusy) return;
+        setAlignBusy(true);
+        setAlignBad(false);
+        setAlignMsg("");
+        post("align.wake", {}, 30000)
+          .then((r) => {
+            if (r && r.ok) {
+              setAlignMsg("已唤醒全局「" + (r.title || "全局") + "」：它读内置标准文件后先出须补清单，再问你补哪些。");
+            } else {
+              setAlignBad(true);
+              setAlignMsg((r && r.error) || "唤醒未完成：未返回原因。");
+            }
+          })
+          .catch((e) => {
+            setAlignBad(true);
+            setAlignMsg("请求未完成：" + (e && e.message ? e.message : String(e)) + "。");
+          })
+          .then(() => setAlignBusy(false));
+      }, [alignBusy]);
 
       const buildTree = React.useCallback(() => {
         setWorking(true); setSetupBad(false); setSetupMsg("");
@@ -426,12 +452,25 @@ window.__ModuleLoader__.load({
         post("role", { session_id: sid, role: role, project: project, task: task, wake: wake }, 30000)
           .then((r) => {
             if (r && r.ok) {
+              if (r.unchanged) {
+                setRoleMsg(wake ? "该会话已按当前角色唤醒。" : "角色与当前一致，未做改动。");
+                setRoleStage((prev) => {
+                  const next = Object.assign({}, prev || {});
+                  next[sid] = wake ? "notified" : "";
+                  return next;
+                });
+                load();
+                return;
+              }
               const liveText = r.live ? "已在当前会话生效" : "自下一轮起生效";
               const sendText = wake
                 ? (r.delivered ? "首轮指令已送达，该会话将被唤醒一轮" : ("首轮指令未送达，原因：" + (r.error || "未返回原因") + "，可手动发送首轮指令"))
                 : "";
               const pendingText = r.pending ? "；迁移待确认，该会话首个轮次会问是否迁移文件体系" : "";
-              setRoleMsg("角色已设为 " + (r.role || role) + "，" + liveText + pendingText + (sendText ? "；" + sendText : "") + "。");
+              const placeText = r.placed
+                ? ("；已移入工作区「" + r.placed.title + "」" + (r.placed.created ? "（本次新建）" : ""))
+                : (r.placeError ? ("；未能移入工作区：" + r.placeError) : "");
+              setRoleMsg("角色已设为 " + (r.role || role) + "，" + liveText + pendingText + placeText + (sendText ? "；" + sendText : "") + "。");
               setRoleStage((prev) => {
                 const next = Object.assign({}, prev || {});
                 next[sid] = wake ? "notified" : "set";
@@ -563,6 +602,8 @@ window.__ModuleLoader__.load({
       const head = h("div", { className: "dshh-head" },
         h("h2", { className: "dshh-title" }, "dsh-handover"),
         h("button", { className: "dshh-btn", onClick: load, disabled: busy, type: "button" }, busy ? (data ? "正在刷新" : "正在读取") : "刷新"),
+        h("button", { className: "dshh-btn", onClick: wakeAlign, disabled: alignBusy, type: "button", title: "唤醒全局在任会话，核对各项目与杂项的文件体系是否跟上本版口径" }, alignBusy ? "正在唤醒" : "对齐检查"),
+        alignMsg ? h("span", { className: alignBad ? "dshh-bad" : "dshh-ok" }, alignMsg) : null,
         diag.lastError ? h("span", { className: "dshh-bad" }, "读取失败（通道 " + (channel || carrierKind()) + "）：" + diag.lastError.slice(0, 90) + "。可点击「刷新」重试。") : null,
         data ? h("span", { className: "dshh-muted" }, "读数时间 " + data.generatedAt) : null);
 
@@ -800,6 +841,8 @@ window.__ModuleLoader__.load({
         const project = draft.project !== undefined ? draft.project : (r.project || "");
         const task = draft.task !== undefined ? draft.task : (r.task || "");
         const wide = role === "project" || role === "misc";
+        // 目标角色与原角色完全一致时，「设置角色」不可点：避免空操作把会话唤醒一轮。
+        const unchanged = role === (r.role || "plain") && project === (r.project || "") && task === (r.task || "");
         const stage = (roleStage && roleStage[r.sid]) || "";
         // 已有在任全局会话时不再提供「全局」选项；当前即为全局的会话仍显示，避免看不出当前状态。
         const canGlobal = Number(data.globalSessions || 0) === 0 || r.role === "global";
@@ -812,7 +855,7 @@ window.__ModuleLoader__.load({
               : h("button", {
                 className: "dshh-btn",
                 type: "button",
-                disabled: working,
+                disabled: working || unchanged,
                 onClick: () => {
                   setRoleStage((prev) => {
                     const next = Object.assign({}, prev || {});

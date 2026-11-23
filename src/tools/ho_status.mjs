@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ho_status —— 会话状态：一个入口，按 view 分流。
  *   phase（默认）：水位、压缩、段索引、快照、判据与建议动作
  *   pressure：压力遥测（水位、余量、增速、剩余轮数、分档线与档位）
@@ -7,6 +7,7 @@
  *   drift：交接漂移体检
  *   tokens：按会话 id 统计轮数、步数、每步 token
  *   gate：通用约束条闸门、交接体检与体系注册路径检查
+ *   align：换版对齐检查（内置标准文件、副本漂移、骨架、注册、在任登记）
  *   recall：按关键词或 seq 回读压缩前原文
  * 全部只读；早期各视图与闸门入口已按 1.0.2 归并到此。
  */
@@ -31,9 +32,11 @@ import { findLog, decodeLog, turnStarts } from '../lib/zstd-log.mjs';
 import { activeConsentsFor, formatConsentLine } from '../lib/consent.mjs';
 import { capText, STATUS_MAX_LINES } from '../lib/limit.mjs';
 import { search, MODES, aroundEvents } from '../lib/recall.mjs';
+import { readRoles } from '../lib/role.mjs';
 import { pmGateTool } from './gate.mjs';
+import { alignReport, renderAlign } from '../lib/align.mjs';
 
-const VIEWS = ['phase', 'pressure', 'brief', 'diag', 'drift', 'tokens', 'gate', 'recall'];
+const VIEWS = ['phase', 'pressure', 'brief', 'diag', 'drift', 'tokens', 'gate', 'align', 'recall'];
 
 function analyzeLog(records) {
   const turns = turnStarts(records).length;
@@ -323,7 +326,7 @@ function diagText(env, exec) {
     try {
       const info = env.roleOf(exec);
       const ts = typeof env.toolsetOf === 'function' ? env.toolsetOf(info.role) : null;
-      out.push('角色      ' + info.role + (info.project ? '（项目 ' + info.project + '）' : info.task ? '（任务 ' + info.task + '）' : '') + ' · 依据 ' + info.source + (ts ? ' · 可见工具 ' + ts.allow.length + '/' + (ts.allow.length + ts.deny.length) : ''));
+      out.push('角色      ' + info.role + (info.project ? '（项目 ' + info.project + '）' : info.task ? '（任务 ' + info.task + '）' : '') + ' · 依据 ' + info.source + (info.fork ? ' · 分叉副本（交接只读）' : '') + (ts ? ' · 可见工具 ' + ts.allow.length + '/' + (ts.allow.length + ts.deny.length) : ''));
       // 两轴不同时单独报一行：类别换了而布局未迁，文件仍在旧布局。
       if (info.layout && info.layout !== info.role) {
         out.push('布局      ' + info.layout + (info.layoutName ? '「' + info.layoutName + '」' : '') + '（与类别不同）'
@@ -336,6 +339,14 @@ function diagText(env, exec) {
         const cnt = typeof rs.count === 'number' ? ' · 已装配 ' + rs.count + ' 个会话' : '';
         out.push('角色装配  ' + (rs.mode || '未知') + cnt + (rs.last ? ' · 最近：' + rs.last.sid + ' → ' + rs.last.role + '（' + rs.last.at + '）' : ''));
       }
+      // 分叉副本清单：注册从家族沿用，但在任不随分叉复制，这里单列出来便于核对。
+      try {
+        const store = readRoles(env.cfg);
+        const forks = Object.keys(store.sessions || {}).filter((k) => store.sessions[k] && String(store.sessions[k].source || '') === 'fork');
+        if (forks.length) {
+          out.push('分叉继承  ' + forks.length + ' 个（交接只读）：' + forks.slice(0, 4).map((k) => k.replace(/^session-/, '').slice(0, 8)).join('、') + (forks.length > 4 ? ' 等' : ''));
+        }
+      } catch { /* 读不到角色表时不显示 */ }
     } catch (e) {
       out.push('角色      判定失败：' + (e && e.message ? e.message : e));
     }
@@ -591,6 +602,12 @@ export function pmStatusTool(env) {
       if (view === 'recall') {
         const r = recallText(env, args, exec);
         return { text: capText(r && r.text !== undefined ? r.text : String(r || ''), { maxLines: STATUS_MAX_LINES, hint: '召回输出过长：用 `offset=<seq>` 或 `around=<seq>` 继续读取，或缩小 `limit`。' }) };
+      }
+      if (view === 'align') {
+        const ws = env.resolveWs(exec);
+        const res = alignReport(ws, env);
+        const text = renderAlign(res, { version: typeof env.version === 'function' ? env.version() : '?' });
+        return { text: capText(text, { maxLines: STATUS_MAX_LINES, hint: '对齐输出过长：先按分组逐项处理；单组细节用 `ho_docmap`、`ho_sessions(action="office-read")` 单独查。' }) };
       }
       const out = view === 'phase' ? phaseText(env, args, exec)
         : view === 'pressure' ? pressureText(env, args, exec)

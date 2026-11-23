@@ -65,6 +65,17 @@ function workflowLines(cfg) {
   ];
 }
 
+/**
+ * 本机 shell 的转写注意事项：Windows 控制台代码页与 POSIX locale 不同，按平台各给一段。
+ * 此前固定写 Windows PowerShell 5.1 与 gb2312，Linux 会话读到的是不适用的口径。
+ */
+function shellWriteLine() {
+  if (process.platform === 'win32') {
+    return '- 本机 shell 是 Windows PowerShell 5.1，默认编码 gb2312。Get-Content 按 ANSI 解码，Set-Content -Encoding utf8 再编码。用它们转写含中文的文件会出现双重编码，得到乱码（典型「绗笁鏂」）。转写文本一律用 node 脚本，或 [IO.File]::ReadAllText 与 WriteAllText 配 UTF-8 无 BOM。不要把 Get-Content 管道给 Set-Content。';
+  }
+  return '- 本机 shell 是 POSIX sh 或 bash，默认编码由 locale 决定。转写含中文的文本用 node 脚本，或经 printf、cat、iconv 显式指定 UTF-8。不要依赖未固定 locale 的管道与重定向完成转码。';
+}
+
 /** 上下文与压缩段落（各档角色共用）。 */
 function rhythmLines(cfg) {
   const c = cfg || {};
@@ -84,7 +95,7 @@ function rhythmLines(cfg) {
     '- 整篇重写交接用 action="rotate"；不经该动作而手改交接的，更替会话会被拒绝。',
     '- 探查与批量任务先量后取：用脚本统计行数、字段数与文件数。不要把整份 CSV、题面或日志一次性刷进上下文。单条工具结果将超过约 100 行或 4KB 时，改用 offset/limit，或只取表头与计数。',
     '- 脚本回显只给汇总与失败项，不超过 40 行。同一批数据不为探查另写脚本；分析、生成、自测在一个脚本里完成。',
-    '- 本机 shell 是 Windows PowerShell 5.1，默认编码 gb2312。Get-Content 按 ANSI 解码，Set-Content -Encoding utf8 再编码。用它们转写含中文的文件会出现双重编码，得到乱码（典型「绗笁鏂」）。转写文本一律用 node 脚本，或 [IO.File]::ReadAllText 与 WriteAllText 配 UTF-8 无 BOM。不要把 Get-Content 管道给 Set-Content。',
+    shellWriteLine(),
     '- 原文用 ho_status(view="recall", query="…") 按 seq 回读，命中时给出前后三行。需要邻近事件时用 around 展开。',
     '- 强制线提示与强制压缩由插件执行；助手不重复调用压缩。计数达上限后助手不再压缩，由插件按硬上限兜底。',
   ];
@@ -196,6 +207,9 @@ export function scopedManual(info, opts) {
       : '交接路径未解析（缺角色或名称）。请先在设置页设定角色。',
     HANDOVER_FLOW,
     '名称已注册，不得自行修改；需要改名由全局处理。',
+    ...(info.fork
+      ? ['并行分叉：本会话是分叉副本，与同家族其他会话共用这份交接；交接只读、不落笔，也不改在任登记。要承接在任、接手落笔，须当前用户明确指示。']
+      : []),
     '',
     ...workflowLines(o.cfg),
     '',
@@ -299,10 +313,12 @@ export function firstRoundMessageFor(info, opts) {
       lines.push('角色未变：沿用既有体系与注册名。');
     }
   } else {
-    lines.push('首轮固定事项：一、先问清当前用户要做的事：目标、范围与保留要求。');
-    lines.push('二、理解后列出任务大纲或解析，请当前用户确认理解是否正确。');
-    lines.push('三、确认后给出初步文件体系，请其选择：一键建成，或先修改。');
-    lines.push('四、建成并注册；未确认前不得开建。');
+    lines.push('首轮按这个顺序做，不得跳步。');
+    lines.push('一、先列出本会话目前已管着的文件与目录，说清哪些要继续用。');
+    lines.push('二、按体系模板设计一套初步文件体系，整段贴到回复里。');
+    lines.push('三、问当前用户：一键建立，还是继续讨论。');
+    lines.push('四、选讨论就按意见改到用户满意为止；选一键建立才动手建目录。');
+    lines.push('五、未经用户同意，不得创建任何目录，也不得写体系注册。');
   }
   for (const l of changesBlock(o.changes)) lines.push(l);
   lines.push('名称：' + (o.name ? '本会话注册名为「' + o.name + '」，不得自行修改。' : '本会话尚无注册名。与当前用户确认名称后，用 ho_sessions(action="office-register", name="…") 注册。注册后不得自行修改，改名由全局处理。'));

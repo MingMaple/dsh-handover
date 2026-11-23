@@ -13,6 +13,9 @@ import { probeMove, startMove, moveStatus, cleanupOld, stageSwitch, repairLink, 
 import { routeWorkspace } from './workspace.mjs';
 import { grantConsent, listConsent, consumedConsent } from './consent.mjs';
 import { newSessionIn } from './session-create.mjs';
+import { sendPrompt } from './prompt.mjs';
+import { loadOffice, lineageKeyOf, registerHolder, nextName } from './office.mjs';
+import { alignDocPath } from './align.mjs';
 
 function msgOf(e) { return String(e && e.message ? e.message : e); }
 
@@ -101,6 +104,32 @@ async function createGlobalSession(env, rootPath, title) {
   return { sessionId: made.sessionId || '', error: made.error || '', workspaceId };
 }
 
+/**
+ * 建全局会话后补登在任。
+ * 设置页「一键部署」与「补建全局会话」不走 `ho_sessions(action="new")`，那条路自带登记；
+ * 少了这一步，`Office.json` 里没有全局条目，部署完立刻点击「对齐检查」会得到 no-global。
+ * 已有在任时不顶掉，只在新会话确实为首任时写。
+ * @returns {object|null} 登记结果；跳过或失败时返回 null
+ */
+function registerGlobalIfAbsent(env, rootPath, sessionId) {
+  const ws = String(rootPath || '');
+  const sid = String(sessionId || '');
+  if (!ws || !sid) return null;
+  try {
+    const store = loadOffice(ws);
+    const key = lineageKeyOf('global');
+    const cur = store.lineages[key] && store.lineages[key].current;
+    if (cur && String(cur.sessionId || '')) return null;
+    const name = nextName(store, key);
+    const reg = registerHolder(ws, { kind: 'global', name, sessionId: sid, workspace: ws });
+    env.log('在任登记：' + reg.key + ' → ' + name);
+    return reg;
+  } catch (e) {
+    env.log('在任登记失败：' + msgOf(e));
+    return null;
+  }
+}
+
 export function createApi(env, info) {
   const ok = (value) => ({ ok: true, value });
   const bad = (code, message, http) => ({ ok: false, error: { code, message, details: {} }, http: http || 400 });
@@ -134,6 +163,7 @@ export function createApi(env, info) {
           else workspaceError = 'workspaceRegistry 不可用';
         } catch (e) { workspaceError = '注册工作区失败：' + msgOf(e); }
         const made = await createGlobalSession(env, scaffold.root, '全局');
+        if (made.sessionId) registerGlobalIfAbsent(env, scaffold.root, made.sessionId);
         invalidateStatus(env);
         env.log('一键部署：体系 ' + scaffold.root + '；工作区 ' + (ws ? String(ws.id) : '失败') + '；会话 ' + (made.sessionId || '失败'));
         return ok({
@@ -152,6 +182,7 @@ export function createApi(env, info) {
         const root = currentRoot(env);
         if (!root) return bad('no-workspace', '未找到全局根（工作区未接入）');
         const made = await createGlobalSession(env, root, p.title || '全局');
+        if (made.sessionId) registerGlobalIfAbsent(env, root, made.sessionId);
         invalidateStatus(env);
         if (!made.sessionId) return bad('session-failed', made.error || '建会话失败');
         env.log('补建全局会话：' + made.sessionId);
@@ -203,6 +234,45 @@ export function createApi(env, info) {
             note: '已保存。提示词位于段序 950，改动会让下一次请求的整段前缀缓存失效。建议在压缩或换任的边界处修改。',
           }));
         } catch (e) { return boom(e); }
+      }
+
+      if (method === 'align.wake') {
+        // 设置页「对齐检查」：唤醒全局在任会话，唤醒词里给内置标准文件的绝对路径。
+        // 不建会话：没有全局在任时如实报错，把「要不要建」留给用户。
+        const ws = currentRoot(env);
+        if (!ws) return bad('no-workspace', '未找到全局根（工作区未接入）：先在设置页接入工作区，再点击「对齐检查」。');
+        const store = loadOffice(ws);
+        const lin = (store.lineages && store.lineages[lineageKeyOf('global')]) || null;
+        const cur = lin && lin.current ? lin.current : null;
+        const sid = String((cur && cur.sessionId) || '');
+        const title = String((cur && cur.name) || '全局');
+        if (!sid) {
+          return bad('no-global', '没有全局在任会话：`_Control_Center/records/Office.json` 里「全局」没有在任条目。处置：先把某个会话设为全局，或建一个全局会话，再回来点击「对齐检查」；本按钮不会替你新建会话。');
+        }
+        const controller = typeof env.controller === 'function' ? env.controller() : null;
+        if (!controller || typeof controller.prompt !== 'function') {
+          return { ok: false, error: { code: 'no-controller', message: '会话投递不可用：`sessionController.prompt` 未注入。处置：确认 DSH 版本与插件装配后重启。', details: {} }, http: 501 };
+        }
+        const docPath = alignDocPath();
+        const version = typeof env.version === 'function' ? env.version() : '?';
+        const body = [
+          '插件已换版（dsh-handover ' + version + '）。请做一次对齐检查。',
+          '',
+          '第一步：读内置标准文件（绝对路径）：',
+          docPath,
+          '',
+          '按其中 §2 走：先跑 `ho_status(view="align")` 拿总账，按 §3 分组，出须补清单，然后问我「全部补 / 只补我选的 / 暂不补」。未获我的选择前不要写任何文件；不要通读项目库。',
+        ].join(String.fromCharCode(10));
+        let receipt = null;
+        try {
+          receipt = await sendPrompt(controller, sid, body, 'queue', new AbortController().signal);
+        } catch (e) {
+          env.log('对齐检查：唤醒失败 ' + msgOf(e));
+          return bad('wake-failed', '唤醒全局失败：' + msgOf(e) + '。处置：确认该会话未被归档，或改用聊天里直接说「做一次对齐检查」。');
+        }
+        const accepted = !!(receipt && receipt.accepted);
+        env.log('对齐检查：唤醒 ' + sid + '（' + title + '）accepted=' + String(accepted));
+        return ok({ sessionId: sid, title, accepted, docPath, version, message: accepted ? '已投递唤醒词' : '投递未被受理' });
       }
 
       if (method === 'role') {

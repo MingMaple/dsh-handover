@@ -32,7 +32,7 @@ import { adoptLegacyStore } from './lib/compat.mjs';
 import { search, regexIssue, aroundEvents } from './lib/recall.mjs';
 import { carryItemsOf, fileSha256 } from './lib/handover-io.mjs';
 import { judgeRotateGate } from './lib/succession.mjs';
-import { toolsetFor, layoutOf, handoverPathFor, snapshotDirFor, archiveDirFor, readRoles, resolveRole, writeRole } from './lib/role.mjs';
+import { toolsetFor, layoutOf, handoverPathFor, snapshotDirFor, archiveDirFor, readRoles, resolveRole, writeRole, roleFromPath } from './lib/role.mjs';
 import { ALL_TOOL_NAMES } from './lib/names.mjs';
 import { pmStatusTool } from './tools/ho_status.mjs';
 import { pmHandoverTool } from './tools/ho_handover.mjs';
@@ -44,12 +44,14 @@ import { newSessionIn } from './lib/session-create.mjs';
 import { sessionNew } from './lib/session-ops.mjs';
 import { abortableDelay, ABORTED_TEXT } from './lib/abort.mjs';
 import { createSkipLogger } from './lib/skip-log.mjs';
-import { nextName, registerHolder, loadOffice, saveOffice, removeHolder } from './lib/office.mjs';
+import { nextName, registerHolder, loadOffice, saveOffice, removeHolder, resolveOffice } from './lib/office.mjs';
 import { resolveShortSid, createApi } from './lib/api.mjs';
 import { decodeLogResult } from './lib/zstd-log.mjs';
 import { syncCheck } from './lib/gates.mjs';
 import { checkRegistries, syncGlobalRefs, registryRelPath, planRelPath, detachGlobalTask } from './lib/system.mjs';
 import { validateProfile, profilePathFor } from './lib/profile.mjs';
+import { alignReport, alignHasGap, renderAlign, alignDocPath } from './lib/align.mjs';
+import { hasPathSegment } from './lib/text.mjs';
 import { scanAbsolutePaths, scanRoots, scanReportText } from './lib/path-scan.mjs';
 import { createInitErrors } from './index.mjs';
 import { createRoleAssembly } from './lib/role-assembly.mjs';
@@ -567,6 +569,21 @@ eq('强制线文案含实际用量', hardPromptText(prof), '上下文 92K/200K�
   check('待确认迁移：提示段写明答复前不搬', /得到答复前不移动任何文件/.test(withPending));
   const without = manualFor(base, opts);
   check('无待确认：提示段不写询问行', !/首轮先问当前用户是否迁移文件体系/.test(without));
+}
+// 分叉副本：注册从家族沿用，但交接只读、不写在任登记。
+{
+  const forkInfo = { role: 'project', project: '演示', task: '', layout: 'project', layoutName: '演示', source: 'store', sessionId: 'session-f', fork: true };
+  const text = manualFor(forkInfo, { ws: 'E:/x', cfg: dflt, system: '', consents: [], guard: true });
+  check('分叉：提示段写明并行分叉', /并行分叉/.test(text), text.slice(0, 500));
+  check('分叉：提示段写明交接只读', /交接只读/.test(text) && /也不改在任登记/.test(text), text.slice(0, 600));
+  const plainInfo = { role: 'project', project: '演示', task: '', layout: 'project', layoutName: '演示', source: 'store', sessionId: 'session-g' };
+  check('非分叉：提示段无并行分叉行', !/并行分叉/.test(manualFor(plainInfo, { ws: 'E:/x', cfg: dflt, system: '', consents: [], guard: true })));
+  const forkStore = { version: 1, sessions: { 'session-f': { role: 'project', project: '演示', task: '', source: 'fork' } } };
+  const resolved = resolveRole({ sessionId: 'session-f', roles: forkStore, registeredOnly: true });
+  check('分叉：装配判定带 fork 标记', resolved.fork === true && resolved.role === 'project', JSON.stringify(resolved));
+  check('分叉：按工作目录认项目', JSON.stringify(roleFromPath('E:\\W\\Projects\\演示\\演示库')) === JSON.stringify({ role: 'project', project: '演示', task: '' }), JSON.stringify(roleFromPath('E:\\W\\Projects\\演示\\演示库')));
+  check('分叉：按工作目录认杂项', roleFromPath('E:\\W\\_Misc\\tasks\\巡检\\x') && roleFromPath('E:\\W\\_Misc\\tasks\\巡检\\x').role === 'misc');
+  check('分叉：全局根不推断角色', roleFromPath('E:\\W') === null);
 }
 check('rubric 不超过 220 字', rubricText().length <= 220, String(rubricText().length));
 check('rubric 含 fire 四条', /子任务闭环/.test(rubricText()) && /即将切换阶段/.test(rubricText())
@@ -1185,6 +1202,10 @@ fs.rmSync(idWs, { recursive: true, force: true });
 
   const SID_A = 'session-reg-plain';
   await regAssembly.applyRole({ sessionId: SID_A, role: 'project', project: 'Demo', wake: false });
+  {
+    const dupTest = await regAssembly.applyRole({ sessionId: SID_A, role: 'project', project: 'Demo', wake: false });
+    check('同身份设置返回未变更', dupTest.ok === true && dupTest.unchanged === true && dupTest.delivered === false, JSON.stringify(dupTest));
+  }
   check('注册：项目行写入在役会话', cellOf(fs.readFileSync(regFile, 'utf8'), 'Demo', 6).indexOf(SID_A) !== -1);
   // 模拟残留：角色表被手工改过后，同一会话另有世系指向它。
   {
@@ -2032,6 +2053,60 @@ eq('D-124 摘要静默期可覆盖', resolveConfig({ summaryQuietMs: 1000 }).sum
   check('D-153 解析失败写入 errors', v.errors.length === 1 && /解析失败/.test(v.errors[0]), JSON.stringify(v.errors));
 }
 
+// 对齐检查：分组、判定、渲染上限与「无全局在任不建会话」。
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-align-'));
+  fs.mkdirSync(path.join(dir, '_Control_Center', 'records'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '_Control_Center', 'rules'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '_Project_Meta', 'Demo'), { recursive: true });
+  const r = alignReport(dir, { cfg: {} });
+  check('align 未接入工作区时标未接入', alignReport(path.join(dir, 'nowhere'), { cfg: {} }).connected === false);
+  check('align 报出骨架未注册', r.profiles.some((p) => p.name === 'Demo' && !p.exists), JSON.stringify(r.profiles));
+  check('align 报出体系注册缺文件', r.registries.rows.some((x) => !x.exists), JSON.stringify(r.registries.rows));
+  check('align 报出在任登记缺条目', r.office.unregistered.some((u) => u.name === 'Demo'), JSON.stringify(r.office.unregistered));
+  check('align 报出副本整份缺失', r.copies.some((c) => c.exists === false), JSON.stringify(r.copies.slice(0, 3)));
+  check('align 判定有缺项', alignHasGap(r) === true);
+  const text = renderAlign(r, { version: '9.9.9' });
+  check('align 文本含判定行', /判定：/.test(text) && /9\.9\.9/.test(text), text.slice(0, 80));
+  check('align 文本不超过 40 行', text.split(String.fromCharCode(10)).length <= 40, String(text.split(String.fromCharCode(10)).length));
+  const rc = alignReport(dir, { cfg: { softRatio: 0.5, directPeer: 'off' } });
+  check('align 报出配置改动', rc.config.some((c) => c.key === 'softRatio') && rc.config.some((c) => c.key === 'directPeer'), JSON.stringify(rc.config));
+
+  const officeFile = path.join(dir, '_Control_Center', 'records', 'Office.json');
+  const envBase = { log: () => {}, cfg: { workspaceRoot: dir } };
+  const noGlobal = await createApi(envBase, { name: 'selftest', version: '0' }).call('align.wake', {});
+  check('align.wake 无全局在任时报错', noGlobal.ok === false && /没有全局在任会话/.test(noGlobal.error.message), JSON.stringify(noGlobal));
+  check('align.wake 无全局在任时不建会话', noGlobal.error.message.indexOf('不会替你新建会话') !== -1);
+
+  fs.writeFileSync(officeFile, JSON.stringify({ version: 1, lineages: { '全局': { kind: 'global', project: '', task: '', current: { name: '全局X', sessionId: 'session-align', since: '2026-01-01 00:00 +0800', note: '' }, history: [] } } }), 'utf8');
+  const sent = [];
+  const envWith = {
+    log: () => {},
+    cfg: { workspaceRoot: dir },
+    controller: () => ({
+      prompt: async (req) => { sent.push(req); return { accepted: true }; },
+    }),
+  };
+  const woke = await createApi(envWith, { name: 'selftest', version: '9.9.9' }).call('align.wake', {});
+  check('align.wake 投递成功', woke.ok === true && woke.value.sessionId === 'session-align' && woke.value.accepted === true, JSON.stringify(woke));
+  check('align.wake 唤醒词含内置文件绝对路径', sent.length === 1 && sent[0].content[0].text.indexOf(alignDocPath()) !== -1, sent.length ? sent[0].content[0].text.slice(0, 120) : '未投递');
+  check('align.wake 唤醒词写明先问再写', sent.length === 1 && /未获我的选择前不要写任何文件/.test(sent[0].content[0].text));
+}
+
+// 平台口径：登记名与 _Misc 段判定按平台折叠大小写（Linux 区分），部署后补登全局在任。
+{
+  const store = { lineages: { Demo: { kind: 'project', project: 'Demo', current: { name: 'Demo1', sessionId: 's1' }, history: [] } } };
+  const fold = process.platform === 'win32' || process.platform === 'darwin';
+  const hit = resolveOffice(store, 'demo');
+  check('登记名匹配按平台折叠大小写', fold ? hit.ok === true : hit.ok === false, JSON.stringify(hit));
+  check('登记名精确匹配照常可用', resolveOffice(store, 'Demo').ok === true);
+  check('_Misc 段按整段判定',
+    hasPathSegment('/tmp/ws/_Misc/tasks/x', '_Misc') === true && hasPathSegment('/home/u/misc-project', '_Misc') === false,
+    String(hasPathSegment('/tmp/ws/_Misc/tasks/x', '_Misc')) + '/' + String(hasPathSegment('/home/u/misc-project', '_Misc')));
+  const apiSrc = fs.readFileSync(new URL('./lib/api.mjs', import.meta.url), 'utf8');
+  check('一键部署后补登全局在任', /registerGlobalIfAbsent\(env, scaffold\.root/.test(apiSrc), apiSrc.slice(0, 40));
+}
+
 // D-160 / D-161 / D-168：状态输出上限与类型化会话 id 校验。
 eq('D-160 状态输出上限 300 行', STATUS_MAX_LINES, 300);
 check('D-160 gate 与 recall 共用上限', /STATUS_MAX_LINES/.test(statusSrc));
@@ -2146,6 +2221,7 @@ const cases = [
   { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "pressure", simulateRatio: 0.9 }, flag: "status" },
   { t: pmStatusTool(env, { schedulerReady: () => false, schedulerError: () => 'selftest' }), a: { view: "diag" }, flag: "status" },
   { t: pmStatusTool(envGlobal, stateStub()), a: { view: "gate", scope: "all" }, flag: "gate" },
+  { t: pmStatusTool(envGlobal, stateStub()), a: { view: "align" }, flag: "gate" },
   { t: pmSessionsTool(envGlobal), a: { action: "list" }, flag: "sessions" },
   { t: pmDocmapTool(envGlobal), a: { action: "rules-read", doc: "charter", section: "8.1.1.4", maxLines: 30 }, flag: "docmap" },
   { t: pmSessionsTool(envGlobal), a: { action: "office-read", query: "全局" }, flag: "office" },
@@ -2165,6 +2241,148 @@ for (const c of cases) {
     console.log("FAILED: " + (e && e.message ? e.message : String(e)));
   }
   console.log("");
+}
+
+/* ---------------- 落位与首轮流程 ---------------- */
+{
+  const { workspaceTargetFor, findWorkspaceRow } = await import('./lib/place.mjs');
+  const miscT = workspaceTargetFor('E:\\W', { role: 'misc' });
+  check('落位：杂项指向 _Misc', !!miscT && /_Misc$/.test(miscT.path) && miscT.title === '_Misc', JSON.stringify(miscT));
+  const projT = workspaceTargetFor('E:\\W', { role: 'project', project: '演示' });
+  check('落位：项目指向 项目库', !!projT && projT.path.replace(/\\/g, '/').endsWith('Projects/演示/演示库') && projT.title === '演示库', JSON.stringify(projT));
+  check('落位：普通角色不落位', workspaceTargetFor('E:\\W', { role: 'plain' }) === null);
+  const row = findWorkspaceRow([{ id: 'w1', path: 'E:\\W\\_Misc' }], 'E:/W/_Misc/');
+  check('落位：按路径匹配已注册工作区', !!row && row.id === 'w1', JSON.stringify(row));
+  const { firstRoundMessageFor } = await import('./lib/manual.mjs');
+  const flow = firstRoundMessageFor({ role: 'misc', task: 'X' }, { previousRole: 'plain' });
+  check('首轮流程含方案与两种选择',
+    flow.indexOf('初步文件体系') !== -1 && flow.indexOf('一键建立') !== -1 && flow.indexOf('继续讨论') !== -1, flow.slice(0, 200));
+  // 宿主对 cwd 不符的会话只给英文原话；落位层要翻成可处置的中文。
+  const { placeSession } = await import('./lib/place.mjs');
+  const fakeEnv = {
+    registry: () => ({
+      list: () => [{ id: 'w1', title: '_Misc', path: 'E:\\W\\_Misc' }],
+      get: () => ({ attachSession: async () => { throw new Error("cannot attach session 's' to workspace 'E:\\W\\_Misc': its cwd resolves to 'E:\\W\\_Bench'"); } }),
+    }),
+  };
+  let placeMsg = '';
+  try { await placeSession(fakeEnv, 's', { role: 'misc' }, 'E:\\W'); } catch (e) { placeMsg = String((e && e.message) || e); }
+  check('落位：cwd 不符时给中文处置',
+    placeMsg.indexOf('不允许改会话工作目录') !== -1 && placeMsg.indexOf('E:\\W\\_Bench') !== -1, placeMsg);
+  const { placeNotice } = await import('./lib/place.mjs');
+  const stay = placeNotice(miscT, null, '会话工作目录是「E:\\W\\_Bench」，不在「_Misc」里；DSH 不允许改会话工作目录，所以移不进去。处置：在该工作区新建会话，或让本会话留在原位。');
+  check('落位：目录不符时回报留在原处并指向换任',
+    stay.indexOf('留在原目录') !== -1 && stay.indexOf('换任时接任者会直接建在「_Misc」') !== -1, stay);
+  check('落位：移入成功时回报工作区与新建标记',
+    placeNotice(miscT, { title: '_Misc', created: true }, '') === '工作区：已移入「_Misc」（本次新建）。',
+    placeNotice(miscT, { title: '_Misc', created: true }, ''));
+}
+
+/* ---------------- 内置归档器：长名按字节判断 ---------------- */
+{
+  const { packDirTarGz, listTarGz, extractTarGz } = await import('./lib/archive.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-tar-'));
+  try {
+    const srcDir = path.join(root, 'src');
+    // 字符数 < 100、UTF-8 字节数 > 100：旧实现按字符数判断，漏建 GNU 长名条目后被截断。
+    const cnName = '对齐检查_中文长名_' + '跨平台验证'.repeat(12) + '.md';
+    const asciiName = 'a'.repeat(130) + '.txt';
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, cnName), '中文内容');
+    fs.writeFileSync(path.join(srcDir, asciiName), 'ascii');
+    const out = path.join(root, 'pack.tar.gz');
+    packDirTarGz(srcDir, out);
+    const names = listTarGz(out).map((x) => x.rel);
+    check('归档：中文长名按字节进长名条目', names.indexOf(cnName) !== -1, '字节 ' + Buffer.byteLength(cnName));
+    check('归档：ASCII 长名进长名条目', names.indexOf(asciiName) !== -1);
+    const dest = path.join(root, 'dest');
+    extractTarGz(out, dest);
+    check('归档：中文长名恢复后文件名与内容一致',
+      fs.existsSync(path.join(dest, cnName)) && fs.readFileSync(path.join(dest, cnName), 'utf8') === '中文内容');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/* ---------------- 迁移与删除的跨平台回归 ---------------- */
+{
+  const { probeMove, rmTree } = await import('./lib/mover.mjs');
+  const moverSrc = fs.readFileSync(new URL('./lib/mover.mjs', import.meta.url), 'utf8');
+  check('迁移：模板路径用 fileURLToPath 还原（不用 URL.pathname 的百分号编码）',
+    moverSrc.indexOf('fileURLToPath(import.meta.url)') !== -1 && moverSrc.indexOf('new URL(import.meta.url).pathname') === -1);
+  check('迁移：删除重试按平台给目录权限位（POSIX 保留执行位）',
+    moverSrc.indexOf('isDir ? 0o755 : 0o666') !== -1);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-mover-'));
+  try {
+    // POSIX 只读目录：0555 的目录要先补权限位才删得掉子项；Windows 上按只读属性处理。
+    const tree = path.join(root, 'tree');
+    const ro = path.join(tree, '只读目录');
+    fs.mkdirSync(ro, { recursive: true });
+    fs.writeFileSync(path.join(ro, 'x.txt'), 'x');
+    try {
+      fs.chmodSync(path.join(ro, 'x.txt'), 0o444);
+      fs.chmodSync(ro, 0o555);
+    } catch { /* Windows 无 POSIX 位，忽略 */ }
+    const del = await rmTree(tree);
+    check('迁移：含只读目录的树可删净', del.ok === true && !fs.existsSync(tree), JSON.stringify({ ok: del.ok, exists: fs.existsSync(tree) }));
+  } finally {
+    try { fs.chmodSync(path.join(root, 'tree', '只读目录'), 0o755); } catch { /* 已删除 */ }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  if (process.platform !== 'win32') {
+    const root2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-mover-link-'));
+    try {
+      const real = path.join(root2, '真实根');
+      const link = path.join(root2, '链接根');
+      fs.mkdirSync(path.join(real, '_Control_Center'), { recursive: true });
+      fs.symlinkSync(real, link, 'dir');
+      const p = await probeMove({ src: link, to: path.join(root2, '目标父目录') });
+      check('迁移：当前根是目录符号链接时按真实位置预检',
+        p.srcIsLink === true && p.copyFrom === fs.realpathSync(real) && p.ok === true, JSON.stringify({ ok: p.ok, srcIsLink: p.srcIsLink, copyFrom: p.copyFrom }));
+    } finally {
+      fs.rmSync(root2, { recursive: true, force: true });
+    }
+  }
+}
+
+/* ---------------- 第二轮跨平台优化回归 ---------------- */
+{
+  const { pathsInText } = await import('./lib/text.mjs');
+  const hit = pathsInText('拷贝到 D:/ws/报告.md 与 /home/u/说明.txt 后核对');
+  check('自由文本：正斜杠盘符路径完整提取', hit.indexOf('D:/ws/报告.md') !== -1, JSON.stringify(hit));
+  check('自由文本：POSIX 绝对路径可提取', hit.indexOf('/home/u/说明.txt') !== -1, JSON.stringify(hit));
+  const { repeatStats } = await import('./lib/events.mjs');
+  const rs = repeatStats({ failures: [], fileReads: [{ path: '/A/x.md' }, { path: '/a/x.md' }, { path: '/A/x.md' }] });
+  const wantRepeat = (process.platform === 'win32' || process.platform === 'darwin') ? 3 : 2;
+  check('同文件统计按平台折叠大小写', rs.repeatFiles === wantRepeat, '实得 ' + rs.repeatFiles);
+  const { projectOf } = await import('./lib/sessions.mjs');
+  const proj = projectOf({ record: { identity: { cwd: path.join('/ws', 'Projects', 'Demo', 'Demo库') } } });
+  check('按 cwd 的 Projects 段识别项目会话', proj.real === true && proj.project === 'Demo', JSON.stringify(proj));
+  const lower = projectOf({ record: { identity: { cwd: '/ws/projects/Demo/Demo库' } } });
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    check('Windows 与 macOS 上小写 projects 段也认项目', lower.real === true, JSON.stringify(lower));
+  } else {
+    check('Linux 上小写 projects 段不误判为项目', lower.real === false, JSON.stringify(lower));
+  }
+  const { resolveWorkspaceFor } = await import('./lib/session-ops.mjs');
+  const envWs = { resolveWs: () => '/ws', registry: () => ({ list: () => [
+    { id: 'w-proj', title: '演示库', path: '/ws/Projects/演示/演示库' },
+    { id: 'w-proj2', title: '演示2库', path: '/ws/Projects/演示2/演示2库' },
+    { id: 'w-glob', title: '全局', path: '/ws' },
+  ] }) };
+  check('项目会话按路径段匹配工作区', resolveWorkspaceFor(envWs, null, 'project', '演示', '', {}) === 'w-proj');
+  let boundary = '';
+  try { resolveWorkspaceFor(envWs, null, 'project', '演示X', '', {}); } catch (e) { boundary = String((e && e.message) || e); }
+  check('项目名整段匹配，不做前缀误配', /尚无对应工作区/.test(boundary), boundary.slice(0, 120));
+  const { scanAbsolutePaths } = await import('./lib/path-scan.mjs');
+  const scanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-scan-'));
+  try {
+    fs.writeFileSync(path.join(scanRoot, 'note.md'), '数据在 /srv/app/data 下' + String.fromCharCode(10), 'utf8');
+    const scan = scanAbsolutePaths(scanRoot, { samples: 5 });
+    check('绝对路径扫描覆盖常见 Linux 根', (scan.samples || []).some((s) => JSON.stringify(s).indexOf('/srv/app/data') !== -1), JSON.stringify(scan.samples));
+  } finally {
+    fs.rmSync(scanRoot, { recursive: true, force: true });
+  }
 }
 
 console.log('');

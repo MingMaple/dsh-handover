@@ -34,7 +34,8 @@ const DIRS = [
   '_Temp',
 ];
 
-const FILES = [
+/** 工作区相对路径 ← 内置模板名。对齐检查复用它判断「工作区副本 vs 内置本体」。 */
+export const FILES = [
   ['_Control_Center/records/Global_Handover.md', 'Handover.global.skeleton.md'],
   ['_Control_Center/records/Global_Changelog.md', 'Changelog.skeleton.md'],
   // 全局总注册：只列各任务体系文件的路径；由 ho_docmap 或 scaffold 维护。

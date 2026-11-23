@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { pathKey } from './pathkey.mjs';
 import { aborted } from './abort.mjs';
 import { fmtBytes, writeFileAtomic } from './text.mjs';
@@ -155,14 +156,22 @@ export async function probeMove({ src, to }) {
   let st = null;
   try { st = fs.lstatSync(s); } catch { st = null; }
   if (!st) throw new Error('当前全局根不存在：' + s);
-  if (!st.isDirectory()) throw new Error('当前全局根不是目录：' + s);
-
+  // 当前根本身可能已是迁移后留下的链接（Windows junction / POSIX 目录符号链接）：
+  // lstat 对链接报的不是目录，不能据此拒绝，交给下面的链接分支按真实目标复制。
   const asLink = linkTargetOf(s);
+  if (!st.isDirectory() && !asLink) throw new Error('当前全局根不是目录：' + s);
+
   if (asLink) warnings.push('当前根已经是链接（指向 ' + asLink + '），本次以它的真实位置为复制的源');
   let copyFrom = s;
   if (asLink) {
-    try { copyFrom = tail(fs.realpathSync(s)); } catch { copyFrom = tail(asLink); }
+    try { copyFrom = tail(fs.realpathSync(s)); } catch {
+      // realpath 失败（悬空链接）时按链接自身解析相对目标，避免拿相对路径当绝对路径用。
+      copyFrom = path.isAbsolute(String(asLink)) ? tail(asLink) : tail(path.resolve(path.dirname(s), String(asLink)));
+    }
   }
+  let cfStat = null;
+  try { cfStat = fs.statSync(copyFrom); } catch { cfStat = null; }
+  if (!cfStat || !cfStat.isDirectory()) throw new Error('当前全局根指向的目标不是目录或已悬空：' + copyFrom);
   if (!fs.existsSync(path.join(copyFrom, '_Control_Center'))) warnings.push('源目录中无 _Control_Center：请确认该目录是否为全局根。');
 
   const raw = String(to || '').trim();
@@ -510,7 +519,9 @@ function writeRetargetHelper(plan) {
   fs.mkdirSync(stateDir(), { recursive: true });
   const helper = path.join(stateDir(), 'dsh-handover.retarget.mjs');
   const log = path.join(stateDir(), 'dsh-handover.retarget.log');
-  const tmplPath = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'retarget-helper.tmpl');
+  // 用 fileURLToPath 还原磁盘路径：URL.pathname 带百分号编码，安装路径含中文/空格时读不到模板
+  // （包目录名就是中文）。fileURLToPath 同时按平台还原 Windows 盘符。
+  const tmplPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'retarget-helper.tmpl');
   let tmpl = '';
   try { tmpl = fs.readFileSync(tmplPath, 'utf8'); } catch (e) { throw new Error('读不到修改登记模板：' + msgOf(e)); }
   const files = plan.files.filter((x) => x.count > 0).map((x) => x.path);
@@ -616,7 +627,10 @@ export async function rmTree(dir) {
         return true;
       } catch (e) {
         if (e && e.code === 'ENOENT') return true;
-        try { fs.chmodSync(ns(p), 0o666); } catch { /* 只读属性清不掉就再试 */ }
+        // Windows：chmod 只映射「只读」属性，0o666（有写位）就会去掉只读。
+        // POSIX：目录必须保留执行位才能进入并删除子项；设成 0o666 会去掉 x 位，
+        // 反而读不到、删不掉子项。所以目录补 0o755（读写+进入），文件仍 0o666。
+        try { fs.chmodSync(ns(p), process.platform === 'win32' ? 0o666 : (isDir ? 0o755 : 0o666)); } catch { /* 只读属性清不掉就再试 */ }
         try { fs.rmSync(ns(p), { force: true, maxRetries: 3, retryDelay: 100 }); return true; } catch { /* 下一轮再试 */ }
         if (i === 2) { fails.push(p + ' :: ' + msgOf(e)); return false; }
       }
@@ -624,6 +638,9 @@ export async function rmTree(dir) {
     return false;
   };
   const walk = (d) => {
+    // POSIX：只读目录（如 0555）连子项都删不掉，删除前先补上写位与执行位；
+    // Windows 的「只读」是文件属性（由上面 rmOne 的 chmod 0o666 处理），目录无需这一步。
+    if (process.platform !== 'win32') { try { fs.chmodSync(ns(d), 0o700); } catch { /* 只读挂载等，继续按原逻辑尝试 */ } }
     let ents = [];
     try { ents = fs.readdirSync(ns(d), { withFileTypes: true }); }
     catch (e) { if (!e || e.code !== 'ENOENT') fails.push(d + ' :: ' + msgOf(e)); return; }

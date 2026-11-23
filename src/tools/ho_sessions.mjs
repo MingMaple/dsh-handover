@@ -189,9 +189,11 @@ export function pmSessionsTool(env) {
           wake: args.notify !== false, migrate: args.migrate,
         });
         const out = [];
-        out.push(r.ok ? '已设定角色：' + (ROLE_LABEL[r.role] || r.role) : '现象：角色设定失败。原因：' + r.error + '。处置：核对会话 id 与角色参数后重试。');
+        const label = ROLE_LABEL[r.role] || r.role;
+        if (!r.ok) out.push('现象：角色设定失败。原因：' + r.error + '。处置：核对会话 id 与角色参数后重试。');
+        else out.push(r.unchanged ? '角色与当前一致：' + label + '（未写入角色记录，仅按需唤醒）' : '已设定角色：' + label);
         if (r.ok) {
-          out.push('  存活会话当场生效：' + (r.live ? '是（工具集与提示段已更换）' : '否（下次开轮时生效）'));
+          if (!r.unchanged) out.push('  存活会话当场生效：' + (r.live ? '是（工具集与提示段已更换）' : '否（下次开轮时生效）'));
           if (r.migrated) out.push('  身份互转：' + r.migrated + '。' + r.migrationSummary);
           if (r.pending) {
             out.push('  迁移待确认：文件体系仍在原布局' + (r.pendingPath ? '（' + r.pendingPath + '）' : '') + (r.delivered ? '，问句已投递。' : '，该会话首个轮次会问是否迁移。'));
@@ -199,6 +201,11 @@ export function pmSessionsTool(env) {
           }
           out.push('  首轮指令：' + (r.delivered ? '已投递，将唤醒该会话一轮' : (r.error ? '投递失败。原因：' + r.error + '。' : '未投递')));
           out.push('  注册名：' + (r.registeredName || '尚未注册。处置：由该会话首轮与当前用户确认后，执行 `ho_sessions(action="office-register")`。'));
+          if (r.placed) {
+            out.push('  工作区：已移入「' + r.placed.title + '」' + (r.placed.created ? '（本次新建）' : '') + (r.placed.path ? '（' + r.placed.path + '）' : ''));
+          } else if (r.placeError) {
+            out.push('  工作区：未移入。原因：' + r.placeError);
+          }
         }
         return { text: out.join(NL) };
       }

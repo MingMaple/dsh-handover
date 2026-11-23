@@ -74,7 +74,9 @@ export function packDirTarGz(srcDir, outFile) {
   for (const e of entries) {
     const nameBuf = Buffer.from(e.rel, 'utf8');
     const mtime = Math.floor((e.mtime || Date.now()) / 1000);
-    if (e.rel.length > 100) {
+    // tar 的 name 字段是 100 **字节**，不是 100 个字符。中文名按字符数判断会漏建 GNU 长名条目，
+    // 再被 tarHeader 按字节截断，恢复时名字残缺、内容对不上。按字节长度判断并建 LongLink。
+    if (nameBuf.length > 100) {
       const payloadName = Buffer.concat([Buffer.from(e.rel, 'utf8'), Buffer.alloc(1, 0)]);
       chunks.push(
         tarHeader(Buffer.from('././@LongLink', 'utf8'), { size: payloadName.length, mtime, type: 'L' }),

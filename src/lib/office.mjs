@@ -90,6 +90,15 @@ export function nextName(store, key) {
 }
 
 /**
+ * 名字比较口径：Windows 与 macOS 折叠大小写，Linux 区分。
+ * 文件系统如此，登记名也应如此：Linux 上 `Demo` 与 `demo` 可以是 2 个目录。
+ */
+function nameKey(s) {
+  const t = String(s == null ? '' : s).trim();
+  return process.platform === 'win32' || process.platform === 'darwin' ? t.toLowerCase() : t;
+}
+
+/**
  * 名字 → 类别。用户给的多半是不确定的名字（全局3、全局、Demo1、换过说法的旧名）。
  * 按「类别名精确 → 去尾部编号 → 现任名 → 唯一子串」4 步判定。
  * 判定不出唯一类别时列出候选，不猜测。
@@ -98,28 +107,28 @@ export function resolveOffice(store, query) {
   const q = String(query || '').trim();
   if (!q) return { ok: false, reason: '查询为空' };
   const keys = Object.keys((store && store.lineages) || {});
-  const lower = q.toLowerCase();
+  const lower = nameKey(q);
   let key = '';
   let via = '';
-  const exact = keys.filter((k) => k.toLowerCase() === lower);
+  const exact = keys.filter((k) => nameKey(k) === lower);
   if (exact.length === 1) { key = exact[0]; via = 'exact'; }
   if (!key) {
     const base = baseOf(q);
     if (base) {
-      const hit = keys.filter((k) => k.toLowerCase() === base.toLowerCase());
+      const hit = keys.filter((k) => nameKey(k) === nameKey(base));
       if (hit.length === 1) { key = hit[0]; via = 'generation'; }
     }
   }
   if (!key) {
     const hit = keys.filter((k) => {
       const cur = store.lineages[k] && store.lineages[k].current;
-      return cur && cur.name && String(cur.name).toLowerCase() === lower;
+      return cur && cur.name && nameKey(cur.name) === lower;
     });
     if (hit.length === 1) { key = hit[0]; via = 'current'; }
   }
   if (!key) {
     const hit = keys.filter((k) => {
-      const a = k.toLowerCase();
+      const a = nameKey(k);
       return a.indexOf(lower) !== -1 || lower.indexOf(a) !== -1;
     });
     if (hit.length === 1) { key = hit[0]; via = 'fuzzy'; }

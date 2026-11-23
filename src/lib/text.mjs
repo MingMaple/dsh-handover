@@ -18,6 +18,42 @@ export function isDir(p) {
 }
 
 /**
+ * 路径里是否有指定的目录段。大小写按平台折叠：Windows 与 macOS 折叠，Linux 区分。
+ * 用于「杂项会话只能建到 _Misc 下」这类判定：按整段比，不按子串比，
+ * 否则路径里带 misc 字样的项目会被误判成杂项目录。
+ * @param {string} p 路径或工作区名
+ * @param {string} seg 目录段，例如 `_Misc`
+ * @returns {boolean}
+ */
+export function hasPathSegment(p, seg) {
+  const fold = (s) => (process.platform === 'win32' || process.platform === 'darwin' ? String(s).toLowerCase() : String(s));
+  const want = fold(seg || '');
+  if (!want) return false;
+  const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(fold);
+  return parts.indexOf(want) !== -1;
+}
+
+/**
+ * 从自由文本里粗提路径：盘符路径（正斜杠、反斜杠这 2 种写法都认）与含 `/` 的相对/绝对路径。
+ * 供事件「同文件重复」统计与微快照「原文位置」共用，避免这两处各写一份正则。
+ * 盘符路径在 Windows 上两种分隔符等价；只认 `\` 会把 `D:/ws/x.md` 截成 `/ws/x.md`。
+ * @param {string} text 原始文本
+ * @param {number} [limit] 最多返回条数，默认 40
+ * @returns {string[]}
+ */
+export function pathsInText(text, limit) {
+  const out = [];
+  const re = /[A-Za-z]:[\\/][^\s"',;）)]+|(?:\.{0,2}\/)?(?:[\w.\-\u4e00-\u9fa5]+[\/]){1,}[\w.\-\u4e00-\u9fa5]+/g;
+  const max = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 40;
+  let m;
+  while ((m = re.exec(String(text || ''))) !== null) {
+    if (m[0].length >= 4 && m[0].length <= 260) out.push(m[0]);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
  * 项目名与任务名要当目录名用，必须在 Windows、macOS、Linux 上都合法。
  * 规则：非空、不超过 24 字符、不含控制字符与 < > : " / \ | ? *、不以点或空格结尾、不是设备保留名。
  * 名字常来自首条提示等自由文本，须逐一校验。

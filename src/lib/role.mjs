@@ -208,7 +208,7 @@ export function pendingOf(entry) {
 }
 
 /** cwd 落在 Projects/<名>/ 或 _Misc/tasks/<任务>/ 里就据此判定；名字不合法一律不认。 */
-function roleFromPath(cwd) {
+export function roleFromPath(cwd) {
   const seg = parts(cwd);
   for (let i = 0; i < seg.length; i++) {
     if (seg[i] === 'Projects' && isSafeName(seg[i + 1], PROJECT_NAME_MAX) && seg[i + 1] !== '_Project_Meta') {
@@ -274,11 +274,13 @@ export function resolveRole(opts) {
         const ok = !lay.kind || lay.kind === 'global' || layoutNameOk(lay.kind, lay.name);
         const layout = ok && lay.kind && lay.kind !== 'global' ? lay.kind : '';
         const pending = pendingOf(hit);
+        // 分叉副本：注册从家族沿用，但在任是唯一属性、不随分叉复制。工具据此把交接改成只读。
+        const fork = String(hit.source || '') === 'fork';
         return Object.assign({
           role, project: String(hit.project || ''), task: String(hit.task || ''),
           layout, layoutName: layout ? lay.name : '',
           source: 'store', sessionId: sid,
-        }, pending ? { pending } : {});
+        }, fork ? { fork: true, forkedFrom: String(hit.forkedFrom || '') } : {}, pending ? { pending } : {});
       }
     }
     // 旧角色表的 unknown 是备用状态，按新口径并入普通。

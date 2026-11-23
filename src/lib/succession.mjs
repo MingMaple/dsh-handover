@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 换任自服务：在任会话在用户授权后，自己校验交接、建接任会话、登记在任并投递启动提示词。
  *
  * 越权防线：建什么角色的会话只认会话自身已登记的角色（env.roleOf），不采信调用参数；
@@ -13,6 +13,7 @@ import { checkConsent, consumedConsent } from './consent.mjs';
 import { newSessionIn } from './session-create.mjs';
 import { sendPrompt } from './prompt.mjs';
 import { resolveWorkspaceFor, promptFor, workspaceIdOfPath, workspacePathOf } from './session-ops.mjs';
+import { ensureWorkspaceId } from './place.mjs';
 import { bandsFor, normWater } from './pressure.mjs';
 import { nextSectionCheck } from './lint.mjs';
 
@@ -204,16 +205,22 @@ export async function runSuccession(env, exec, opts) {
   // 5. 分配编号：登记表历史最大号加一，不采用会话自述。
   const name = nextName(store, key);
 
-  // 6. 确定工作区：与 ho_sessions(action="new") 同一套解析。
-  // 杂项接任者落回**本会话所在的注册工作区**（按会话 cwd 反查）；反查不到才退回工作区根。
+  // 6. 确定工作区：项目与杂项按角色约定落位（缺工作区就建），全局落工作区根。
+  // 旧逻辑对项目只匹配已注册工作区，缺工作区时直接报错；接任者必须有工作区，故改为先补齐。
   let workspaceId = '';
   try {
-    let wsOpt = {};
-    if (kind === 'misc') {
-      const selfCwd = typeof env.selfCwd === 'function' ? String(env.selfCwd(exec) || '') : '';
-      wsOpt = selfCwd && workspaceIdOfPath(env, selfCwd) ? { cwd: selfCwd } : { workspace: ws };
+    if (kind === 'project' || kind === 'misc') {
+      const auto = await ensureWorkspaceId(env, { role: kind, project, task }, ws);
+      if (auto) workspaceId = auto;
     }
-    workspaceId = resolveWorkspaceFor(env, exec, kind, project, task, wsOpt);
+    if (!workspaceId) {
+      let wsOpt = {};
+      if (kind === 'misc') {
+        const selfCwd = typeof env.selfCwd === 'function' ? String(env.selfCwd(exec) || '') : '';
+        wsOpt = selfCwd && workspaceIdOfPath(env, selfCwd) ? { cwd: selfCwd } : { workspace: ws };
+      }
+      workspaceId = resolveWorkspaceFor(env, exec, kind, project, task, wsOpt);
+    }
   } catch (e) {
     return reject(msgOf(e));
   }

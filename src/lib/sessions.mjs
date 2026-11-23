@@ -64,9 +64,12 @@ export function projectOf(data) {
   // 不先认路径，在任判定就可能落到已交出的旧会话上。
   // cwd 由宿主写入，最可靠。
   const raw = String(cwdOf(data) || '').replace(/\\/g, '/');
-  const ci = raw.toLowerCase().indexOf('/projects/');
+  // 插件约定的项目目录固定叫 `Projects`。Windows/macOS 文件系统默认不区分大小写，按折叠匹配；
+  // Linux 区分大小写，只认 `Projects`，否则用户自建的 `/home/x/projects/...` 会被误判成项目库。
+  const folded = process.platform === 'win32' || process.platform === 'darwin';
+  const ci = folded ? raw.toLowerCase().indexOf('/projects/') : raw.indexOf('/Projects/');
   if (ci !== -1) {
-    const name = raw.slice(ci + '/projects/'.length).split('/')[0];
+    const name = raw.slice(ci + '/Projects/'.length).split('/')[0];
     if (isSafeName(name)) return { project: name, real: true };
   }
   const text = pick(data, 'record', 'rows', 'titleInput', 'val', 'first', 'text') || '';

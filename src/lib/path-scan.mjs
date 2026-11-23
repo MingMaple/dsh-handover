@@ -20,7 +20,7 @@ const MAX_DEPTH = 8;
 const DEFAULT_SAMPLES = 5;
 
 /** 写死的绝对路径：盘符、UNC 与常见 Unix 根。 */
-const ABS_RE = /(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9._$-]+[\\/]|\/(?:Users|home|mnt|opt|var|private|root)\/)/;
+const ABS_RE = /(?:[A-Za-z]:[\\/]|\\\\[A-Za-z0-9._$-]+[\\/]|\/(?:Users|home|mnt|opt|var|srv|data|tmp|run|media|nix|snap|private|root)\/)/;
 
 /**
  * 扫描库内写死绝对路径。
