@@ -65,7 +65,7 @@
 写法示例：
 
 ```text
-你是子智能体 A。写域：src/lib/manual.mjs。必读：PLAN.md、Runtime_Manual.md §7、用语规范/README.md。
+你是子智能体 A。写域：src/lib/manual.mjs。必读：PLAN.md、Runtime_Manual.md §7、工作区写作规范。
 完成后只报改动文件与判据结果，不自行扩大写域。
 ```
 

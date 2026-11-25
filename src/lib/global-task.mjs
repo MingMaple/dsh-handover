@@ -29,6 +29,16 @@ function copyIf(src, dst) {
   return true;
 }
 
+/** 从插件内置模板复制；目标已存在时不覆盖。返回是否新建。 */
+function copyBundled(rel, dst) {
+  if (fs.existsSync(dst)) return false;
+  const src = new URL('../templates/' + rel, import.meta.url);
+  if (!isFile(src)) return false;
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+  return true;
+}
+
 /**
  * 建立全局任务库：目录、交接、体系注册、规则与模板副本；随后重建全局总注册。
  * @returns {{ dir: string, created: string[] }}
@@ -50,10 +60,10 @@ export function createGlobalTask(ws, task) {
     fs.writeFileSync(dst, body, 'utf8');
     created.push(rel);
   }
-  // 暂任规范与交接规范随任务库独立，避免暂任方跨库读取全局规则。
-  const rules = path.join(String(ws || ''), '_Control_Center', 'rules');
-  for (const rel of ['Delegation_Rules.md', 'Handover_Rules.md']) {
-    if (copyIf(path.join(rules, rel), path.join(dir, rel))) created.push(rel);
+  // 暂任与交接规范随任务库独立：暂任方拿不到工作区配置，规则须在任务库内可读。
+  // 来源是插件内置本体，不依赖工作区是否留有副本。
+  for (const rel of ['rules/Delegation_Rules.md', 'rules/Handover_Rules.md']) {
+    if (copyBundled(rel, path.join(dir, path.basename(rel)))) created.push(path.basename(rel));
   }
   const tpl = path.join(String(ws || ''), '_Control_Center', 'templates');
   for (const rel of ['Plan.skeleton.md', 'System.skeleton.md']) {

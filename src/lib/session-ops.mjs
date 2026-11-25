@@ -439,11 +439,11 @@ export function promptFor(env, opts) {
   const extraLines = [];
   if (kind === 'project' && project) {
     extraLines.push('库根：Projects/' + project + '/；元数据：_Project_Meta/' + project + '/；快照：_Temp/' + project + '/Snapshots/');
-    extraLines.push('作业前读库根 SKILL.md；修改文档时另读 _Control_Center/rules/ 下的对应规范。');
+    extraLines.push('作业前读库根 SKILL.md；修改文档时按 `ho_docmap(action="rules-read", doc=…)` 取对应规范。');
     extraLines.push('进入预警区后写交接。上下文重置与换任须由当前用户授权：在聊天框发送 /allow-reset，再由本会话调用 succeed 完成，不向全局请求。');
   }
-  if (kind === 'misc') extraLines.push('标准见 rules/Misc_Task_Standard.md。换任须经当前用户授权，再由本会话调用 ho_sessions(action="succeed")。');
-  if (kind === 'migration') extraLines.push('迁移口径见 rules/Migration_Rules.md。通过顶层闸门后再开始作业。');
+  if (kind === 'misc') extraLines.push('标准见 `ho_docmap(action="rules-read", doc="misc_standard")`。换任须经当前用户授权，再由本会话调用 ho_sessions(action="succeed")。');
+  if (kind === 'migration') extraLines.push('迁移口径见 `ho_docmap(action="rules-read", doc="migration_rules")`。通过顶层闸门后再开始作业。');
   if (o.extra) extraLines.push(String(o.extra));
   return [body].concat(extraLines.length ? ['', ...extraLines] : []).join(NL);
 }

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "上下文治理 (dsh-handover)",
-    "description": "功能完善的工作流：上下文将满时写好要点再压缩，必要时换任；较重任务先写计划再执行。任务可交给 DeepSeek Harness（DSH）之外的会话完成并交回。整个项目也可临时移交。",
+    "description": "功能完善的工作流：上下文到线时先写要点再压缩，必要时换任；较重任务先写计划再执行。任务可交给 DeepSeek Harness（DSH）之外的会话完成并交回。整个项目也可临时移交。",
     "detail": "docs/DETAIL.md"
   }
 }

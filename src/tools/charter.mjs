@@ -5,7 +5,8 @@ import { textOutput } from '../lib/output.mjs';
 import { NL, readUtf8, isFile, sectionLines } from '../lib/text.mjs';
 import { charterPath, canonicalBlock } from '../lib/charter.mjs';
 
-// tpl＝工作区没有这份时退回的**内置同名模板**（dist/templates 下）。插件不依赖旧全局的文件。
+// tpl＝内置本体（dist/templates 下）。工作区同名文件存在时优先，作为本地化覆盖；不存在时直接读内置。
+// 机制规则以插件本体为准，插件部署不往工作区铺这些文件。
 const FILES = [
   { key: 'charter', rel: ['_Control_Center', 'rules', 'Workspace_Charter.md'], tpl: 'Charter.skeleton.md' },
   { key: 'handover_rules', rel: ['_Control_Center', 'rules', 'Handover_Rules.md'], tpl: 'rules/Handover_Rules.md' },
@@ -13,7 +14,7 @@ const FILES = [
   { key: 'misc_standard', rel: ['_Control_Center', 'rules', 'Misc_Task_Standard.md'], tpl: 'rules/Misc_Task_Standard.md' },
   { key: 'delegation_rules', rel: ['_Control_Center', 'rules', 'Delegation_Rules.md'], tpl: 'rules/Delegation_Rules.md' },
   { key: 'external_takeover_rules', rel: ['_Control_Center', 'rules', 'External_Takeover_Rules.md'], tpl: 'rules/External_Takeover_Rules.md' },
-  { key: 'writing_rules', rel: ['_Control_Center', 'user', 'Writing_Rules.md'], tpl: 'rules/Writing_Rules.md' },
+  { key: 'team_collab_rules', rel: ['_Control_Center', 'rules', 'Team_Collab_Rules.md'], tpl: 'rules/Team_Collab_Rules.md' },
 ];
 
 function bundledTemplate(name) {

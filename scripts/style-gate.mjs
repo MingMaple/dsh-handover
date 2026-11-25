@@ -1,17 +1,17 @@
 /**
- * 语体门禁（style-gate）：按写作规范中标注「自动」的条款检查中文串。
+ * 语体门禁（style-gate）：按本文件自带的词表检查中文串。
  *
- * 规范正文：_Control_Center/standards/写作规范/README.md（W-01 至 W-42）。
- * 本脚本只实现本次分配的十个条款：
- *   阻断级（命中即退出码 1）：W-01、W-02、W-04、W-05、W-07、W-08；
- *   警告级（只命中警告时退出码 0）：W-09、W-19（仅判文档）、W-26、W-38。
+ * 词表随脚本维护，编号为门禁内部标识，不依赖任何外部规范文件。
+ * 本脚本只实现本次分配的十个规则：
+ *   阻断级（命中即退出码 1）：口语词、情绪与评价词、填充语、界面动作用字、表情与装饰符号、感叹号；
+ *   警告级（只命中警告时退出码 0）：长句、缩写未展开（仅判文档）、汉字计量、版本说明分组。
  *
- * 扫描范围：README.md、docs/**\/*.md、src/templates/**（不含 src/templates/standards/）、
+ * 扫描范围：README.md、docs/**\/*.md、src/templates/**、
  * src/**\/*.mjs、src/client.js。代码文件只看注释与字符串字面量；文档只看正文，
  * 不扫描 fenced code block 与行内代码段。
  *
- * 唯一例外 E-01：对外仓库 README.md「为什么需要」一节的指定正文豁免 W-01；按节绑定，由 check-docs 逐字比对；不得扩充。
- * 行级例外 [@example]：设置页话术示例保留口语，只豁免标记所在的物理行（仅 W-01），逐条打印，不整文件、不整目录豁免。
+ * 唯一例外：对外仓库 README.md「为什么需要」一节的指定正文豁免口语词规则；按节绑定，由 check-docs 逐字比对；不得扩充。
+ * 行级例外 [@example]：设置页话术示例保留口语，只豁免标记所在的物理行（仅口语词规则），逐条打印，不整文件、不整目录豁免。
  *
  * 用法：node scripts/style-gate.mjs
  * 只读，不写任何文件；只用 node:fs 与 node:path，无第三方依赖。
@@ -24,14 +24,14 @@ import { readMarkedLines, EXAMPLE_MARK } from './lib/example-mark.mjs';
 
 /* ============================== 常量表 ============================== */
 
-/** 唯一例外 E-01：对外 README「为什么需要」一节的指定句（用户指定保留；整句不计 W-01、W-09）；不得扩充。 */
+/** 唯一例外：对外 README「为什么需要」一节的指定句（用户指定保留；整句不计口语词与长句规则）；不得扩充。 */
 const E01_TEXT = '本插件一定能很好地帮助你。来试试吧；不满意，随时关闭插件并删除即可。';
 const E01_LEAD = '单个会话的上下文越用越多，用到一定程度之后，出错的可能也会随之上升；可若这时压缩上下文，或者写好交接换一个会话，又会丢掉已经积累的信息。面对这样的两难，有没有更好的取舍？';
 
 /** 规范正文与论文属规范性文本，条款本身会引用被禁词，整目录排除。 */
-const SKIP_DIRS = ['src/templates/standards'];
+const SKIP_DIRS = [];
 
-/** W-01 语气词与口语词（规范正文原表）。 */
+/** 语气词与口语词（本门禁词表）。 */
 const W01_WORDS = ['吧', '呢', '啦', '嘛', '呀', '哈', '哦', '其实', '反正'];
 
 /**
@@ -42,10 +42,10 @@ function isW01Word(text, at, word) {
   return !(word === '哈' && text[at + 1] === '希');
 }
 
-/** W-02 情绪化、评价性表达（规范正文原表）。 */
+/** 情绪化、评价性表达（本门禁词表）。 */
 const W02_WORDS = ['完美', '惊艳', '糟糕', '坑', '丝滑', '离谱'];
 
-/** W-04 填充语（规范正文原表）。 */
+/** 填充语（本门禁词表）。 */
 const W04_WORDS = ['值得注意的是', '众所周知', '简单来说'];
 
 /**
@@ -400,7 +400,7 @@ function wordHits(text, words) {
 
 /** 逐段判定阻断级条款（W-01、W-02、W-04、W-05、W-07、W-08）。 */
 function scanBlockRules(rel, seg, add, allowW01) {
-  // E-01：README.md「为什么需要」一节的指定句豁免 W-01（按节绑定，不按行号；该节正文由 check-docs 逐字比对）。
+  // 指定例外：README.md「为什么需要」一节的指定句豁免口语词规则（按节绑定，不按行号；该节正文由 check-docs 逐字比对）。
   const e01 = rel === 'README.md' && (String(seg.raw || '').indexOf(E01_TEXT) !== -1 || String(seg.raw || '').indexOf(E01_LEAD) !== -1);
   if (!e01) {
     for (const h of wordHits(seg.text, W01_WORDS)) {
@@ -444,7 +444,7 @@ function scanBlockRules(rel, seg, add, allowW01) {
 /** W-09：单句超过上限。表格、代码块、长路径均不参与统计。 */
 function scanW09(seg, add, rel) {
   if (seg.table) return;
-  // E-01：README「为什么需要」一节由 check-docs 逐字比对，长句不计 W-09。
+  // 指定例外：README「为什么需要」一节由 check-docs 逐字比对，长句不计。
   if (rel === 'README.md' && String(seg.raw || '').indexOf(E01_LEAD) !== -1) return;
   // selftest 的用例名与夹具正文是内部测试数据，不面向用户，不按用户文档标准判 W-09。
   if (rel === 'src/selftest.mjs') return;

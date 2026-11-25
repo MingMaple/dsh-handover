@@ -22,16 +22,24 @@ const DIRS = [
   '_Control_Center/records',
   '_Control_Center/rules',
   '_Control_Center/standards',
-  '_Control_Center/standards/团队协作规范',
   '_Control_Center/templates',
   '_Control_Center/tools',
   '_Control_Center/tasks',
-  '_Control_Center/user',
   'Projects',
   '_Project_Meta',
   '_Misc/tasks',
   '_Archives/_Global/Backups',
   '_Temp',
+];
+
+/** 机制规则清单：正文随插件本体分发，不铺到工作区；工作区留同名文件即视为本地化覆盖。对齐检查用它识别遗留副本。 */
+export const MECHANISM_RULES = [
+  'Handover_Rules.md',
+  'Migration_Rules.md',
+  'Misc_Task_Standard.md',
+  'Delegation_Rules.md',
+  'External_Takeover_Rules.md',
+  'Team_Collab_Rules.md',
 ];
 
 /** 工作区相对路径 ← 内置模板名。对齐检查复用它判断「工作区副本 vs 内置本体」。 */
@@ -45,19 +53,10 @@ export const FILES = [
   ['_Control_Center/templates/Handover.md', 'Handover.template.md'],
   ['_Control_Center/templates/Plan.skeleton.md', 'Plan.skeleton.md'],
   ['_Control_Center/templates/System.skeleton.md', 'System.skeleton.md'],
-  // 通用规范：一条规范一个子目录，各角色会话都可读，只有全局写。
-  ['_Control_Center/standards/README.md', 'standards/README.md'],
-  ['_Control_Center/standards/写作规范/README.md', 'standards/写作规范/README.md'],
-  ['_Control_Center/standards/写作规范/依据_论文.md', 'standards/写作规范/依据_论文.md'],
-  ['_Control_Center/standards/团队协作规范/README.md', 'standards/团队协作规范/README.md'],
-  // 规则类：工作区没有这份文件时，ho_docmap 的 rules-read 退回同名内置版本。
-  // 这里先铺一份可修改的默认口径，便于用户按自己的习惯调整。
-  ['_Control_Center/rules/Handover_Rules.md', 'rules/Handover_Rules.md'],
-  ['_Control_Center/rules/Migration_Rules.md', 'rules/Migration_Rules.md'],
-  ['_Control_Center/rules/Misc_Task_Standard.md', 'rules/Misc_Task_Standard.md'],
-  ['_Control_Center/rules/Delegation_Rules.md', 'rules/Delegation_Rules.md'],
-  ['_Control_Center/rules/External_Takeover_Rules.md', 'rules/External_Takeover_Rules.md'],
-  ['_Control_Center/user/Writing_Rules.md', 'rules/Writing_Rules.md'],
+  // 通用规范目录只建空壳：规范属工作区数据，插件不预置任何正文。
+  // 机制规则不落工作区：它们属插件功能，正文随包分发，会话按 rules-read 读取，不铺副本。
+  // 工作区只放属于工作区自身的 2 类：章程骨架与模板骨架。
+  // 工作区只放属于工作区自身的 2 类：章程骨架与模板骨架。规范与个人内容由工作区自己维护，插件既不预置也不写盘。
 ];
 
 /** 规整用户粘贴的路径：去掉引号与末尾分隔符、展开 ~、解析成绝对路径。

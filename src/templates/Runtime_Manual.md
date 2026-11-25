@@ -9,8 +9,8 @@
 ## 1. 使用方式
 
 - 按节取回：`ho_docmap(action="rules-read", doc="runtime", section="体系注册")`。不传 `section` 时只返回节标题清单，便于先看目录、再取正文。
-- 规则文件取回：`ho_docmap(action="rules-read", doc="handover_rules" | "migration_rules" | "misc_standard" | "delegation_rules" | "external_takeover_rules" | "writing_rules")`；`doc="charter"` 取工作区 Charter。
-- 内置兜底：工作区没有对应规则文件时，工具返回插件内置版本并注明来源。空白机器上同样可用。
+- 规则文件取回：`ho_docmap(action="rules-read", doc="handover_rules" | "migration_rules" | "misc_standard" | "delegation_rules" | "external_takeover_rules" | "team_collab_rules")`；`doc="charter"` 取工作区 Charter。
+- 机制规则以插件本体为准：正文随包分发，插件不往工作区铺副本。工作区放同名文件时优先，作为本地化覆盖。空白机器上同样可用。
 - 未接入工作区时（读不到 `_Control_Center`），插件本体仍可用；闸门、交接体检与会话水位 3 项无数据。
 - 插件服务端为纯 Node 实现，Windows、macOS 与 Linux 使用同一套代码。路径比较按平台折叠大小写；归档优先使用 7-Zip，未安装时使用内置 tar.gz。
 
@@ -38,7 +38,7 @@
 
 ### 3.1 状态与文档
 
-- `ho_status`：`view` 决定视图，缺省为 `phase`。`phase` 给出水位、压缩、段索引、快照、判据与建议动作、当前授权。`pressure` 给出压力遥测：水位、余量、增速、剩余轮数与分档线。`brief` 给起始简报，`diag` 给插件自检，`drift` 给交接漂移，`tokens` 给 token 体检。`gate` 复核通用约束条、交接体检、体系注册路径与待迁移提示。`recall` 做原文召回：`mode` 取 `auto`、`literal`、`regex`、`bm25`、`structural`；`filter` 例 `type:tool/result, error:true, tool:read`；`order` 取 `time`（缺省）或 `relevance`；`around=<seq>` 展开前后各 3 条。头部给出全量命中数、合并组数与返回组数；每组给出代表 `seq`、范围、出现次数与摘录。空结果返回候选段与建议关键词。
+- `ho_status`：`view` 决定视图，缺省为 `phase`。`phase` 给出水位、压缩、段索引、快照、判据与建议动作、当前授权。`pressure` 给出压力遥测：水位、余量、增速、剩余轮数与分档线。`brief` 给起始简报，`diag` 给插件自检，`drift` 给交接漂移，`tokens` 给 token 体检。`gate` 复核通用约束条、交接体检、体系注册路径与待迁移提示。`align` 换版对齐检查：按内置标准文件出须补清单。`recall` 做原文召回：`mode` 取 `auto`、`literal`、`regex`、`bm25`、`structural`；`filter` 例 `type:tool/result, error:true, tool:read`；`order` 取 `time`（缺省）或 `relevance`；`around=<seq>` 展开前后各 3 条。头部给出全量命中数、合并组数与返回组数；每组给出代表 `seq`、范围、出现次数与摘录。空结果返回候选段与建议关键词。
 - `ho_docmap`：`action` 取 `registry-read | registry-write | registry-check`（体系注册）、`plan-read | plan-write | plan-archive`（行动计划）、`profile-read | profile-register | profile-validate | profile-presets`（项目或杂项骨架）、`changelog-append`（台账）、`rules-read`（按节取规则正文，见 §1）。
 
 ### 3.2 会话
@@ -169,7 +169,7 @@
 ### 7.2 交出与归还
 
 - 交出前先刷新交接。交出方仍为该任务的在任者，暂任不改变交接归属。
-- 交出方把暂任提示词写入 `Delegation_Prompt.md`。回复中用代码块给出一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」，不粘贴提示词全文，由用户转交暂任方。
+- 交出方把暂任提示词写入 `Delegation_Prompt.md`。回复中用代码块给出一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」。不粘贴提示词全文，由用户转交暂任方。
 - 索引只在交出当轮给一次。用户尚未交出、只是补充或修改口径时，先讨论敲定；敲定后重写提示词，再给一次索引。此后问答直接回答问题本身，不重复索引。
 - 暂任不是换任：不申请换任授权、不建接任会话、在任登记不变，交出方仍是在任者。
 - 归还时再次刷新交接，交接的身份字段填暂任者，回复中同样给出可复制文本。
@@ -188,13 +188,13 @@
 
 | 用户说 | 先读 | 读法与判据 |
 |---|---|---|
-| 暂任、交给外部会话 | `_Control_Center/rules/Delegation_Rules.md` 与 `_Control_Center/rules/External_Takeover_Rules.md` | 同一机制：承接方是不在 DSH 内的外部会话，没有 `ho_*` 与 `peer`；按 §3 交出流程办理，暂任不是换任 |
-| 归还 | `_Control_Center/rules/Delegation_Rules.md` §4 | 归还三法任选其一；交接的身份字段填暂任者，并给出回执话术 |
-| 团队协作 | `_Control_Center/standards/团队协作规范/README.md` | 协作只适用于插件会话之间，用 `peer`（`action="collab"` → `collect`）；外部暂任会话不用 |
-| 切换身份 | `_Control_Center/rules/Workspace_Charter.md` 第七章 | 设置页改角色；或由全局调用 `ho_sessions(action="role", session_id=…, role=…)` |
+| 暂任、交给外部会话 | `rules-read` 的 `delegation_rules` 与 `external_takeover_rules` | 同一机制：承接方是不在 DSH 内的外部会话，没有 `ho_*` 与 `peer`；按 §3 交出流程办理，暂任不是换任 |
+| 归还 | `rules-read` 的 `delegation_rules` §4 | 归还三法任选其一；交接的身份字段填暂任者，并给出回执话术 |
+| 团队协作 | `rules-read` 的 `team_collab_rules` | 协作只适用于插件会话之间，用 `peer`（`action="collab"` → `collect`）；外部暂任会话不用 |
+| 切换身份 | `rules-read` 的 `charter` 第七章 | 设置页改角色；或由全局调用 `ho_sessions(action="role", session_id=…, role=…)` |
 
-- 上表 5 个词的规范文件均在工作区内，按所列路径读；工作区缺该文件时，`doc="external_takeover_rules"` 取内置版本。
-- 交出前先判断任务难度，再决定是否引入子智能体；判据与 2 种分支写法见 `Delegation_Rules.md` §3.1。
+- 上表 5 个词的规范正文随插件分发，按 `ho_docmap(action="rules-read", doc=…)` 读取；工作区放同名文件时优先，作为本地化覆盖。
+- 交出前先判断任务难度，再决定是否引入子智能体；判据与 2 种分支写法见 `rules-read` 的 `delegation_rules` §3.1。
 
 ## 8. 身份、名称与首轮
 
@@ -313,11 +313,12 @@
 ## 14. 通用规范与写作规范
 
 - 位置：`_Control_Center/standards/`。一条规范一个子目录，目录名即规范名，正文入口为子目录内的 `README.md`。规范自带的脚本与附件放在同一子目录，不混入 `_Control_Center/tools/`。
+- 归属：本目录属工作区数据，插件只建空目录，不预置任何规范正文。写作规范同样由工作区自管，插件不内置、不覆盖、不校验其存在。
 - 作用域：任何角色的会话都可读；新增与改写由全局会话执行，项目与杂项只读。
 - 写入范围：用户提到「把某某写成规范」时，未指明范围即写本会话所在的工作区。仅当用户说「写入通用规范库」「写成通用规范」或「写成共用规范」时，才写本目录。
 - 查找范围：先看本库有无同名规范，再看本目录。2 处都有时按本库那份执行，本目录那份作为通用版本。
-- 写作规范固定存放于 `_Control_Center/standards/写作规范/README.md`（W-01 至 W-42），研究依据在同目录 `依据_论文.md`（只作追溯，不注入提示段）。提示段只放一行指针，不注入条款正文。
-- 与相邻位置的分工：`_Control_Center/rules/` 是工作区自身的运行规则，`_Control_Center/user/` 存放用户内容与写作规则。本目录存放可复用的做法，按名称被引用。
+- 写作规范约定位置为 `_Control_Center/standards/写作规范/README.md`，研究依据等附件可放同目录，只作追溯，不注入提示段。提示段只放一行指针，不注入条款正文；该文件不存在时按工作区现有惯例执行。
+- 与相邻位置的分工：`_Control_Center/rules/` 是工作区自身的运行规则，`_Control_Center/user/` 由用户自行放置个人内容，插件不预置也不写盘。本目录存放可复用的做法，按名称被引用。
 - 补齐：插件新增目录后，已部署的工作区执行 `ho_workspace(action="scaffold")`；该动作只建缺失项，已有文件不覆盖。
 - 正文只写做法、判据与验收条件，不记某次作业的进度；进度归交接与台账。
 

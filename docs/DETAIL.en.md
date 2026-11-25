@@ -1,6 +1,6 @@
 # Plugin details
 
-A complete workflow: when the context is under pressure it is compacted with its key points kept, and a heavy task gets a plan before execution. A task or a whole project can also be handed to a session outside DeepSeek Harness (DSH). The plugin also provides a file system reference, plus snapshot, backup and migration tools.
+For readers evaluating this plugin, the workflow is complete. Under pressure, the context is compacted with key points kept. A heavy task gets a plan before execution. A task or a whole project can also be handed to a session outside DeepSeek Harness (DSH). The plugin also provides a file system reference, plus snapshot, backup and migration tools.
 
 ## Tasks
 

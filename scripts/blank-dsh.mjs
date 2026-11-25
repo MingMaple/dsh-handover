@@ -88,16 +88,25 @@ for (const rel of [
   '_Control_Center/templates/Handover.md',
   '_Control_Center/templates/Plan.skeleton.md',
   '_Control_Center/templates/System.skeleton.md',
+]) {
+  ok(fs.existsSync(path.join(WS, rel)), '铺好 ' + rel);
+}
+// 机制规则随插件本体分发，部署不铺副本；工作区有同名文件即视为本地化覆盖。
+for (const rel of [
   '_Control_Center/rules/Handover_Rules.md',
   '_Control_Center/rules/Migration_Rules.md',
   '_Control_Center/rules/Misc_Task_Standard.md',
   '_Control_Center/rules/Delegation_Rules.md',
-  '_Control_Center/user/Writing_Rules.md',
-  '_Control_Center/standards/写作规范/README.md',
-  '_Control_Center/standards/写作规范/依据_论文.md',
+  '_Control_Center/rules/External_Takeover_Rules.md',
+  '_Control_Center/rules/Team_Collab_Rules.md',
 ]) {
-  ok(fs.existsSync(path.join(WS, rel)), '铺好 ' + rel);
+  ok(!fs.existsSync(path.join(WS, rel)), '不铺机制规则 ' + rel);
 }
+// 规范与用户数据属工作区：目录可建，正文不预置；个人目录不代建。
+ok(fs.existsSync(path.join(WS, '_Control_Center/standards')), '建好 _Control_Center/standards 目录');
+ok(!fs.existsSync(path.join(WS, '_Control_Center/user')), '不代建 _Control_Center/user');
+ok(!fs.existsSync(path.join(WS, '_Control_Center/standards/写作规范')), '不预置 standards/写作规范');
+ok(!fs.existsSync(path.join(WS, '_Control_Center/standards/团队协作规范')), '不预置 standards/团队协作规范');
 
 {
   const { writeRole } = await import(pathToFileURL(path.join(dist, 'lib', 'role.mjs')).href);
@@ -143,11 +152,10 @@ for (const rel of [
   '_Control_Center/rules/Migration_Rules.md',
   '_Control_Center/rules/Misc_Task_Standard.md',
   '_Control_Center/rules/Delegation_Rules.md',
-  '_Control_Center/user/Writing_Rules.md',
   '_Control_Center/templates/Prompt_Templates.md',
   '_Control_Center/records/Global_Changelog.md',
 ]) fs.rmSync(path.join(WS, rel), { force: true });
-for (const doc of ['handover_rules', 'migration_rules', 'misc_standard', 'delegation_rules', 'writing_rules']) {
+for (const doc of ['handover_rules', 'migration_rules', 'misc_standard', 'delegation_rules', 'team_collab_rules']) {
   const r = await run('ho_docmap', { action: 'rules-read', doc }, WS, 'session-blank-test', '空白验收');
   ok(!r.err && r.text.length > 50 && /内置/.test(r.text), 'ho_docmap rules-read doc=' + doc + ' 用内置默认', r.err || String(r.text.length));
 }

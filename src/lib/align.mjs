@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULTS } from './config.mjs';
-import { FILES } from './scaffold.mjs';
+import { FILES, MECHANISM_RULES } from './scaffold.mjs';
 import { listProfiles } from './profile.mjs';
 import { checkRegistries } from './system.mjs';
 import { syncCheck } from './gates.mjs';
@@ -67,6 +67,14 @@ function copyDrift(ws) {
     if (missing.length || !local) rows.push({ rel, exists: true, bundledOnly: missing, wsExtra: extra.length });
   }
   return rows;
+}
+
+/** 遗留副本：机制规则已改为随插件本体分发，工作区若仍有同名文件，会盖住内置版本。 */
+function legacyRules(ws) {
+  const dir = path.join(ws, '_Control_Center', 'rules');
+  return MECHANISM_RULES
+    .filter((name) => isFile(path.join(dir, name)))
+    .map((name) => ({ rel: '_Control_Center/rules/' + name, name }));
 }
 
 /** 配置里被本工作区改过的键（与插件默认值对照）。 */
@@ -132,6 +140,7 @@ export function alignReport(ws, env) {
     connected: isDir(path.join(root, '_Control_Center')),
     config: [],
     copies: [],
+    legacy: [],
     profiles: [],
     registries: { rows: [], unset: 0 },
     gate: { ok: true, total: 0, libraries: [] },
@@ -142,6 +151,7 @@ export function alignReport(ws, env) {
 
   out.config = configDrift(cfg);
   out.copies = copyDrift(root);
+  out.legacy = legacyRules(root);
 
   for (const p of listProfiles(root)) {
     if (!p.exists) out.profiles.push({ name: p.name, role: p.role, kind: p.kind, exists: false, missing: [] });
@@ -186,6 +196,7 @@ export function alignHasGap(res) {
   return !!(
     (r.config && r.config.length)
     || (r.copies && r.copies.length)
+    || (r.legacy && r.legacy.length)
     || (r.profiles && r.profiles.length)
     || (r.registries && r.registries.rows.length)
     || (r.gate && (r.gate.libraries.length || !r.gate.ok))
@@ -228,6 +239,13 @@ export function renderAlign(res, opts) {
       if (!c.exists) out.push('  缺整份：' + c.rel);
       else out.push('  ' + c.rel + '  缺节 ' + c.bundledOnly.length + (c.bundledOnly.length ? '：' + c.bundledOnly.slice(0, 2).join('／') : ''));
     }
+  }
+
+  if (r.legacy && r.legacy.length) {
+    gap += r.legacy.length;
+    out.push('');
+    out.push('遗留机制规则副本 ' + r.legacy.length + ' 份（正文已随插件分发，工作区同名文件会盖住内置版本）');
+    for (const x of r.legacy.slice(0, 8)) out.push('  ' + x.rel + '  未改动则删除，确有本地化改动则保留并记一句用途');
   }
 
   if (r.profiles && r.profiles.length) {

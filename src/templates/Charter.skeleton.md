@@ -41,7 +41,7 @@
 
 ## 9. 上下文水位自查
 
-每个项目库的 `RULES.md` 应含一行「上下文水位自查」。插件按 token 分档：整理线 soft、建议线 advise、强制线 hard。3 档＝当前窗口 × 35%/50%/65%，不扣预留输出，不设绝对 token 回退。200K 窗即 70K/100K/130K，1M 窗即 350K/500K/650K。窗口读不到时不判定，不注入档位提示。前两档只提示。助手在子任务闭环或阶段切换时先写胶囊，再调用 `ho_handover(action="compact", capsule=…)`。强制线由插件兜底压缩。助手入口与提示在 4 次后关闭，强制线兜底至 6 次；宿主 80% 兜底。
+每个项目库的 `RULES.md` 应含一行「上下文水位自查」。插件按 token 分档：整理线 soft、建议线 advise、强制线 hard。3 档＝当前窗口 × 35%/50%/65%，不扣预留输出，不设绝对 token 回退。200K 窗即 70K/100K/130K，1M 窗即 350K/500K/650K。窗口读不到时不判定，不注入档位提示。前两档只提示。助手在子任务完成或阶段切换时先写胶囊，再调用 `ho_handover(action="compact", capsule=…)`。强制线由插件兜底压缩。助手入口与提示在 4 次后关闭，强制线兜底至 6 次；宿主 80% 兜底。
 `ho_status(view="gate")` 会逐库检查：标题行存在、24 行正文一行不缺、水位自查存在。缺任一项，该库判定为未通过。
 
 ## 10. 工作区约定
@@ -51,8 +51,8 @@
 - 会话提示词模板：`_Control_Center/templates/Prompt_Templates.md`（由 `ho_sessions` 的 `action=prompt` 渲染）
 - 体系注册：全局总注册 `_Control_Center/records/systems.md`（只列各任务体系文件路径），各任务一份 `System.md`（全局任务 `_Control_Center/tasks/<任务名>/System.md`、项目 `_Project_Meta/<项目名>/System.md`、杂项 `_Misc/tasks/<任务名>/System.md`）
 - 行动计划：任务根 `PLAN.md`；先读模板再写，旧计划先归档到任务根 `_archive/`，归档后不读旧计划
-- 暂任提示词：任务根 `Delegation_Prompt.md`；规则见 `_Control_Center/rules/Delegation_Rules.md`
-- 写作规范：`_Control_Center/standards/写作规范/README.md`（W-01 至 W-42）
+- 暂任提示词：任务根 `Delegation_Prompt.md`；规则随插件分发，读 `ho_docmap(action="rules-read", doc="delegation_rules")`
+- 写作规范：`_Control_Center/standards/写作规范/README.md`，由工作区自管，插件不内置
 - 项目库：`Projects/<项目名>/<库名>/`，每库一份 `RULES.md`；项目交接在 `_Project_Meta/<项目名>/Handover.md`
 - 杂项：`_Misc/tasks/<任务短名>/`；归档 `_Archives/`；临时与快照 `_Temp/`
 

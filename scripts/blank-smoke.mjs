@@ -216,11 +216,12 @@ ok(fs.existsSync(path.join(root, '_Control_Center', 'rules', 'Workspace_Charter.
 ok(fs.existsSync(path.join(root, '_Control_Center', 'templates', 'Prompt_Templates.md')), '建全局根：提示词模板应在');
 ok(fs.existsSync(path.join(root, 'Projects')) && fs.existsSync(path.join(root, '_Project_Meta')), '建全局根：项目目录应在');
 
-// 通用规范库：init 要铺出目录与说明；既有工作区靠 scaffold 补齐，且不得覆盖已有内容。
+// 通用规范库：init 只铺空目录；规范属工作区数据，插件不得预置说明或正文。
 if (root) {
   const standardsDir = path.join(root, '_Control_Center', 'standards');
   const standardsReadme = path.join(standardsDir, 'README.md');
-  ok(fs.existsSync(standardsReadme), '建全局根：通用规范库的说明应在', standardsReadme);
+  ok(fs.existsSync(standardsDir), '建全局根：通用规范目录应在', standardsDir);
+  ok(!fs.existsSync(standardsReadme), '建全局根：不得预置通用规范库说明', standardsReadme);
   const scafMod = await import(pathToFileURL(path.join(dist, 'lib', 'scaffold.mjs')).href);
   const keep = '# 本库自己的说明' + '\n';
   fs.writeFileSync(standardsReadme, keep, 'utf8');
@@ -701,9 +702,7 @@ ok(gCalls.injected === 0, '全局不再重复注入工作流（提示段里已�
   {
     const uiFiles = listFiles(path.join(repo, 'src'), ['.mjs', '.js'], { skip: ['templates'] });
     const docFiles = [path.join(repo, 'README.md')]
-      .concat(listFiles(path.join(repo, 'src', 'templates'), ['.md']))
-      // 写作规范正文与论文属规范性文本，条款本身会引用被禁词；Writing_Rules 是用户内容。
-      .filter((f) => f.indexOf('Writing_Rules.md') === -1 && f.indexOf(path.join('templates', 'standards')) === -1);
+      .concat(listFiles(path.join(repo, 'src', 'templates'), ['.md']));
     const uiScan = scanFilesDetailed(uiFiles, { ui: true });
     const docScan = scanFilesDetailed(docFiles, { ui: false });
     const uiHits = uiScan.hits;

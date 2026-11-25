@@ -17,7 +17,7 @@ const NL = String.fromCharCode(10);
 const RUNTIME_POINTER = '细节按节取用：ho_docmap(action="rules-read", doc="runtime", section=…)。';
 
 /** 通用规范的位置与查找范围（各档角色共用，必须同一句）。 */
-const STANDARDS_POINTER = '通用规范位于 _Control_Center/standards/（每条规范一个子目录）。当前用户提出「按某某规范进行」时，查找范围包括本库（本会话所在的工作区）与该目录。';
+const STANDARDS_POINTER = '通用规范位于 _Control_Center/standards/（每条规范一个子目录）。该目录由工作区自管，插件只建空目录，不预置任何规范。当前用户提出「按某某规范进行」时，查找范围包括本库（本会话所在的工作区）与该目录。';
 
 /** 写入范围：未指明写本库；明确写通用规范才写规范库。 */
 const STANDARDS_WRITE_PREFIX = '当前用户提出「把某某写成规范」时：未指明范围则写本库；';
@@ -25,8 +25,8 @@ const STANDARDS_WRITE_TARGET = '当前用户说「写入通用规范库」「写
 const STANDARDS_WRITE_GLOBAL = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，写 _Control_Center/standards/。';
 const STANDARDS_WRITE_SCOPED = STANDARDS_WRITE_PREFIX + STANDARDS_WRITE_TARGET + '，不得写 _Control_Center，只报全局。';
 
-/** 写作规范指针：只有一行，不注入正文。 */
-const WRITING_POINTER = '写作规范见 _Control_Center/standards/写作规范/README.md（W-01 至 W-42），全部产出均按该规范执行。';
+/** 工作区规范指针：只有一行，不注入正文。规范由工作区建立与登记，插件只提供查找口径。 */
+const WRITING_POINTER = '工作区的全局共用规范放在 _Control_Center/standards/ 下，每条一个子目录，入口为子目录内的 README.md。当前用户提出「按某某规范进行」或指明某个规范名时，先查该目录与本库。找到即按其条款执行；插件不预置正文，也不据缺失情形推断条款。';
 
 /** 暂任与协作的落点：规范与提示词随任务库独立。 */
 const DELEGATION_POINTER = '暂任：当前用户说「交接给外部会话」「交给另一个会话」「暂任」即暂任，不是换任。承接方是不在 DSH 内的外部会话。它没有 ho_* 与 peer，只有宿主文件工具与宿主子智能体。规则见任务库 rules/External_Takeover_Rules.md。范围可为一件事，也可为整个项目：整项目由外部会话自行推进，何时交回由当前用户定。步骤：刷新交接；把提示词写入任务库 Delegation_Prompt.md（旧提示词归档到 _archive/）；回复中的代码块只给一行索引「请阅读 <Delegation_Prompt.md 绝对路径> 和 <交接绝对路径>」。索引只在交出当轮给一次。用户补充或修改口径时先讨论敲定，敲定后重写提示词再给一次索引。此后问答直接回答问题本身。暂任不改变交接归属与在任登记：不申请授权、不建接任会话，交出方仍是在任者。细则见任务库 rules/Delegation_Rules.md，协作模板见 templates/Prompt_Templates.md。席位变更仅在当前用户明确要求时另行办理。';
@@ -103,17 +103,16 @@ function rhythmLines(cfg) {
 
 /**
  * 5 种触发词的规范指针：全局段与项目、杂项段共用这一处生成，不重复维护。
- * 只放指针与读法，不复制规范正文；路径按工作区根拼成绝对路径，不写死盘符。
+ * 机制规则以插件本体为准，按 rules-read 的 doc 键读取，不指向工作区路径；
+ * 工作区放同名覆盖件且有意本地化时，rules-read 自行优先，本条不必改。
  */
-function triggerIndexLines(opts) {
-  const ws = String((opts && opts.ws) || '');
-  const at = (...rel) => (ws ? path.join(ws, ...rel) : path.join(...rel));
+function triggerIndexLines() {
   return [
     '触发索引（用户说到下列词时，先读对应规范再动作）：',
-    '- 「暂任」「交给外部会话」：读 ' + at('_Control_Center', 'rules', 'Delegation_Rules.md') + ' 与 ' + at('_Control_Center', 'rules', 'External_Takeover_Rules.md') + '；承接方是不在 DSH 内的外部会话，没有 ho_* 与 peer。',
-    '- 「归还」：读 ' + at('_Control_Center', 'rules', 'Delegation_Rules.md') + ' §4 归还三法；身份字段填暂任者。',
-    '- 「团队协作」：读 ' + at('_Control_Center', 'standards', '团队协作规范', 'README.md') + '；仅插件会话之间用 peer。',
-    '- 「切换身份」：读 ' + at('_Control_Center', 'rules', 'Workspace_Charter.md') + ' 第七章；设定用 ho_sessions(action="role", session_id=…, role=…)。',
+    '- 「暂任」「交给外部会话」：读 `ho_docmap(action="rules-read", doc="delegation_rules")` 与 `doc="external_takeover_rules"`；承接方是不在 DSH 内的外部会话，没有 ho_* 与 peer。',
+    '- 「归还」：读 `ho_docmap(action="rules-read", doc="delegation_rules")` §4 归还三法；身份字段填暂任者。',
+    '- 「团队协作」：读 `ho_docmap(action="rules-read", doc="team_collab_rules")`；仅插件会话之间用 peer。',
+    '- 「切换身份」：读 `ho_docmap(action="rules-read", doc="charter")` 第七章；设定用 ho_sessions(action="role", session_id=…, role=…)。',
   ];
 }
 

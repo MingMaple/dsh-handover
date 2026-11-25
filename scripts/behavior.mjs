@@ -359,15 +359,21 @@ section('4 身份互转');
   ok(fs.existsSync(path.join(WS, '_Misc', 'tasks', 'GTM', 'System.md')), '全局任务可整体独立为杂项（沿用体系）');
 }
 
-// ---------- 5 写作规范随模板分发
-section('5 写作规范随模板分发');
+// ---------- 5 模板边界：个人规范不随包；机制规则只在本体
+section('5 模板边界：个人规范不随包');
 {
-  const base = path.join(dist, 'templates', 'standards', '写作规范');
-  const readme = path.join(base, 'README.md');
-  const paper = path.join(base, '依据_论文.md');
-  ok(fs.existsSync(readme) && fs.existsSync(paper), '规范体系与论文都在模板目录');
-  const text = fs.readFileSync(readme, 'utf8');
-  ok(/W-01/.test(text) && /W-42/.test(text), '规范覆盖 W-01 至 W-42');
+  ok(!fs.existsSync(path.join(dist, 'templates', 'standards')), '模板目录不含 standards 正文');
+  ok(fs.existsSync(path.join(dist, 'templates', 'rules', 'Team_Collab_Rules.md')), '团队协作口径在 rules 层');
+  const scaf = fs.readFileSync(path.join(dist, 'lib', 'scaffold.mjs'), 'utf8');
+  ok(scaf.indexOf("'_Control_Center/standards/写作规范") === -1, '脚手架不写任何 standards 下的文件');
+  ok(scaf.indexOf("'_Control_Center/standards',") !== -1 || scaf.indexOf("_Control_Center/standards'") !== -1, '脚手架仍建空 standards 目录');
+  // 机制规则属插件功能：部署不铺副本，正文只在 templates/rules 下。
+  const mechanism = ['Handover_Rules.md', 'Migration_Rules.md', 'Misc_Task_Standard.md', 'Delegation_Rules.md', 'External_Takeover_Rules.md', 'Team_Collab_Rules.md'];
+  for (const name of mechanism) {
+    ok(scaf.indexOf("'_Control_Center/rules/" + name + "'") === -1, '脚手架不铺机制规则 ' + name);
+    ok(fs.existsSync(path.join(dist, 'templates', 'rules', name)), '机制规则随包分发 ' + name);
+  }
+  ok(/team_collab_rules/.test(fs.readFileSync(path.join(dist, 'tools', 'charter.mjs'), 'utf8')), 'rules-read 收录团队协作规则');
 }
 
 // ---------- 6 语体门禁

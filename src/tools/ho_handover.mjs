@@ -45,7 +45,7 @@ function noPath(input) {
 export function pmHandoverTool(env) {
   return {
     name: nameOf('handover'),
-    description: '本会话交接读写、换任重写与轮内压缩。',
+    description: '本会话交接的读取、首次写入、归档与换任重写，以及轮内压缩。全局可用 task 参数读写任务交接。',
     parameters: {
       type: 'object',
       additionalProperties: false,

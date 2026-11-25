@@ -27,6 +27,7 @@ const readmeLines = fs.readFileSync(readme, 'utf8').split(/\r?\n/).length;
 if (readmeLines > 200) problems.push('README 应不超过 200 行（当前 ' + readmeLines + ' 行）');
 
 // 1.1 README「为什么需要」一节为用户 2026-11-13 与 2026-11-15 两次指定的正文（例外 E-01）：逐字比对，改动即失败
+// 2026-11-25 外部会话改写过一次，用户认定不如原版，已按原版还原；此后只认这一段。
 const WHY_PINNED = '单个会话的上下文越用越多，用到一定程度之后，出错的可能也会随之上升；可若这时压缩上下文，或者写好交接换一个会话，又会丢掉已经积累的信息。面对这样的两难，有没有更好的取舍？\n\n本插件一定能很好地帮助你。来试试吧；不满意，随时关闭插件并删除即可。';
 {
   const m = fs.readFileSync(readme, 'utf8').match(/## 为什么需要\s*\n+([\s\S]*?)\n+## /);
@@ -147,6 +148,31 @@ for (const h of hits) {
     if (!/\*\*状态刷新\*\*：(建议|无需)/.test(t)) problems.push(path.relative(root, cur) + ' 缺「**状态刷新**：建议 / 无需」一行');
   }
   if (fs.readFileSync(readme, 'utf8').indexOf('对齐检查') === -1) problems.push('README 未写「对齐检查」按钮');
+}
+
+// 9. 模板边界：standards 属工作区数据，插件不得预置正文；团队协作口径在 rules 下。
+// 归属靠断言固定：任何人把规范正文放回模板目录，检查即失败。
+{
+  const tplStandards = path.join(root, 'src', 'templates', 'standards');
+  if (fs.existsSync(tplStandards)) problems.push('src/templates/standards 不应存在：通用规范属工作区数据，插件不预置正文');
+  const collab = path.join(root, 'src', 'templates', 'rules', 'Team_Collab_Rules.md');
+  if (!fs.existsSync(collab)) problems.push('缺少 src/templates/rules/Team_Collab_Rules.md');
+  const writingTpl = path.join(root, 'src', 'templates', 'rules', 'Writing_Rules.md');
+  if (fs.existsSync(writingTpl)) problems.push('插件不应内置写作规则：个人写作口径属工作区数据，正文与模板都不随包');
+  const scafSrc = fs.readFileSync(path.join(root, 'src', 'lib', 'scaffold.mjs'), 'utf8');
+  if (scafSrc.indexOf('_Control_Center/user') !== -1) problems.push('部署清单不应写用户目录：个人数据不随插件落地');
+  // 个人规范不得随包：随包文档与模板里不得出现条款编号或依据材料名。
+  const shipped = files.filter((f) => path.dirname(f) !== releasesDir)
+    .concat(listFiles(path.join(root, 'src', 'templates'), ['.md']).filter((f) => fs.existsSync(f)));
+  for (const file of shipped) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (/W-\d{2}/.test(text)) {
+      problems.push(path.relative(root, file) + ' 引用了作者私有写作规范的条款编号，该规范不随包分发');
+    }
+    if (text.indexOf('依据_论文') !== -1) {
+      problems.push(path.relative(root, file) + ' 引用了作者私有规范的依据材料「依据_论文」，该文件不随包分发');
+    }
+  }
 }
 
 if (problems.length) {

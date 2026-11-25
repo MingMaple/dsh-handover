@@ -2072,6 +2072,13 @@ eq('D-124 摘要静默期可覆盖', resolveConfig({ summaryQuietMs: 1000 }).sum
   const rc = alignReport(dir, { cfg: { softRatio: 0.5, directPeer: 'off' } });
   check('align 报出配置改动', rc.config.some((c) => c.key === 'softRatio') && rc.config.some((c) => c.key === 'directPeer'), JSON.stringify(rc.config));
 
+  // 机制规则随插件分发、不落工作区：已存在的同名文件要作为遗留副本报出来，供对齐检查处置。
+  fs.writeFileSync(path.join(dir, '_Control_Center', 'rules', 'Team_Collab_Rules.md'), '# 团队协作规则\n', 'utf8');
+  const rl = alignReport(dir, { cfg: {} });
+  check('align 报出遗留机制规则副本', rl.legacy.some((x) => x.name === 'Team_Collab_Rules.md'), JSON.stringify(rl.legacy));
+  check('align 遗留副本计入缺项', alignHasGap(rl) === true);
+  check('align 文本列出遗留副本', /遗留机制规则副本/.test(renderAlign(rl, { version: '9.9.9' })));
+
   const officeFile = path.join(dir, '_Control_Center', 'records', 'Office.json');
   const envBase = { log: () => {}, cfg: { workspaceRoot: dir } };
   const noGlobal = await createApi(envBase, { name: 'selftest', version: '0' }).call('align.wake', {});

@@ -1,6 +1,6 @@
 {
   "name": "@mingmaple/dsh-handover",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "type": "module",
   "description": "DeepSeek Harness 插件：跨会话工作流，含上下文压缩与换任、计划先行、任务与项目外派（dsh-handover）",
   "license": "MIT",

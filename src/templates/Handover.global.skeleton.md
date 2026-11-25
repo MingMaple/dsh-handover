@@ -1,4 +1,4 @@
-﻿# 全局交接文档
+# 全局交接文档
 
 > 本文件由 dsh-handover 首次安装向导生成。§7 中带 session id 的行是占位，第一个全局会话接手时将其换成本机真实的 id。
 
@@ -51,8 +51,8 @@
 - 规则：`_Control_Center/rules/Workspace_Charter.md`
 - 体系注册：`_Control_Center/records/systems.md`（全局总注册）、`_Control_Center/tasks/` 下各全局任务的 `System.md`
 - 计划：各全局任务根 `PLAN.md`
-- 暂任规则：`_Control_Center/rules/Delegation_Rules.md`
-- 写作规范：`_Control_Center/standards/写作规范/README.md`
+- 暂任规则：`ho_docmap(action="rules-read", doc="delegation_rules")`
+- 写作规范：`_Control_Center/standards/写作规范/README.md`，由工作区自管，插件不内置
 - 台账：`_Control_Center/records/Global_Changelog.md`
 - 提示词模板：`_Control_Center/templates/Prompt_Templates.md`
 
