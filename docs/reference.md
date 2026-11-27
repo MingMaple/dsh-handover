@@ -1,6 +1,6 @@
 # 配置参考
 
-本文给需要配置本插件的使用者。内容覆盖 dsh-handover 1.0.5 的宿主配置建议、插件配置项、提示段纪律与验证命令。数值为建议值，实际以本机安装版本为准。机制正文见 [机制说明](mechanics.md)，各流程的操作见 [使用说明](usage.md)。
+本文给需要配置本插件的使用者。内容覆盖 dsh-handover 1.1.0 的宿主配置建议、插件配置项、提示段纪律与验证命令。数值为建议值，实际以本机安装版本为准。机制正文见 [机制说明](mechanics.md)，各流程的操作见 [使用说明](usage.md)。
 
 ## 1 机制速览
 
@@ -20,7 +20,7 @@
 
 ## 2 宿主压缩配置
 
-DeepSeek Harness（DSH）的压缩引擎按 agent preset 挂载。本插件按 token 分档提示，只在强制线强制压缩。强制线以下由助手按 rubric 调用同一引擎的 `compactRegion`。宿主只需保持引擎默认：`thresholdRatio 0.8`、`retainRatio 0.16`，作为最后兜底。宿主阈值只读观测，插件不改宿主配置，也不要为日常压缩把阈值覆盖到 25%：
+DeepSeek Harness（DSH）的压缩引擎按 agent preset 挂载。本插件按 token 分档提示，只在强制线强制压缩。强制线以下由助手按 rubric 调用同一引擎的 `compactRegion`。宿主只需保持引擎默认：`thresholdRatio 0.8`、`retainRatio 0.16`，作为最后的保障。宿主阈值只读观测，插件不改宿主配置，也不要为日常压缩把阈值覆盖到 25%：
 
 ```yaml
 # 保持默认即可，无需 insert 覆盖；如曾覆盖，删掉 config 两行并重启 DSH。
@@ -181,7 +181,7 @@ DSH 的 agent preset（标准、PTC 模式等）决定该会话的系统提示�
 | 提示 | `systemPrompt.section({ name: 'dsh-handover:manual', order })` 追加本插件命名段落 | 只追加自己的段落，不改官方提示词正文 |
 | 会话事件与压缩 | 只读 `session/event`；在 `agent/pre-step` 读本会话水位，轮首追加水位行，到线追加提示，强制线在轮内调用 `compactRegion`；助手入口同样在轮内调用 | 与预设无关 |
 
-因此换预设不会改变插件的判据、快照与交接流程。插件不自带预设，也不写用户的预设文件。官方工具如何呈现（原生调用，或 PTC 折进 `run_code`）由官方决定。插件不感知，也不需要感知。宿主压缩阈值属预设配置，插件只读取水位作参照，不代为修改（配置建议见 §2）。
+因此换预设不会改变插件的判据、快照与交接流程。插件不自带预设，也不写用户的预设文件。官方工具如何呈现（原生调用，或 PTC 折进 `run_code`）由官方决定。插件不感知这一点，也不依赖它。宿主压缩阈值属预设配置，插件只读取水位作参照，不代为修改（配置建议见 §2）。
 
 ## 9 中止语义
 
@@ -205,11 +205,11 @@ DSH 的 agent preset（标准、PTC 模式等）决定该会话的系统提示�
 
 建会话流程包括 `ho_sessions(action="new")`、设置页部署与补建全局会话。
 创建后必须核对 `roles.json` 里已有该 `sid` 的条目。
-先写一次、再读回核对；读不到就补写一次。
+先写一次、再读回核对；读取失败时补写一次。
 仍失败即显式报错并带上会话 id，不回收已建会话。
 
 角色为 `project`、`misc` 时先校验 `project`、`task`。
-缺名直接拒绝建会话，避免建完才在登记时失败。
+缺名直接拒绝建会话，避免建成后才在登记时失败。
 
 自触发的每个早退分支都在运行日志留一条 `自触发跳过 sid=<sid> reason=<原因> ratio=<百分比>`：`no-sid`、`subagent`、`no-role`、`plain`、`inline-inflight`、`no-pressure`、`not-triggered`、`open-tool-calls`、`compaction-limit`。同一 `sid` 与原因 5 分钟内只写一条。
 

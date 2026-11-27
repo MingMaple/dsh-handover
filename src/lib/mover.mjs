@@ -351,7 +351,7 @@ function stop(m) { log('[中止] ' + m); process.exit(1); }
 `;
   fs.writeFileSync(sp.helper, helper, 'utf8');
   // 手工兜底：Windows 与 POSIX 各一个启动器。两者都打开 ELECTRON_RUN_AS_NODE，让 Electron 运行时作为 Node 使用。
-  // cmd.exe 按当前控制台代码页（简体中文为 GBK）逐行读批处理：用户目录含中文时（如 C:\Users\张茗枫）
+  // cmd.exe 按当前控制台代码页（简体中文为 GBK）逐行读批处理：用户目录含中文时（如 C:\Users\用户名）
   // 直接写 UTF-8 会让路径被误读。首行切到 UTF-8 代码页，后续行才按 UTF-8 解码。
   const cmd = ['@echo off', 'chcp 65001 >nul', 'set ELECTRON_RUN_AS_NODE=1', '"' + exe + '" "' + sp.helper + '" %*', 'pause', ''].join('\r\n');
   fs.writeFileSync(sp.cmd, cmd, 'utf8');
