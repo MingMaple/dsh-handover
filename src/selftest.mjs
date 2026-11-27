@@ -1574,7 +1574,7 @@ check('布局缺省时两轴相同', layoutOf({ role: 'project', project: 'P' })
   eq('空库扫描返回 0', scanAbsolutePaths(scWs).files, 0);
   fs.mkdirSync(path.join(scWs, '_Misc', 'tasks', 'T'), { recursive: true });
   fs.writeFileSync(path.join(scWs, '_Misc', 'tasks', 'T', 'A.md'),
-    '# A' + NL2 + NL2 + '路径 E:\\_Project_Mate\\_Workspace\\_Misc\\tasks\\T' + NL2 + '另一处 E:/_Project_Mate/x' + NL2 + '相对 _Misc/tasks/T' + NL2, 'utf8');
+    '# A' + NL2 + NL2 + '路径 E:\\ws\\proj\\_Misc\\tasks\\T' + NL2 + '另一处 E:/ws/proj/x' + NL2 + '相对 _Misc/tasks/T' + NL2, 'utf8');
   fs.writeFileSync(path.join(scWs, '_Misc', 'tasks', 'T', 'B.mjs'), "const p = 'C:/tmp/a';" + NL2 + "const q = 'c/d';" + NL2, 'utf8');
   const sc = scanAbsolutePaths(scWs);
   eq('扫描：命中文件数', sc.files, 2);
@@ -1589,7 +1589,7 @@ check('布局缺省时两轴相同', layoutOf({ role: 'project', project: 'P' })
   const mrWs = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handover-scan-roots-'));
   fs.mkdirSync(path.join(mrWs, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(mrWs, 'meta'), { recursive: true });
-  fs.writeFileSync(path.join(mrWs, 'lib', 'A.md'), 'E:\\_Project_Mate\\x' + NL2, 'utf8');
+  fs.writeFileSync(path.join(mrWs, 'lib', 'A.md'), 'E:\\ws\\proj\\x' + NL2, 'utf8');
   fs.writeFileSync(path.join(mrWs, 'meta', 'B.md'), 'D:/data/y' + NL2 + 'D:/data/z' + NL2, 'utf8');
   const mr = scanRoots([path.join(mrWs, 'lib'), path.join(mrWs, 'meta')]);
   eq('多根扫描：文件数相加', mr.files, 2);
